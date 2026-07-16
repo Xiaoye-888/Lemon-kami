@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lemon Kami JS SDK 示例</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            width: 100%;
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        
+        .section h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: bold;
+        }
+        
+        select,
+        input[type="text"],
+        input[type="password"] {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        select:focus,
+        input[type="text"]:focus,
+        input[type="password"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        input[readonly] {
+            background: #f1f5f9;
+            color: #475569;
+            cursor: not-allowed;
+        }
+
+        .field-hint {
+            margin-top: 6px;
+            color: #64748b;
+            font-size: 12px;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            width: 100%;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .result {
+            margin-top: 15px;
+            padding: 15px;
+            border-radius: 6px;
+            background: white;
+            border-left: 4px solid #667eea;
+        }
+        
+        .result.success {
+            border-left-color: #10b981;
+            background: #d1fae5;
+        }
+        
+        .result.error {
+            border-left-color: #ef4444;
+            background: #fee2e2;
+        }
+        
+        .result pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-size: 13px;
+            color: #333;
+        }
+        
+        .device-info {
+            font-size: 13px;
+            color: #666;
+            margin-top: 10px;
+        }
+        
+        .heartbeat-log {
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 10px;
+        }
+        
+        .log-item {
+            padding: 8px;
+            margin-bottom: 5px;
+            background: white;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Lemon Kami JS SDK 示例</h1>
+        <p class="subtitle">卡密验证与行为上报演示</p>
+        
+        <!-- 配置信息 -->
+        <div class="section">
+            <h2>⚙️ 配置信息</h2>
+            <div class="form-group">
+                <label for="appId">App ID:</label>
+                <select id="appId">
+                    <option value="">正在加载应用...</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="credentialStatus">客户端凭证:</label>
+                <input type="text" id="credentialStatus" placeholder="初始化时自动换取短期 client token" value="" readonly>
+                <div class="field-hint">App Secret 仅用于本后台测试页换取短期凭证，SDK 业务请求使用 clientToken/clientSecret 签名。</div>
+            </div>
+            <div class="form-group">
+                <label for="serverUrl">服务器地址:</label>
+                <input type="text" id="serverUrl" value="">
+            </div>
+            <button onclick="initSDK()">初始化 SDK</button>
+            <div id="initResult"></div>
+        </div>
+        
+        <!-- 卡密验证 -->
+        <div class="section">
+            <h2>✅ 卡密验证</h2>
+            <div class="form-group">
+                <label for="kamiCode">卡密代码:</label>
+                <input type="text" id="kamiCode" placeholder="请输入卡密">
+            </div>
+            <button onclick="verifyKami()" id="verifyBtn" disabled>验证卡密</button>
+            <div id="verifyResult"></div>
+        </div>
+        
+        <!-- 行为上报 -->
+        <div class="section">
+            <h2>📊 行为上报</h2>
+            <div class="form-group">
+                <label for="eventType">事件类型:</label>
+                <input type="text" id="eventType" placeholder="如: login, level_up, purchase" value="login">
+            </div>
+            <button onclick="reportEvent()" id="reportBtn" disabled>上报事件</button>
+            <div id="reportResult"></div>
+        </div>
+        
+        <!-- 心跳 -->
+        <div class="section">
+            <h2>💓 心跳保持</h2>
+            <button onclick="toggleHeartbeat()" id="heartbeatBtn" disabled>开始心跳</button>
+            <div class="heartbeat-log" id="heartbeatLog"></div>
+        </div>
+        
+        <!-- 设备信息 -->
+        <div class="section">
+            <h2>🖥️ 设备信息</h2>
+            <div class="device-info" id="deviceInfo">
+                请先初始化 SDK
+            </div>
+        </div>
+    </div>
+    
+    <!-- 引入 crypto-js 库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <!-- 引入 JSEncrypt 库（用于 RSA 加密） -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsencrypt/3.3.2/jsencrypt.min.js"></script>
+    <!-- 使用完整的 SDK（crypto-js + JSEncrypt） -->
+    <script src="lemon-kami.js?v=1"></script>
+    <script>
+        let sdk = null;
+        let heartbeatInterval = null;
+        let currentKamiCode = '';
+        let availableApps = [];
+        
+        // 页面加载时自动填充 URL 参数，并读取后台应用配置
+        window.addEventListener('DOMContentLoaded', function() {
+            const serverUrlInput = document.getElementById('serverUrl');
+            serverUrlInput.value = window.location.origin;
+            document.getElementById('appId').addEventListener('change', syncSelectedApp);
+            loadAppsForSdkTest();
+        });
+
+        function normalizeServerUrl(serverUrl) {
+            return serverUrl.replace(/\/$/, '');
+        }
+
+        function getAppIdFromUrl() {
+            return new URLSearchParams(window.location.search).get('app_id') || '';
+        }
+
+        function setAppSelectMessage(message) {
+            const appIdSelect = document.getElementById('appId');
+            appIdSelect.innerHTML = '';
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = message;
+            appIdSelect.appendChild(option);
+        }
+
+        async function loadAppsForSdkTest() {
+            const token = localStorage.getItem('token');
+            const serverUrl = document.getElementById('serverUrl').value || window.location.origin;
+            const credentialStatusInput = document.getElementById('credentialStatus');
+
+            credentialStatusInput.value = '';
+
+            if (!token) {
+                setAppSelectMessage('请先登录后台管理');
+                showResult('initResult', '请先登录后台管理后再打开 SDK 测试页', 'error');
+                return;
+            }
+
+            try {
+                setAppSelectMessage('正在加载应用...');
+                const response = await fetch(
+                    `${normalizeServerUrl(serverUrl)}/api/v1/admin/apps`,
+                    {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    }
+                );
+                const result = await response.json().catch(() => ({}));
+
+                if (!response.ok || !result.success || !Array.isArray(result.data)) {
+                    throw new Error(result.detail || result.message || '获取应用列表失败');
+                }
+
+                availableApps = result.data;
+                renderAppOptions();
+            } catch (error) {
+                availableApps = [];
+                setAppSelectMessage('应用加载失败，请刷新重试');
+                showResult('initResult', `获取应用列表失败: ${error.message}`, 'error');
+            }
+        }
+
+        function renderAppOptions() {
+            const appIdSelect = document.getElementById('appId');
+            const requestedAppId = getAppIdFromUrl();
+
+            appIdSelect.innerHTML = '';
+
+            if (!availableApps.length) {
+                setAppSelectMessage('暂无可用应用');
+                showResult('initResult', '当前账号暂无可用应用，请先在应用管理中创建应用', 'error');
+                return;
+            }
+
+            const emptyOption = document.createElement('option');
+            emptyOption.value = '';
+            emptyOption.textContent = '-- 请选择应用 --';
+            appIdSelect.appendChild(emptyOption);
+
+            availableApps.forEach((app) => {
+                const option = document.createElement('option');
+                option.value = app.app_id;
+                option.textContent = `${app.name || '未命名应用'} (${app.app_id})`;
+                appIdSelect.appendChild(option);
+            });
+
+            if (requestedAppId && availableApps.some((app) => app.app_id === requestedAppId)) {
+                appIdSelect.value = requestedAppId;
+            } else if (availableApps.length === 1) {
+                appIdSelect.value = availableApps[0].app_id;
+            }
+
+            syncSelectedApp();
+
+            if (appIdSelect.value) {
+                showResult('initResult', '已加载应用配置，可换取短期客户端凭证并初始化 SDK', 'success');
+            } else {
+                showResult('initResult', '请选择 App ID 后初始化 SDK', '');
+            }
+        }
+
+        function syncSelectedApp() {
+            const appId = document.getElementById('appId').value;
+            const credentialStatusInput = document.getElementById('credentialStatus');
+            const selectedApp = availableApps.find((app) => app.app_id === appId);
+
+            credentialStatusInput.value = selectedApp ? '已选择应用，等待初始化换取短期凭证' : '';
+            credentialStatusInput.placeholder = selectedApp ? '初始化时自动换取短期 client token' : '请选择 App ID';
+        }
+
+        async function fetchPublicKey(serverUrl, appId) {
+            const response = await fetch(
+                `${normalizeServerUrl(serverUrl)}/api/v1/sdk/public-key?app_id=${encodeURIComponent(appId)}`
+            );
+            const result = await response.json().catch(() => ({}));
+
+            if (!response.ok || !result.public_key) {
+                throw new Error(result.detail || result.message || '获取 RSA 公钥失败');
+            }
+            return result.public_key;
+        }
+
+        async function waitForSdkReady(instance, timeoutMs = 5000) {
+            const start = Date.now();
+            while (Date.now() - start < timeoutMs) {
+                if (instance.rsaPublicKey && instance.fingerprint) {
+                    return;
+                }
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            throw new Error('SDK 初始化超时，请检查服务器连接');
+        }
+
+        function createNonce() {
+            const random = new Uint8Array(16);
+            crypto.getRandomValues(random);
+            return Array.from(random, (byte) => byte.toString(16).padStart(2, '0')).join('');
+        }
+
+        async function issueClientToken(serverUrl, appId, appSecret) {
+            const timestamp = Math.floor(Date.now() / 1000);
+            const nonce = createNonce();
+            const ttlSeconds = 600;
+            const signData = `${appId}${timestamp}${nonce}${ttlSeconds}`;
+            const sign = CryptoJS.HmacSHA256(signData, appSecret).toString(CryptoJS.enc.Hex);
+            const response = await fetch(`${normalizeServerUrl(serverUrl)}/api/v1/sdk/client-token`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    app_id: appId,
+                    timestamp,
+                    nonce,
+                    ttl_seconds: ttlSeconds,
+                    sign
+                })
+            });
+            const result = await response.json().catch(() => ({}));
+
+            if (!response.ok || !result.success || !result.data?.client_token || !result.data?.client_secret) {
+                throw new Error(result.detail || result.message || '换取短期客户端凭证失败');
+            }
+
+            return result.data;
+        }
+        
+        // 初始化 SDK
+        async function initSDK() {
+            const appId = document.getElementById('appId').value.trim();
+            const serverUrl = document.getElementById('serverUrl').value.trim();
+            const selectedApp = availableApps.find((app) => app.app_id === appId);
+            
+            if (!appId) {
+                showResult('initResult', '请选择 App ID', 'error');
+                return;
+            }
+
+            if (!selectedApp?.app_secret) {
+                showResult('initResult', '未能读取当前应用密钥，请刷新页面或重新登录后台后再试', 'error');
+                return;
+            }
+            
+            try {
+                showResult('initResult', '正在换取短期客户端凭证...', '');
+                const [rsaPublicKey, clientCredential] = await Promise.all([
+                    fetchPublicKey(serverUrl, appId),
+                    issueClientToken(serverUrl, appId, selectedApp.app_secret)
+                ]);
+
+                sdk = new window.LemonKamiSDK({
+                    appId: appId,
+                    clientToken: clientCredential.client_token,
+                    clientSecret: clientCredential.client_secret,
+                    serverUrl: serverUrl,
+                    rsaPublicKey: rsaPublicKey
+                });
+                
+                // 等待指纹加载完成
+                await waitForSdkReady(sdk);
+                document.getElementById('credentialStatus').value = `短期凭证已签发，有效期 ${clientCredential.expires_in} 秒`;
+                
+                showResult('initResult', '✅ SDK 初始化成功', 'success');
+                
+                // 显示设备信息
+                document.getElementById('deviceInfo').innerHTML = `
+                    <strong>设备 UUID:</strong> ${sdk.deviceUuid}<br>
+                    <strong>设备指纹:</strong> ${sdk.fingerprint ? sdk.fingerprint.substring(0, 32) + '...' : '生成中...'}
+                `;
+                
+                // 启用按钮
+                document.getElementById('verifyBtn').disabled = false;
+                document.getElementById('reportBtn').disabled = false;
+                document.getElementById('heartbeatBtn').disabled = false;
+                
+            } catch (error) {
+                showResult('initResult', `❌ 初始化失败: ${error.message}`, 'error');
+            }
+        }
+        
+        // 验证卡密
+        async function verifyKami() {
+            const kamiCode = document.getElementById('kamiCode').value.trim();
+            
+            if (!kamiCode) {
+                showResult('verifyResult', '请输入卡密代码', 'error');
+                return;
+            }
+            
+            // 检查 SDK 是否初始化
+            if (!sdk) {
+                showResult('verifyResult', '❌ SDK 未初始化，请先初始化 SDK', 'error');
+                return;
+            }
+            
+            currentKamiCode = kamiCode;
+            showResult('verifyResult', '⏳ 验证中...', '');
+            
+            try {
+                const result = await sdk.verify(kamiCode);
+                
+                if (result.success) {
+                    showResult('verifyResult', 
+                        `✅ 验证成功！\n\n` +
+                        `卡密类型: ${result.kami_type}\n` +
+                        `到期时间: ${result.expire_time || '永久'}`,
+                        'success'
+                    );
+                } else {
+                    showResult('verifyResult', `❌ 验证失败: ${result.message}`, 'error');
+                }
+            } catch (error) {
+                showResult('verifyResult', `❌ 验证异常: ${error.message}`, 'error');
+            }
+        }
+        
+        // 上报事件
+        async function reportEvent() {
+            if (!currentKamiCode) {
+                showResult('reportResult', '请先验证卡密', 'error');
+                return;
+            }
+            
+            const eventType = document.getElementById('eventType').value.trim() || 'login';
+            
+            showResult('reportResult', '⏳ 上报中...', '');
+            
+            const result = await sdk.reportEvent(currentKamiCode, eventType, {
+                timestamp: new Date().toISOString(),
+                userAgent: navigator.userAgent
+            });
+            
+            if (result.success) {
+                showResult('reportResult', '✅ 事件上报成功', 'success');
+            } else {
+                showResult('reportResult', `❌ 上报失败: ${result.message}`, 'error');
+            }
+        }
+        
+        // 切换心跳
+        function toggleHeartbeat() {
+            const btn = document.getElementById('heartbeatBtn');
+            
+            if (heartbeatInterval) {
+                // 停止心跳
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+                btn.textContent = '开始心跳';
+                addHeartbeatLog('❤️ 心跳已停止');
+            } else {
+                if (!currentKamiCode) {
+                    showResult('verifyResult', '请先验证卡密', 'error');
+                    return;
+                }
+                
+                // 开始心跳
+                btn.textContent = '停止心跳';
+                addHeartbeatLog('💓 开始心跳...');
+                
+                heartbeatInterval = setInterval(async () => {
+                    const result = await sdk.heartbeat(currentKamiCode);
+                    const time = new Date().toLocaleTimeString();
+                    
+                    if (result.success) {
+                        addHeartbeatLog(`[${time}] ✅ 心跳成功`);
+                    } else {
+                        addHeartbeatLog(`[${time}] ❌ 心跳失败: ${result.message}`);
+                    }
+                }, 30000); // 每30秒一次
+                
+                // 立即发送一次
+                sdk.heartbeat(currentKamiCode).then(result => {
+                    const time = new Date().toLocaleTimeString();
+                    if (result.success) {
+                        addHeartbeatLog(`[${time}] ✅ 心跳成功`);
+                    }
+                });
+            }
+        }
+        
+        // 添加心跳日志
+        function addHeartbeatLog(message) {
+            const logDiv = document.getElementById('heartbeatLog');
+            const logItem = document.createElement('div');
+            logItem.className = 'log-item';
+            logItem.textContent = message;
+            logDiv.insertBefore(logItem, logDiv.firstChild);
+            
+            // 只保留最近20条
+            while (logDiv.children.length > 20) {
+                logDiv.removeChild(logDiv.lastChild);
+            }
+        }
+        
+        // 显示结果
+        function showResult(elementId, message, type) {
+            const element = document.getElementById(elementId);
+            element.className = `result ${type}`;
+            element.innerHTML = `<pre>${message}</pre>`;
+        }
+    </script>
+</body>
+</html>

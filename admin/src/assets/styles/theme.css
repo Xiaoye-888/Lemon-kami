@@ -1,0 +1,213 @@
+/* 小柠檬网络验证 - 清爽专业后台设计令牌 */
+:root {
+  --yz-primary: #2f80ed;
+  --yz-primary-dim: #1d4ed8;
+  --yz-sky: #38bdf8;
+  --yz-mint: #34d399;
+  --yz-lilac: #a5b4fc;
+  --yz-ice: #eaf6ff;
+  --yz-text: #0f172a;
+  --yz-text-2: #475569;
+  --yz-surface: #eef7ff;
+  --yz-surface-gradient: linear-gradient(145deg, #eaf6ff 0%, #f6fbff 42%, #ffffff 100%);
+  --yz-elev: rgba(255, 255, 255, 0.94);
+  --yz-border: #d8e7f7;
+  --yz-table-header: #f2f8ff;
+  --yz-shadow-1: 0 1px 3px rgba(15, 23, 42, 0.06);
+  --yz-shadow-2: 0 12px 32px rgba(37, 99, 235, 0.1);
+  --yz-radius-sm: 10px;
+  --yz-radius: 14px;
+  --yz-radius-lg: 16px;
+  --yz-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --yz-duration: 0.28s;
+  --el-color-primary: #2f80ed;
+  --el-color-primary-light-3: #6ea8f7;
+  --el-color-primary-light-5: #9fc8fb;
+  --el-color-primary-light-7: #cfe4ff;
+  --el-color-primary-light-8: #e4f1ff;
+  --el-color-primary-light-9: #f1f8ff;
+  --el-color-primary-dark-2: #1d4ed8;
+  --el-border-radius-base: 10px;
+  --el-border-radius-round: 14px;
+  --el-border-color-lighter: var(--yz-border);
+}
+
+html.dark {
+  --yz-text: #e5e7eb;
+  --yz-text-2: #9ca3af;
+  --yz-surface: #0f172a;
+  --yz-elev: #1e293b;
+  --yz-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --yz-shadow-2: 0 10px 40px rgba(0, 0, 0, 0.45);
+  --yz-border: #334155;
+  --yz-table-header: #111827;
+  --el-color-primary: #60a5fa;
+  --el-color-primary-light-3: #2563eb;
+  --el-color-primary-light-5: #1d4ed8;
+  --el-color-primary-light-7: #1e3a8a;
+  --el-color-primary-light-8: #172554;
+  --el-color-primary-light-9: #0f172a;
+  --el-color-primary-dark-2: #bfdbfe;
+  color-scheme: dark;
+}
+
+#app,
+body {
+  background: var(--yz-surface);
+  background-image: var(--yz-surface-gradient);
+  background-attachment: fixed;
+  color: var(--yz-text);
+  transition: background 0.22s var(--yz-ease), color 0.22s var(--yz-ease);
+}
+
+html.dark #app,
+html.dark body {
+  background-image: none;
+  background: var(--yz-surface);
+}
+
+/* 主按钮/链接：hover 微动效 */
+.el-button--primary,
+.el-button.is-link.el-button--primary {
+  transition: transform var(--yz-duration) var(--yz-ease), box-shadow var(--yz-duration) var(--yz-ease) !important;
+}
+.el-button--primary:not(:disabled):hover {
+  transform: scale(1.02);
+  box-shadow: 0 6px 20px rgba(47, 128, 237, 0.24) !important;
+}
+.el-button--primary:not(:disabled):active {
+  transform: scale(0.99);
+}
+
+/* 输入框聚焦高亮 */
+.el-input__wrapper {
+  transition: box-shadow var(--yz-duration) var(--yz-ease), border-color var(--yz-duration) var(--yz-ease) !important;
+  border-radius: var(--yz-radius-sm) !important;
+}
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 3px rgba(47, 128, 237, 0.16) !important;
+}
+
+/* 卡片 hover */
+.yz-content-card,
+.el-card {
+  border-radius: var(--yz-radius-lg) !important;
+  transition: transform 0.35s var(--yz-ease), box-shadow 0.35s var(--yz-ease) !important;
+  border: 1px solid var(--el-border-color-lighter) !important;
+}
+.el-main .el-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--yz-shadow-2) !important;
+}
+
+/* 表格式轻量斑马纹在 MainLayout 已用 :deep，此处保留表头 */
+.el-table {
+  --el-table-border-color: var(--el-border-color-lighter);
+  border-radius: var(--yz-radius-sm);
+  overflow: hidden;
+}
+
+/* 全屏加载：可爱弹跳（覆盖默认 svg） */
+.el-loading-mask {
+  --el-color-primary: var(--yz-primary);
+  backdrop-filter: blur(2px);
+}
+.yz-bounce .el-loading-spinner {
+  top: 45%;
+}
+.yz-bounce .el-loading-spinner::before {
+  content: '\1F34A';
+  display: block;
+  font-size: 36px;
+  line-height: 1;
+  animation: yz-bounce-anim 0.6s var(--yz-ease) infinite alternate;
+}
+.yz-bounce .el-loading-spinner .circular,
+.yz-bounce .el-loading-spinner .path {
+  display: none !important;
+}
+@keyframes yz-bounce-anim {
+  from { transform: translateY(0) scale(1); }
+  to { transform: translateY(-10px) scale(1.08); }
+}
+
+/* 页面级淡入：短促，避免切页卡顿感 */
+.yz-page-fade-enter-active,
+.yz-page-fade-leave-active {
+  transition: opacity 0.12s ease-out;
+}
+.yz-page-fade-enter-from,
+.yz-page-fade-leave-to {
+  opacity: 0;
+}
+
+/* Shared admin content surfaces */
+.main-content .page-card {
+  background: var(--yz-elev) !important;
+  border-radius: 8px !important;
+  border: 1px solid var(--yz-border) !important;
+  box-shadow: 0 12px 30px rgba(37, 99, 235, 0.08) !important;
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+}
+
+.main-content .page-card:hover {
+  transform: none !important;
+}
+
+.main-content .page-card > .el-card__header {
+  min-height: 78px;
+  padding: 20px 26px;
+  border-bottom: 1px solid var(--yz-border);
+}
+
+.main-content .page-card > .el-card__body {
+  padding: 0;
+}
+
+.main-content .card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: #0f172a;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.main-content .filter-form {
+  margin: 0;
+  padding: 14px 26px 2px;
+  background: var(--yz-table-header);
+  border-bottom: 1px solid var(--yz-border);
+}
+
+.main-content .el-table {
+  border-radius: 0;
+}
+
+.main-content .el-table__header th {
+  height: 48px;
+  background: var(--yz-table-header) !important;
+  color: #58708c;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.main-content .el-table__row {
+  height: 56px;
+}
+
+.main-content .el-table__cell {
+  padding: 8px 0;
+}
+
+html.dark .main-content .card-header {
+  color: #e5e7eb;
+}
+
+html.dark .main-content .filter-form,
+html.dark .main-content .el-table__header th {
+  background: #111827 !important;
+}

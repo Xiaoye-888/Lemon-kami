@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lemon Kami JS SDK 示例</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            width: 100%;
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        
+        .section h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: bold;
+        }
+        
+        input[type="text"],
+        input[type="password"] {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="text"]:focus,
+        input[type="password"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            width: 100%;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .result {
+            margin-top: 15px;
+            padding: 15px;
+            border-radius: 6px;
+            background: white;
+            border-left: 4px solid #667eea;
+        }
+        
+        .result.success {
+            border-left-color: #10b981;
+            background: #d1fae5;
+        }
+        
+        .result.error {
+            border-left-color: #ef4444;
+            background: #fee2e2;
+        }
+        
+        .result pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-size: 13px;
+            color: #333;
+        }
+        
+        .device-info {
+            font-size: 13px;
+            color: #666;
+            margin-top: 10px;
+        }
+        
+        .heartbeat-log {
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 10px;
+        }
+        
+        .log-item {
+            padding: 8px;
+            margin-bottom: 5px;
+            background: white;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Lemon Kami JS SDK 示例</h1>
+        <p class="subtitle">卡密验证与行为上报演示</p>
+        
+        <!-- 配置信息 -->
+        <div class="section">
+            <h2>⚙️ 配置信息</h2>
+            <div class="form-group">
+                <label for="appId">App ID:</label>
+                <input type="text" id="appId" placeholder="从后台管理获取" value="">
+            </div>
+            <div class="form-group">
+                <label for="clientToken">Client Token:</label>
+                <input type="text" id="clientToken" placeholder="由业务后端签发的短期 client token" value="">
+            </div>
+            <div class="form-group">
+                <label for="clientSecret">Client Secret:</label>
+                <input type="password" id="clientSecret" placeholder="与 client token 配套的短期签名密钥" value="">
+            </div>
+            <div class="form-group">
+                <label for="serverUrl">服务器地址:</label>
+                <input type="text" id="serverUrl" value="">
+            </div>
+            <button onclick="initSDK()">初始化 SDK</button>
+            <div id="initResult"></div>
+        </div>
+        
+        <!-- 卡密验证 -->
+        <div class="section">
+            <h2>✅ 卡密验证</h2>
+            <div class="form-group">
+                <label for="kamiCode">卡密代码:</label>
+                <input type="text" id="kamiCode" placeholder="请输入卡密">
+            </div>
+            <button onclick="verifyKami()" id="verifyBtn" disabled>验证卡密</button>
+            <div id="verifyResult"></div>
+        </div>
+        
+        <!-- 行为上报 -->
+        <div class="section">
+            <h2>📊 行为上报</h2>
+            <div class="form-group">
+                <label for="eventType">事件类型:</label>
+                <input type="text" id="eventType" placeholder="如: login, level_up, purchase" value="login">
+            </div>
+            <button onclick="reportEvent()" id="reportBtn" disabled>上报事件</button>
+            <div id="reportResult"></div>
+        </div>
+        
+        <!-- 心跳 -->
+        <div class="section">
+            <h2>💓 心跳保持</h2>
+            <button onclick="toggleHeartbeat()" id="heartbeatBtn" disabled>开始心跳</button>
+            <div class="heartbeat-log" id="heartbeatLog"></div>
+        </div>
+        
+        <!-- 设备信息 -->
+        <div class="section">
+            <h2>🖥️ 设备信息</h2>
+            <div class="device-info" id="deviceInfo">
+                请先初始化 SDK
+            </div>
+        </div>
+    </div>
+    
+    <!-- 引入 crypto-js 库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <!-- 引入 JSEncrypt 库（用于 RSA 加密） -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsencrypt/3.3.2/jsencrypt.min.js"></script>
+    <!-- 使用完整的 SDK（crypto-js + JSEncrypt） -->
+    <script src="lemon-kami.js?v=1"></script>
+    <script>
+        let sdk = null;
+        let heartbeatInterval = null;
+        let currentKamiCode = '';
+
+        // 页面加载时自动填充 URL 参数
+        window.addEventListener('DOMContentLoaded', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const appIdFromUrl = urlParams.get('app_id');
+            const clientTokenFromUrl = urlParams.get('client_token');
+            const clientSecretFromUrl = urlParams.get('client_secret');
+
+            if (appIdFromUrl) {
+                document.getElementById('appId').value = appIdFromUrl;
+            }
+            if (clientTokenFromUrl) {
+                document.getElementById('clientToken').value = clientTokenFromUrl;
+            }
+            if (clientSecretFromUrl) {
+                document.getElementById('clientSecret').value = clientSecretFromUrl;
+            }
+
+            const serverUrlInput = document.getElementById('serverUrl');
+            serverUrlInput.value = window.location.origin;
+        });
+
+        function normalizeServerUrl(serverUrl) {
+            return serverUrl.replace(/\/$/, '');
+        }
+
+        async function fetchPublicKey(serverUrl, appId) {
+            const response = await fetch(
+                `${normalizeServerUrl(serverUrl)}/api/v1/sdk/public-key?app_id=${encodeURIComponent(appId)}`
+            );
+            const result = await response.json().catch(() => ({}));
+
+            if (!response.ok || !result.public_key) {
+                throw new Error(result.detail || result.message || '获取 RSA 公钥失败');
+            }
+            return result.public_key;
+        }
+
+        async function waitForSdkReady(instance, timeoutMs = 5000) {
+            const start = Date.now();
+            while (Date.now() - start < timeoutMs) {
+                if (instance.rsaPublicKey && instance.fingerprint) {
+                    return;
+                }
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            throw new Error('SDK 初始化超时，请检查服务器连接');
+        }
+
+        // 初始化 SDK
+        async function initSDK() {
+            const appId = document.getElementById('appId').value.trim();
+            const clientToken = document.getElementById('clientToken').value.trim();
+            const clientSecret = document.getElementById('clientSecret').value.trim();
+            const serverUrl = document.getElementById('serverUrl').value.trim();
+
+            if (!appId || !clientToken || !clientSecret) {
+                showResult('initResult', '请填写 App ID、Client Token 和 Client Secret', 'error');
+                return;
+            }
+
+            try {
+                showResult('initResult', '正在获取 RSA 公钥...', '');
+                const rsaPublicKey = await fetchPublicKey(serverUrl, appId);
+
+                sdk = new LemonKamiSDK({
+                    appId: appId,
+                    clientToken: clientToken,
+                    clientSecret: clientSecret,
+                    serverUrl: serverUrl,
+                    rsaPublicKey: rsaPublicKey
+                });
+                
+                // 等待指纹加载完成
+                await waitForSdkReady(sdk);
+
+                showResult('initResult', '✅ SDK 初始化成功', 'success');
+
+                // 显示设备信息
+                document.getElementById('deviceInfo').innerHTML = `
+                    <strong>设备 UUID:</strong> ${sdk.deviceUuid}<br>
+                    <strong>设备指纹:</strong> ${sdk.fingerprint ? sdk.fingerprint.substring(0, 32) + '...' : '生成中...'}
+                `;
+
+                // 启用按钮
+                document.getElementById('verifyBtn').disabled = false;
+                document.getElementById('reportBtn').disabled = false;
+                document.getElementById('heartbeatBtn').disabled = false;
+
+            } catch (error) {
+                showResult('initResult', `❌ 初始化失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 验证卡密
+        async function verifyKami() {
+            const kamiCode = document.getElementById('kamiCode').value.trim();
+
+            if (!kamiCode) {
+                showResult('verifyResult', '请输入卡密代码', 'error');
+                return;
+            }
+
+            // 检查 SDK 是否初始化
+            if (!sdk) {
+                showResult('verifyResult', '❌ SDK 未初始化，请先初始化 SDK', 'error');
+                return;
+            }
+
+            currentKamiCode = kamiCode;
+            showResult('verifyResult', '⏳ 验证中...', '');
+
+            try {
+                const result = await sdk.verify(kamiCode);
+
+                if (result.success) {
+                    showResult('verifyResult',
+                        `✅ 验证成功！\n\n` +
+                        `卡密类型: ${result.kami_type}\n` +
+                        `到期时间: ${result.expire_time || '永久'}`,
+                        'success'
+                    );
+                } else {
+                    showResult('verifyResult', `❌ 验证失败: ${result.message}`, 'error');
+                }
+            } catch (error) {
+                showResult('verifyResult', `❌ 验证异常: ${error.message}`, 'error');
+            }
+        }
+
+        // 上报事件
+        async function reportEvent() {
+            if (!currentKamiCode) {
+                showResult('reportResult', '请先验证卡密', 'error');
+                return;
+            }
+
+            const eventType = document.getElementById('eventType').value.trim() || 'login';
+
+            showResult('reportResult', '⏳ 上报中...', '');
+
+            const result = await sdk.reportEvent(currentKamiCode, eventType, {
+                timestamp: new Date().toISOString(),
+                userAgent: navigator.userAgent
+            });
+
+            if (result.success) {
+                showResult('reportResult', '✅ 事件上报成功', 'success');
+            } else {
+                showResult('reportResult', `❌ 上报失败: ${result.message}`, 'error');
+            }
+        }
+
+        // 切换心跳
+        function toggleHeartbeat() {
+            const btn = document.getElementById('heartbeatBtn');
+
+            if (heartbeatInterval) {
+                // 停止心跳
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+                btn.textContent = '开始心跳';
+                addHeartbeatLog('❤️ 心跳已停止');
+            } else {
+                if (!currentKamiCode) {
+                    showResult('verifyResult', '请先验证卡密', 'error');
+                    return;
+                }
+
+                // 开始心跳
+                btn.textContent = '停止心跳';
+                addHeartbeatLog('💓 开始心跳...');
+
+                heartbeatInterval = setInterval(async () => {
+                    const result = await sdk.heartbeat(currentKamiCode);
+                    const time = new Date().toLocaleTimeString();
+
+                    if (result.success) {
+                        addHeartbeatLog(`[${time}] ✅ 心跳成功`);
+                    } else {
+                        addHeartbeatLog(`[${time}] ❌ 心跳失败: ${result.message}`);
+                    }
+                }, 30000); // 每30秒一次
+
+                // 立即发送一次
+                sdk.heartbeat(currentKamiCode).then(result => {
+                    const time = new Date().toLocaleTimeString();
+                    if (result.success) {
+                        addHeartbeatLog(`[${time}] ✅ 心跳成功`);
+                    }
+                });
+            }
+        }
+
+        // 添加心跳日志
+        function addHeartbeatLog(message) {
+            const logDiv = document.getElementById('heartbeatLog');
+            const logItem = document.createElement('div');
+            logItem.className = 'log-item';
+            logItem.textContent = message;
+            logDiv.insertBefore(logItem, logDiv.firstChild);
+
+            // 只保留最近20条
+            while (logDiv.children.length > 20) {
+                logDiv.removeChild(logDiv.lastChild);
+            }
+        }
+
+        // 显示结果
+        function showResult(elementId, message, type) {
+            const element = document.getElementById(elementId);
+            element.className = `result ${type}`;
+            element.innerHTML = `<pre>${message}</pre>`;
+        }
+    </script>
+</body>
+</html>

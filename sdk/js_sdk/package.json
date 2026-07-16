@@ -1,0 +1,21 @@
+{
+  "name": "lemon-kami-sdk",
+  "version": "1.0.0",
+  "description": "小柠檬网络验证 JavaScript SDK",
+  "main": "lemon-kami.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "kami",
+    "license",
+    "activation",
+    "lemon"
+  ],
+  "author": "Lemon Kami",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/lemon-kami.git"
+  }
+}
