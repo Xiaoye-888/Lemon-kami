@@ -10,6 +10,10 @@ mkdir -p "${APP_DIR}"
 
 cp "${DEPLOY_DIR}/docker-compose.prod.yml" "${APP_DIR}/docker-compose.prod.yml"
 
+if [ -f "${DEPLOY_DIR}/runtime.env" ]; then
+  install -m 600 "${DEPLOY_DIR}/runtime.env" "${APP_DIR}/.env"
+fi
+
 if [ ! -f "${APP_DIR}/.env" ]; then
   echo "Missing ${APP_DIR}/.env. Create it before deploying." >&2
   exit 1
@@ -27,4 +31,5 @@ fi
 
 docker compose -f docker-compose.prod.yml up -d --remove-orphans
 docker image prune -f >/dev/null || true
+rm -f "${DEPLOY_DIR}/runtime.env" "${IMAGE_ARCHIVE}" || true
 docker compose -f docker-compose.prod.yml ps

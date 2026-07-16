@@ -81,6 +81,74 @@ jobs:
           docker build -t "${FRONTEND_IMAGE}:${GITHUB_SHA}" ./admin
           docker save "${BACKEND_IMAGE}:${GITHUB_SHA}" "${FRONTEND_IMAGE}:${GITHUB_SHA}" | gzip > lemon-kami-images.tar.gz
 
+      - name: Prepare runtime environment
+        shell: bash
+        env:
+          HTTP_PORT: ${{ secrets.HTTP_PORT }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
+          MYSQL_USER: ${{ secrets.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          ALGORITHM: ${{ secrets.ALGORITHM }}
+          ACCESS_TOKEN_EXPIRE_MINUTES: ${{ secrets.ACCESS_TOKEN_EXPIRE_MINUTES }}
+          DEBUG: ${{ secrets.DEBUG }}
+          ENABLE_API_DOCS: ${{ secrets.ENABLE_API_DOCS }}
+          TIMESTAMP_TOLERANCE: ${{ secrets.TIMESTAMP_TOLERANCE }}
+          NONCE_TTL: ${{ secrets.NONCE_TTL }}
+          RATE_LIMIT_MAX: ${{ secrets.RATE_LIMIT_MAX }}
+          RATE_LIMIT_WINDOW: ${{ secrets.RATE_LIMIT_WINDOW }}
+          CORS_ALLOWED_ORIGINS: ${{ secrets.CORS_ALLOWED_ORIGINS }}
+          LOGIN_AES_KEY: ${{ secrets.LOGIN_AES_KEY }}
+          BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
+          TZ: ${{ secrets.TZ }}
+        run: |
+          set -Eeuo pipefail
+
+          required=(
+            MYSQL_ROOT_PASSWORD
+            MYSQL_PASSWORD
+            DATABASE_URL
+            SECRET_KEY
+            CORS_ALLOWED_ORIGINS
+            LOGIN_AES_KEY
+            BOOTSTRAP_ADMIN_PASSWORD
+          )
+
+          for key in "${required[@]}"; do
+            if [ -z "${!key:-}" ]; then
+              echo "Missing required GitHub secret: ${key}" >&2
+              exit 1
+            fi
+          done
+
+          umask 077
+          {
+            printf 'APP_IMAGE_TAG=%s\n' "${GITHUB_SHA}"
+            printf 'HTTP_PORT=%s\n' "${HTTP_PORT:-80}"
+            printf 'MYSQL_ROOT_PASSWORD=%s\n' "${MYSQL_ROOT_PASSWORD}"
+            printf 'MYSQL_DATABASE=%s\n' "${MYSQL_DATABASE:-lemon_kami}"
+            printf 'MYSQL_USER=%s\n' "${MYSQL_USER:-lemon_user}"
+            printf 'MYSQL_PASSWORD=%s\n' "${MYSQL_PASSWORD}"
+            printf 'DATABASE_URL=%s\n' "${DATABASE_URL}"
+            printf 'REDIS_URL=%s\n' "${REDIS_URL:-redis://redis:6379/0}"
+            printf 'SECRET_KEY=%s\n' "${SECRET_KEY}"
+            printf 'ALGORITHM=%s\n' "${ALGORITHM:-HS256}"
+            printf 'ACCESS_TOKEN_EXPIRE_MINUTES=%s\n' "${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}"
+            printf 'DEBUG=%s\n' "${DEBUG:-false}"
+            printf 'ENABLE_API_DOCS=%s\n' "${ENABLE_API_DOCS:-false}"
+            printf 'TIMESTAMP_TOLERANCE=%s\n' "${TIMESTAMP_TOLERANCE:-60}"
+            printf 'NONCE_TTL=%s\n' "${NONCE_TTL:-60}"
+            printf 'RATE_LIMIT_MAX=%s\n' "${RATE_LIMIT_MAX:-1000}"
+            printf 'RATE_LIMIT_WINDOW=%s\n' "${RATE_LIMIT_WINDOW:-60}"
+            printf 'CORS_ALLOWED_ORIGINS=%s\n' "${CORS_ALLOWED_ORIGINS}"
+            printf 'LOGIN_AES_KEY=%s\n' "${LOGIN_AES_KEY}"
+            printf 'BOOTSTRAP_ADMIN_PASSWORD=%s\n' "${BOOTSTRAP_ADMIN_PASSWORD}"
+            printf 'TZ=%s\n' "${TZ:-Asia/Shanghai}"
+          } > runtime.env
+
       - name: Prepare SSH
         shell: bash
         run: |
@@ -103,6 +171,7 @@ jobs:
           scp -i ~/.ssh/lemon_kami_deploy_key -P "${SERVER_PORT}" \
             lemon-kami-images.tar.gz \
             docker-compose.prod.yml \
+            runtime.env \
             scripts/remote_deploy.sh \
             "${REMOTE}:/tmp/lemon-kami-deploy/"
 
