@@ -1,29 +1,25 @@
-# 构建阶段
-FROM node:20-alpine AS builder
+ARG NODE_VERSION=22
+ARG NPM_REGISTRY=https://mirrors.cloud.tencent.com/npm/
+
+FROM node:${NODE_VERSION}-alpine AS builder
+
+ARG NPM_REGISTRY
 
 WORKDIR /app
 
-# 复制依赖文件
 COPY package*.json ./
 
-# 安装依赖（直接全局安装 vite，彻底解决权限）
-RUN npm install --registry=https://mirrors.cloud.tencent.com/npm/
-RUN npm install -g vite --registry=https://mirrors.cloud.tencent.com/npm/
+RUN npm ci --registry="${NPM_REGISTRY}" --no-audit --fund=false
 
-# 复制源代码
 COPY . .
 
-# 构建（直接用 vite，不用 npx）
-RUN vite build
+RUN npm run build
 
-# 生产阶段
-FROM nginx:alpine
+FROM nginxinc/nginx-unprivileged:stable-alpine
 
-# 复制构建产物
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# 复制 nginx 配置
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 8080
 
-EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]

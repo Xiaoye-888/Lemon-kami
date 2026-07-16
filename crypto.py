@@ -100,11 +100,11 @@ class RSACrypto:
 
 
 class AESCrypto:
-    """AES 加密解密工具类 (AES-256-CBC)"""
+    """AES 加密解密工具类 (AES-CBC，支持 128/192/256-bit key)"""
 
     @staticmethod
     def generate_key() -> bytes:
-        """生成 16 位随机 AES 密钥"""
+        """生成 16 字节随机 AES-128 密钥"""
         return os.urandom(16)
 
     @staticmethod
@@ -113,8 +113,8 @@ class AESCrypto:
         AES 加密
         返回包含 iv 和 ciphertext 的字典
         """
-        if len(key) != 16:
-            raise ValueError("AES key must be 16 bytes")
+        if len(key) not in {16, 24, 32}:
+            raise ValueError(f"AES key must be 16, 24, or 32 bytes, got {len(key)} bytes")
 
         # 生成随机 IV
         iv = os.urandom(16)
@@ -140,8 +140,8 @@ class AESCrypto:
     @staticmethod
     def decrypt(iv_b64: str, ciphertext_b64: str, key: bytes) -> bytes:
         """AES 解密"""
-        if len(key) != 16:
-            raise ValueError("AES key must be 16 bytes")
+        if len(key) not in {16, 24, 32}:
+            raise ValueError(f"AES key must be 16, 24, or 32 bytes, got {len(key)} bytes")
 
         iv = base64.b64decode(iv_b64)
         ciphertext = base64.b64decode(ciphertext_b64)
@@ -279,15 +279,15 @@ class CryptoHelper:
         
         Args:
             data: 要加密的业务数据（字典）
-            key_b64: Base64 编码的 AES 密钥（16 字节）
+            key_b64: Base64 编码的 AES 密钥（16/24/32 字节）
             
         Returns:
             包含 encrypted_data 和 iv 的字典
         """
         # 解码 Base64 密钥
         key = base64.b64decode(key_b64)
-        if len(key) != 16:
-            raise ValueError(f"AES key must be 16 bytes, got {len(key)} bytes")
+        if len(key) not in {16, 24, 32}:
+            raise ValueError(f"AES key must be 16, 24, or 32 bytes, got {len(key)} bytes")
         
         # 将数据转为 JSON 字符串
         json_data = json.dumps(data, ensure_ascii=False).encode('utf-8')
@@ -307,7 +307,7 @@ class CryptoHelper:
         
         Args:
             encrypted_data: AES 加密后的数据（ciphertext，Base64）
-            key_b64: Base64 编码的 AES 密钥（16 字节）
+            key_b64: Base64 编码的 AES 密钥（16/24/32 字节）
             iv: AES 初始化向量（Base64）
             
         Returns:
@@ -315,8 +315,8 @@ class CryptoHelper:
         """
         # 解码 Base64 密钥
         key = base64.b64decode(key_b64)
-        if len(key) != 16:
-            raise ValueError(f"AES key must be 16 bytes, got {len(key)} bytes")
+        if len(key) not in {16, 24, 32}:
+            raise ValueError(f"AES key must be 16, 24, or 32 bytes, got {len(key)} bytes")
         
         # 使用 AES 解密
         decrypted_data = AESCrypto.decrypt(iv, encrypted_data, key)

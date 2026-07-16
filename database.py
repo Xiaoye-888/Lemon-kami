@@ -39,22 +39,19 @@ def _ensure_points_schema():
         result = conn.execute(text("SHOW TABLES"))
         existing_tables = [row[0] for row in result.fetchall()]
 
-        if "admin_users" in existing_tables:
-            columns = {
-                row[0]
-                for row in conn.execute(text("SHOW COLUMNS FROM admin_users")).fetchall()
-            }
-            if "role" not in columns:
-                conn.execute(text("ALTER TABLE admin_users ADD COLUMN role VARCHAR(32) DEFAULT 'operator'"))
-                conn.commit()
-                conn.execute(text("CREATE INDEX idx_admin_users_role ON admin_users (role)"))
-                conn.commit()
-                conn.execute(text("""
-                    UPDATE admin_users
-                    SET role = CASE WHEN is_admin = 1 THEN 'super_admin' ELSE 'operator' END
-                    WHERE role IS NULL OR role = ''
-                """))
-                conn.commit()
+        def varchar_length(table_name: str, column_name: str, default: int) -> int:
+            if table_name not in existing_tables:
+                return default
+            for row in conn.execute(text(f"SHOW COLUMNS FROM {table_name}")).fetchall():
+                if row[0] != column_name:
+                    continue
+                column_type = str(row[1]).lower()
+                if column_type.startswith("varchar("):
+                    return int(column_type.split("(", 1)[1].split(")", 1)[0])
+            return default
+
+        app_id_length = varchar_length("apps", "app_id", 64)
+        kami_code_length = varchar_length("kamis", "kami_code", 255)
 
         if "end_users" not in existing_tables:
             conn.execute(text("""
@@ -110,7 +107,7 @@ def _ensure_points_schema():
                     user_id INT NOT NULL,
                     app_id VARCHAR(64),
                     kami_code VARCHAR(255),
-                    transaction_type ENUM('recharge', 'consume', 'adjust') NOT NULL,
+                    transaction_type ENUM('recharge', 'consume', 'refund', 'adjust') NOT NULL,
                     amount INT NOT NULL,
                     balance_before INT NOT NULL,
                     balance_after INT NOT NULL,
@@ -126,7 +123,7 @@ def _ensure_points_schema():
                     INDEX idx_transaction_type (transaction_type),
                     INDEX idx_biz_id (biz_id),
                     INDEX idx_created_at (created_at),
-                    UNIQUE KEY uk_point_tx_user_app_type_biz (user_id, app_id, transaction_type, biz_id)
+                    UNIQUE KEY uk_point_tx_user_type_biz (user_id, transaction_type, biz_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Point transactions'
             """))
             conn.commit()
@@ -136,24 +133,20 @@ def _ensure_points_schema():
                 row[0]: row[1]
                 for row in conn.execute(text("SHOW COLUMNS FROM point_transactions")).fetchall()
             }
-            if "transaction_type" in columns and columns["transaction_type"] != "enum('recharge','consume','adjust')":
+            if "transaction_type" in columns and "refund" not in columns["transaction_type"]:
                 conn.execute(text("""
                     ALTER TABLE point_transactions
-                    MODIFY COLUMN transaction_type ENUM('recharge', 'consume', 'adjust') NOT NULL
+                    MODIFY COLUMN transaction_type ENUM('recharge', 'consume', 'refund', 'adjust') NOT NULL
                 """))
                 conn.commit()
             indexes = {
                 row[2]
                 for row in conn.execute(text("SHOW INDEX FROM point_transactions")).fetchall()
             }
-            if "uk_point_tx_user_type_biz" in indexes:
-                conn.execute(text("ALTER TABLE point_transactions DROP INDEX uk_point_tx_user_type_biz"))
-                conn.commit()
-                indexes.remove("uk_point_tx_user_type_biz")
-            if "uk_point_tx_user_app_type_biz" not in indexes:
+            if "uk_point_tx_user_type_biz" not in indexes:
                 conn.execute(text("""
                     ALTER TABLE point_transactions
-                    ADD UNIQUE KEY uk_point_tx_user_app_type_biz (user_id, app_id, transaction_type, biz_id)
+                    ADD UNIQUE KEY uk_point_tx_user_type_biz (user_id, transaction_type, biz_id)
                 """))
                 conn.commit()
 
@@ -186,6 +179,11 @@ def _ensure_points_schema():
                 row[0]
                 for row in conn.execute(text("SHOW COLUMNS FROM kamis")).fetchall()
             }
+            if "spec_id" not in columns:
+                conn.execute(text("ALTER TABLE kamis ADD COLUMN spec_id INT DEFAULT NULL"))
+                conn.commit()
+                conn.execute(text("CREATE INDEX idx_kamis_spec_id ON kamis (spec_id)"))
+                conn.commit()
             if "points_amount" not in columns:
                 conn.execute(text("ALTER TABLE kamis ADD COLUMN points_amount INT DEFAULT NULL"))
                 conn.commit()
@@ -224,6 +222,8 @@ def _ensure_points_schema():
                 "code_prefix": "ALTER TABLE kamis ADD COLUMN code_prefix VARCHAR(32) DEFAULT NULL",
                 "code_length": "ALTER TABLE kamis ADD COLUMN code_length INT DEFAULT NULL",
                 "charset": "ALTER TABLE kamis ADD COLUMN charset VARCHAR(32) DEFAULT NULL",
+                "code_valid_days": "ALTER TABLE kamis ADD COLUMN code_valid_days INT DEFAULT NULL",
+                "code_expires_at": "ALTER TABLE kamis ADD COLUMN code_expires_at DATETIME DEFAULT NULL",
                 "bind_ip": "ALTER TABLE kamis ADD COLUMN bind_ip VARCHAR(255) DEFAULT NULL",
                 "unbind_count": "ALTER TABLE kamis ADD COLUMN unbind_count INT DEFAULT 0",
                 "last_unbind_at": "ALTER TABLE kamis ADD COLUMN last_unbind_at DATETIME DEFAULT NULL",
@@ -372,10 +372,46 @@ def _ensure_points_schema():
             """))
             conn.commit()
 
+        if "kami_specs" not in existing_tables:
+            conn.execute(text("""
+                CREATE TABLE kami_specs (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    app_id VARCHAR(64) NOT NULL,
+                    spec_key VARCHAR(255) NOT NULL,
+                    spec_name VARCHAR(128) NOT NULL,
+                    spec_group VARCHAR(32) DEFAULT 'custom',
+                    kami_type ENUM('hour', 'day', 'week', 'month', 'quarter', 'year', 'lifetime', 'points', 'times') NOT NULL,
+                    points_amount INT DEFAULT NULL,
+                    points_valid_days INT DEFAULT NULL,
+                    time_value INT DEFAULT NULL,
+                    time_unit VARCHAR(32) DEFAULT NULL,
+                    times_total INT DEFAULT NULL,
+                    machine_bind_mode VARCHAR(32) DEFAULT 'one_card_one_device',
+                    max_bind_devices INT DEFAULT 1,
+                    authorization_owner VARCHAR(32) DEFAULT 'device',
+                    user_bind_mode VARCHAR(32) DEFAULT 'none',
+                    status INT DEFAULT 1,
+                    sort_order INT DEFAULT 0,
+                    remark TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_app_id (app_id),
+                    INDEX idx_spec_key (spec_key),
+                    INDEX idx_spec_group (spec_group),
+                    INDEX idx_kami_type (kami_type),
+                    INDEX idx_status (status),
+                    INDEX idx_sort_order (sort_order),
+                    UNIQUE KEY uk_kami_spec_app_key (app_id, spec_key),
+                    FOREIGN KEY (app_id) REFERENCES apps(app_id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Kami specifications'
+            """))
+            conn.commit()
+
         if "kami_batches" not in existing_tables:
             conn.execute(text("""
                 CREATE TABLE kami_batches (
                     id INT AUTO_INCREMENT PRIMARY KEY,
+                    spec_id INT DEFAULT NULL,
                     app_id VARCHAR(64) NOT NULL,
                     batch_no VARCHAR(64) NOT NULL,
                     kami_type ENUM('hour', 'day', 'week', 'month', 'quarter', 'year', 'lifetime', 'points', 'times') NOT NULL,
@@ -387,6 +423,7 @@ def _ensure_points_schema():
                     code_prefix VARCHAR(32) DEFAULT NULL,
                     code_length INT DEFAULT 16,
                     charset VARCHAR(32) DEFAULT 'upper_numeric',
+                    code_valid_days INT DEFAULT NULL,
                     machine_bind_mode VARCHAR(32) DEFAULT 'one_card_one_device',
                     max_bind_devices INT DEFAULT 1,
                     authorization_owner VARCHAR(32) DEFAULT 'device',
@@ -396,6 +433,7 @@ def _ensure_points_schema():
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     INDEX idx_app_id (app_id),
+                    INDEX idx_spec_id (spec_id),
                     INDEX idx_batch_no (batch_no),
                     INDEX idx_kami_type (kami_type),
                     INDEX idx_machine_bind_mode (machine_bind_mode),
@@ -413,6 +451,11 @@ def _ensure_points_schema():
                 row[0]
                 for row in conn.execute(text("SHOW COLUMNS FROM kami_batches")).fetchall()
             }
+            if "spec_id" not in columns:
+                conn.execute(text("ALTER TABLE kami_batches ADD COLUMN spec_id INT DEFAULT NULL"))
+                conn.commit()
+                conn.execute(text("CREATE INDEX idx_kami_batches_spec_id ON kami_batches (spec_id)"))
+                conn.commit()
             if "max_bind_devices" not in columns:
                 conn.execute(text("ALTER TABLE kami_batches ADD COLUMN max_bind_devices INT DEFAULT 1"))
                 conn.commit()
@@ -425,6 +468,9 @@ def _ensure_points_schema():
                 conn.execute(text("ALTER TABLE kami_batches ADD COLUMN user_bind_mode VARCHAR(32) DEFAULT 'none'"))
                 conn.commit()
                 conn.execute(text("CREATE INDEX idx_kami_batches_user_bind_mode ON kami_batches (user_bind_mode)"))
+                conn.commit()
+            if "code_valid_days" not in columns:
+                conn.execute(text("ALTER TABLE kami_batches ADD COLUMN code_valid_days INT DEFAULT NULL"))
                 conn.commit()
             conn.execute(text("""
                 UPDATE kami_batches
@@ -441,11 +487,11 @@ def _ensure_points_schema():
             conn.commit()
 
         if "kami_device_bindings" not in existing_tables:
-            conn.execute(text("""
+            conn.execute(text(f"""
                 CREATE TABLE kami_device_bindings (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    app_id VARCHAR(64) NOT NULL,
-                    kami_code VARCHAR(255) NOT NULL,
+                    app_id VARCHAR({app_id_length}) NOT NULL,
+                    kami_code VARCHAR({kami_code_length}) NOT NULL,
                     device_uuid VARCHAR(255) NOT NULL,
                     fingerprint VARCHAR(255) NOT NULL,
                     bind_ip VARCHAR(255) DEFAULT NULL,
@@ -461,51 +507,6 @@ def _ensure_points_schema():
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Kami multi-device bindings'
             """))
             conn.commit()
-
-        if "authorization_accounts" in existing_tables:
-            columns = {
-                row[0]
-                for row in conn.execute(text("SHOW COLUMNS FROM authorization_accounts")).fetchall()
-            }
-            if "owner_key" not in columns:
-                conn.execute(text("ALTER TABLE authorization_accounts ADD COLUMN owner_key VARCHAR(512) NOT NULL DEFAULT ''"))
-                conn.commit()
-                conn.execute(text("CREATE INDEX idx_authorization_accounts_owner_key ON authorization_accounts (owner_key)"))
-                conn.commit()
-            conn.execute(text("""
-                UPDATE authorization_accounts
-                SET owner_key = CASE
-                    WHEN owner_type = 'user' AND user_id IS NOT NULL THEN CONCAT('user_id:', user_id)
-                    WHEN owner_type = 'user' AND username IS NOT NULL THEN CONCAT('username:', LOWER(username))
-                    WHEN owner_type = 'device' AND device_uuid IS NOT NULL THEN CONCAT('device_uuid:', device_uuid)
-                    WHEN owner_type = 'device' AND fingerprint IS NOT NULL THEN CONCAT('fingerprint:', fingerprint)
-                    ELSE CONCAT('legacy:', id)
-                END
-                WHERE owner_key IS NULL OR owner_key = ''
-            """))
-            conn.commit()
-            indexes = {
-                row[2]
-                for row in conn.execute(text("SHOW INDEX FROM authorization_accounts")).fetchall()
-            }
-            if "uk_authorization_account_owner" not in indexes:
-                conn.execute(text("""
-                    ALTER TABLE authorization_accounts
-                    ADD UNIQUE KEY uk_authorization_account_owner (app_id, owner_type, owner_key)
-                """))
-                conn.commit()
-
-        if "authorization_transactions" in existing_tables:
-            indexes = {
-                row[2]
-                for row in conn.execute(text("SHOW INDEX FROM authorization_transactions")).fetchall()
-            }
-            if "uk_authorization_tx_account_type_biz" not in indexes:
-                conn.execute(text("""
-                    ALTER TABLE authorization_transactions
-                    ADD UNIQUE KEY uk_authorization_tx_account_type_biz (account_id, transaction_type, biz_id)
-                """))
-                conn.commit()
 
 
 def _ensure_sqlite_schema():
@@ -527,20 +528,6 @@ def _ensure_sqlite_schema():
             if "app_id" not in columns:
                 conn.execute(text("ALTER TABLE end_users ADD COLUMN app_id VARCHAR(64) DEFAULT NULL"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_end_users_app_id ON end_users (app_id)"))
-                conn.commit()
-        if "admin_users" in tables:
-            columns = {
-                row[1]
-                for row in conn.execute(text("PRAGMA table_info(admin_users)")).fetchall()
-            }
-            if "role" not in columns:
-                conn.execute(text("ALTER TABLE admin_users ADD COLUMN role VARCHAR(32) DEFAULT 'operator'"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_admin_users_role ON admin_users (role)"))
-                conn.execute(text("""
-                    UPDATE admin_users
-                    SET role = CASE WHEN is_admin = 1 THEN 'super_admin' ELSE 'operator' END
-                    WHERE role IS NULL OR role = ''
-                """))
                 conn.commit()
         if "apps" in tables:
             columns = {
@@ -605,6 +592,7 @@ def _ensure_sqlite_schema():
                 for row in conn.execute(text("PRAGMA table_info(kamis)")).fetchall()
             }
             extra_columns = {
+                "spec_id": "INTEGER DEFAULT NULL",
                 "time_value": "INTEGER DEFAULT NULL",
                 "time_unit": "VARCHAR(32) DEFAULT NULL",
                 "times_total": "INTEGER DEFAULT NULL",
@@ -612,6 +600,8 @@ def _ensure_sqlite_schema():
                 "code_prefix": "VARCHAR(32) DEFAULT NULL",
                 "code_length": "INTEGER DEFAULT NULL",
                 "charset": "VARCHAR(32) DEFAULT NULL",
+                "code_valid_days": "INTEGER DEFAULT NULL",
+                "code_expires_at": "DATETIME DEFAULT NULL",
                 "bind_ip": "VARCHAR(255) DEFAULT NULL",
                 "unbind_count": "INTEGER DEFAULT 0",
                 "last_unbind_at": "DATETIME DEFAULT NULL",
@@ -625,11 +615,13 @@ def _ensure_sqlite_schema():
             for column, ddl in extra_columns.items():
                 if column not in columns:
                     conn.execute(text(f"ALTER TABLE kamis ADD COLUMN {column} {ddl}"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_spec_id ON kamis (spec_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_times_remaining ON kamis (times_remaining)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_machine_bind_mode ON kamis (machine_bind_mode)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_authorization_owner ON kamis (authorization_owner)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_user_bind_mode ON kamis (user_bind_mode)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_created_at ON kamis (created_at)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_code_expires_at ON kamis (code_expires_at)"))
             conn.execute(text("""
                 UPDATE kamis
                 SET max_bind_devices = CASE
@@ -648,12 +640,17 @@ def _ensure_sqlite_schema():
                 row[1]
                 for row in conn.execute(text("PRAGMA table_info(kami_batches)")).fetchall()
             }
+            if "spec_id" not in columns:
+                conn.execute(text("ALTER TABLE kami_batches ADD COLUMN spec_id INTEGER DEFAULT NULL"))
             if "max_bind_devices" not in columns:
                 conn.execute(text("ALTER TABLE kami_batches ADD COLUMN max_bind_devices INTEGER DEFAULT 1"))
             if "authorization_owner" not in columns:
                 conn.execute(text("ALTER TABLE kami_batches ADD COLUMN authorization_owner VARCHAR(32) DEFAULT 'device'"))
             if "user_bind_mode" not in columns:
                 conn.execute(text("ALTER TABLE kami_batches ADD COLUMN user_bind_mode VARCHAR(32) DEFAULT 'none'"))
+            if "code_valid_days" not in columns:
+                conn.execute(text("ALTER TABLE kami_batches ADD COLUMN code_valid_days INTEGER DEFAULT NULL"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kami_batches_spec_id ON kami_batches (spec_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kami_batches_authorization_owner ON kami_batches (authorization_owner)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kami_batches_user_bind_mode ON kami_batches (user_bind_mode)"))
             conn.execute(text("""
@@ -667,36 +664,6 @@ def _ensure_sqlite_schema():
                    OR (machine_bind_mode = 'one_card_multi_device' AND max_bind_devices < 2)
                    OR (machine_bind_mode = 'no_limit' AND max_bind_devices != 0)
                    OR (machine_bind_mode = 'one_card_one_device' AND max_bind_devices != 1)
-            """))
-            conn.commit()
-        if "authorization_accounts" in tables:
-            columns = {
-                row[1]
-                for row in conn.execute(text("PRAGMA table_info(authorization_accounts)")).fetchall()
-            }
-            if "owner_key" not in columns:
-                conn.execute(text("ALTER TABLE authorization_accounts ADD COLUMN owner_key VARCHAR(512) NOT NULL DEFAULT ''"))
-            conn.execute(text("""
-                UPDATE authorization_accounts
-                SET owner_key = CASE
-                    WHEN owner_type = 'user' AND user_id IS NOT NULL THEN 'user_id:' || user_id
-                    WHEN owner_type = 'user' AND username IS NOT NULL THEN 'username:' || lower(username)
-                    WHEN owner_type = 'device' AND device_uuid IS NOT NULL THEN 'device_uuid:' || device_uuid
-                    WHEN owner_type = 'device' AND fingerprint IS NOT NULL THEN 'fingerprint:' || fingerprint
-                    ELSE 'legacy:' || id
-                END
-                WHERE owner_key IS NULL OR owner_key = ''
-            """))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_authorization_accounts_owner_key ON authorization_accounts (owner_key)"))
-            conn.execute(text("""
-                CREATE UNIQUE INDEX IF NOT EXISTS uk_authorization_account_owner
-                ON authorization_accounts (app_id, owner_type, owner_key)
-            """))
-            conn.commit()
-        if "authorization_transactions" in tables:
-            conn.execute(text("""
-                CREATE UNIQUE INDEX IF NOT EXISTS uk_authorization_tx_account_type_biz
-                ON authorization_transactions (account_id, transaction_type, biz_id)
             """))
             conn.commit()
 
@@ -740,6 +707,9 @@ def init_db():
     if engine.dialect.name == "sqlite":
         SQLModel.metadata.create_all(engine)
         _ensure_sqlite_schema()
+        from kami_spec_service import backfill_specs_for_session
+        with Session(engine) as session:
+            backfill_specs_for_session(session)
         _init_default_admin()
         msg = "SQLite database initialized successfully"
         debug_print(msg)
@@ -777,14 +747,12 @@ def init_db():
                         email VARCHAR(255),
                         phone VARCHAR(255),
                         is_admin BOOLEAN DEFAULT FALSE,
-                        role VARCHAR(32) DEFAULT 'operator',
                         status INT DEFAULT 1,
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                         last_login DATETIME,
                         failed_attempts INT DEFAULT 0,
                         locked_until DATETIME,
-                        INDEX idx_username (username),
-                        INDEX idx_role (role)
+                        INDEX idx_username (username)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='管理员用户表'
                 """))
                 conn.commit()
@@ -848,6 +816,8 @@ def init_db():
                         code_prefix VARCHAR(32),
                         code_length INT,
                         charset VARCHAR(32),
+                        code_valid_days INT,
+                        code_expires_at DATETIME,
                         bind_ip VARCHAR(255),
                         unbind_count INT DEFAULT 0,
                         last_unbind_at DATETIME,
@@ -866,6 +836,7 @@ def init_db():
                         INDEX idx_kami_code (kami_code),
                         INDEX idx_batch_no (batch_no),
                         INDEX idx_times_remaining (times_remaining),
+                        INDEX idx_code_expires_at (code_expires_at),
                         INDEX idx_machine_bind_mode (machine_bind_mode),
                         INDEX idx_authorization_owner (authorization_owner),
                         INDEX idx_user_bind_mode (user_bind_mode),
@@ -967,13 +938,19 @@ def init_db():
         msg = "✅ All database tables created successfully"
         debug_print(msg)
 
+    _ensure_points_schema()
+
     # create_all is non-destructive and adds newer SQLModel tables that are not
     # covered by the legacy hand-written bootstrap path.
     SQLModel.metadata.create_all(engine)
     
     _ensure_points_schema()
 
-    # 如显式配置引导密码，则初始化首个 admin 用户。
+    from kami_spec_service import backfill_specs_for_session
+    with Session(engine) as session:
+        backfill_specs_for_session(session)
+
+    # 初始化默认 admin 用户
     _init_default_admin()
 
 
@@ -984,7 +961,7 @@ def get_session():
 
 
 def _init_default_admin():
-    """初始化首个 admin 用户（如果显式配置了引导密码）。"""
+    """初始化默认 admin 用户（如果不存在）"""
     from models import AdminUser
     from sqlmodel import select
     from passlib.context import CryptContext
@@ -992,6 +969,7 @@ def _init_default_admin():
     pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
     
     def hash_password(password: str) -> str:
+        """密码哈希（使用 SHA256 + salt）"""
         return pwd_context.hash(password)
     
     with Session(engine) as session:
@@ -1001,20 +979,21 @@ def _init_default_admin():
         
         if not existing_admin:
             if not settings.BOOTSTRAP_ADMIN_PASSWORD:
-                msg = "ℹ️  BOOTSTRAP_ADMIN_PASSWORD is not set; skipping admin bootstrap"
+                msg = "BOOTSTRAP_ADMIN_PASSWORD is not set; skipping admin bootstrap"
                 debug_print(msg)
                 return
 
+            # 创建默认 admin 用户
             default_admin = AdminUser(
                 username="admin",
-                password_hash=hash_password(settings.BOOTSTRAP_ADMIN_PASSWORD),
+                password_hash="",
                 is_admin=True,
-                role="super_admin",
                 status=1
             )
+            default_admin.password_hash = hash_password(settings.BOOTSTRAP_ADMIN_PASSWORD)
             session.add(default_admin)
             session.commit()
-            msg = "✅ Bootstrap admin user created (username: admin)"
+            msg = "Bootstrap admin user created (username: admin)"
             debug_print(msg)
         else:
             msg = "ℹ️  Admin user already exists"

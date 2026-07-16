@@ -1,13 +1,29 @@
+.git/
+.gitignore
+.gitattributes
+
 .env
 .env.*
 !.env.example
 !.env.local.example
 
 .venv/
+venv/
+env/
+ENV/
 __pycache__/
+*.py[cod]
+*.pyo
+*.pyd
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.egg-info/
+build/
+dist/
+
+node_modules/
+admin/
 
 *.db
 *.sqlite
@@ -16,11 +32,20 @@ lemon_kami_dev.db
 
 logs/
 backups/
-admin/
 docs/
 tests/
-*.zip
+*.log
 *.tar
 *.tar.gz
+*.zip
+
+sdk/**
+!sdk/
+!sdk/python_sdk/
+!sdk/python_sdk/*.zip
+!sdk/js_sdk/
+!sdk/js_sdk/*.zip
+!sdk/java_sdk/
+!sdk/java_sdk/*.zip
 
 .engramory-memory/

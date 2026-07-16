@@ -184,9 +184,9 @@
                 </select>
             </div>
             <div class="form-group">
-                <label for="credentialStatus">客户端凭证:</label>
-                <input type="text" id="credentialStatus" placeholder="初始化时自动换取短期 client token" value="" readonly>
-                <div class="field-hint">App Secret 仅用于本后台测试页换取短期凭证，SDK 业务请求使用 clientToken/clientSecret 签名。</div>
+                <label for="appSecret">App Secret:</label>
+                <input type="password" id="appSecret" placeholder="选择 App ID 后自动获取" value="" readonly>
+                <div class="field-hint">选择应用后自动读取后台 App Secret，无需手动输入。</div>
             </div>
             <div class="form-group">
                 <label for="serverUrl">服务器地址:</label>
@@ -250,7 +250,7 @@
         window.addEventListener('DOMContentLoaded', function() {
             const serverUrlInput = document.getElementById('serverUrl');
             serverUrlInput.value = window.location.origin;
-            document.getElementById('appId').addEventListener('change', syncSelectedApp);
+            document.getElementById('appId').addEventListener('change', syncSelectedAppSecret);
             loadAppsForSdkTest();
         });
 
@@ -274,9 +274,9 @@
         async function loadAppsForSdkTest() {
             const token = localStorage.getItem('token');
             const serverUrl = document.getElementById('serverUrl').value || window.location.origin;
-            const credentialStatusInput = document.getElementById('credentialStatus');
+            const appSecretInput = document.getElementById('appSecret');
 
-            credentialStatusInput.value = '';
+            appSecretInput.value = '';
 
             if (!token) {
                 setAppSelectMessage('请先登录后台管理');
@@ -339,22 +339,22 @@
                 appIdSelect.value = availableApps[0].app_id;
             }
 
-            syncSelectedApp();
+            syncSelectedAppSecret();
 
             if (appIdSelect.value) {
-                showResult('initResult', '已加载应用配置，可换取短期客户端凭证并初始化 SDK', 'success');
+                showResult('initResult', '已加载应用配置，可直接初始化 SDK', 'success');
             } else {
-                showResult('initResult', '请选择 App ID 后初始化 SDK', '');
+                showResult('initResult', '请选择 App ID，系统会自动带出 App Secret', '');
             }
         }
 
-        function syncSelectedApp() {
+        function syncSelectedAppSecret() {
             const appId = document.getElementById('appId').value;
-            const credentialStatusInput = document.getElementById('credentialStatus');
+            const appSecretInput = document.getElementById('appSecret');
             const selectedApp = availableApps.find((app) => app.app_id === appId);
 
-            credentialStatusInput.value = selectedApp ? '已选择应用，等待初始化换取短期凭证' : '';
-            credentialStatusInput.placeholder = selectedApp ? '初始化时自动换取短期 client token' : '请选择 App ID';
+            appSecretInput.value = selectedApp?.app_secret || '';
+            appSecretInput.placeholder = selectedApp ? '已自动获取 App Secret' : '选择 App ID 后自动获取';
         }
 
         async function fetchPublicKey(serverUrl, appId) {
@@ -379,75 +379,37 @@
             }
             throw new Error('SDK 初始化超时，请检查服务器连接');
         }
-
-        function createNonce() {
-            const random = new Uint8Array(16);
-            crypto.getRandomValues(random);
-            return Array.from(random, (byte) => byte.toString(16).padStart(2, '0')).join('');
-        }
-
-        async function issueClientToken(serverUrl, appId, appSecret) {
-            const timestamp = Math.floor(Date.now() / 1000);
-            const nonce = createNonce();
-            const ttlSeconds = 600;
-            const signData = `${appId}${timestamp}${nonce}${ttlSeconds}`;
-            const sign = CryptoJS.HmacSHA256(signData, appSecret).toString(CryptoJS.enc.Hex);
-            const response = await fetch(`${normalizeServerUrl(serverUrl)}/api/v1/sdk/client-token`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    app_id: appId,
-                    timestamp,
-                    nonce,
-                    ttl_seconds: ttlSeconds,
-                    sign
-                })
-            });
-            const result = await response.json().catch(() => ({}));
-
-            if (!response.ok || !result.success || !result.data?.client_token || !result.data?.client_secret) {
-                throw new Error(result.detail || result.message || '换取短期客户端凭证失败');
-            }
-
-            return result.data;
-        }
         
         // 初始化 SDK
         async function initSDK() {
             const appId = document.getElementById('appId').value.trim();
+            const appSecret = document.getElementById('appSecret').value.trim();
             const serverUrl = document.getElementById('serverUrl').value.trim();
-            const selectedApp = availableApps.find((app) => app.app_id === appId);
             
             if (!appId) {
                 showResult('initResult', '请选择 App ID', 'error');
                 return;
             }
 
-            if (!selectedApp?.app_secret) {
-                showResult('initResult', '未能读取当前应用密钥，请刷新页面或重新登录后台后再试', 'error');
+            if (!appSecret) {
+                showResult('initResult', '未能自动获取 App Secret，请刷新页面或重新登录后台后再试', 'error');
                 return;
             }
             
             try {
-                showResult('initResult', '正在换取短期客户端凭证...', '');
-                const [rsaPublicKey, clientCredential] = await Promise.all([
-                    fetchPublicKey(serverUrl, appId),
-                    issueClientToken(serverUrl, appId, selectedApp.app_secret)
-                ]);
+                showResult('initResult', '正在获取 RSA 公钥...', '');
+                const rsaPublicKey = await fetchPublicKey(serverUrl, appId);
 
-                sdk = new window.LemonKamiSDK({
+                const KamiSDK = window.LemonKamiSDK
+                sdk = new KamiSDK({
                     appId: appId,
-                    clientToken: clientCredential.client_token,
-                    clientSecret: clientCredential.client_secret,
+                    appSecret: appSecret,
                     serverUrl: serverUrl,
                     rsaPublicKey: rsaPublicKey
                 });
                 
                 // 等待指纹加载完成
                 await waitForSdkReady(sdk);
-                document.getElementById('credentialStatus').value = `短期凭证已签发，有效期 ${clientCredential.expires_in} 秒`;
                 
                 showResult('initResult', '✅ SDK 初始化成功', 'success');
                 
@@ -589,4 +551,5 @@
         }
     </script>
 </body>
+<script src="../main_content.js"></script>
 </html>

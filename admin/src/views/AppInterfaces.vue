@@ -146,6 +146,31 @@
             show-icon
           />
         </el-form>
+
+        <div v-if="isAppConfigEditing" class="client-preview">
+          <div class="client-preview__top">
+            <span class="client-preview__title">{{ appConfigPreview.noticeTitle }}</span>
+            <el-tag :type="appConfigPreview.noticeTag" effect="plain">
+              {{ appConfigPreview.noticeLevelText }}
+            </el-tag>
+          </div>
+          <div v-if="appConfigPreview.noticeEnabled" class="client-preview__notice">
+            {{ appConfigPreview.noticeContent }}
+          </div>
+          <div v-else class="client-preview__muted">公告未启用，客户端可跳过公告展示。</div>
+
+          <div class="client-preview__version">
+            <span>当前版本：{{ appConfigPreview.version }}</span>
+            <el-tag v-if="appConfigPreview.forceUpdate" type="danger">强制更新</el-tag>
+          </div>
+          <div class="client-preview__notes">{{ appConfigPreview.versionInfo }}</div>
+
+          <div class="client-preview__actions">
+            <el-button type="primary" size="small">{{ appConfigPreview.buttonText }}</el-button>
+            <el-button size="small">稍后再说</el-button>
+            <span class="client-preview__url">{{ appConfigPreview.updateUrl }}</span>
+          </div>
+        </div>
       </template>
       <template #footer>
         <el-button @click="configDialogVisible = false">取消</el-button>
@@ -289,6 +314,33 @@ const currentAppName = computed(() => {
 const currentSchema = computed(() => {
   if (!editingInterface.value) return []
   return configSchemas[editingInterface.value.interface_key] || []
+})
+
+const isAppConfigEditing = computed(() => editingInterface.value?.interface_key === 'sdk.app_config')
+
+const appConfigPreview = computed(() => {
+  const data = configForm.data || {}
+  const noticeLevel = data.notice_level || 'normal'
+  const noticeLevelMap = {
+    normal: { text: '普通公告', tag: 'info' },
+    important: { text: '重要公告', tag: 'warning' },
+    urgent: { text: '紧急公告', tag: 'danger' }
+  }
+  const level = noticeLevelMap[noticeLevel] || noticeLevelMap.normal
+  const updateUrl = data.update_url || data.download_url || '未配置下载地址'
+
+  return {
+    noticeEnabled: Boolean(data.notice_enabled),
+    noticeTitle: data.notice_title || '系统公告',
+    noticeContent: data.notice || '公告内容将在客户端软件中展示。',
+    noticeLevelText: level.text,
+    noticeTag: level.tag,
+    version: data.version || '未配置',
+    versionInfo: data.version_info || data.download_note || '暂无更新说明',
+    forceUpdate: Boolean(data.force_update),
+    buttonText: data.download_button_text || '立即下载',
+    updateUrl
+  }
 })
 
 const filteredInterfaces = computed(() => {
@@ -496,6 +548,72 @@ onMounted(async () => {
   color: #64748b;
   font-size: 12px;
   line-height: 1.4;
+}
+
+.client-preview {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #d7e8ff;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.client-preview__top,
+.client-preview__version,
+.client-preview__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.client-preview__top {
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.client-preview__title {
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.client-preview__notice,
+.client-preview__muted,
+.client-preview__notes {
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.client-preview__notice {
+  color: #1f2937;
+}
+
+.client-preview__muted {
+  color: #64748b;
+}
+
+.client-preview__version {
+  margin-top: 14px;
+  color: #334155;
+  font-weight: 700;
+}
+
+.client-preview__notes {
+  margin-top: 8px;
+  color: #475569;
+}
+
+.client-preview__actions {
+  margin-top: 14px;
+}
+
+.client-preview__url {
+  min-width: 0;
+  color: #64748b;
+  font-size: 12px;
+  word-break: break-all;
 }
 
 @media (max-width: 1180px) {

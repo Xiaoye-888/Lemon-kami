@@ -30,9 +30,10 @@ const routes = [
   {
     path: '/',
     component: () => import('../layouts/MainLayout.vue'),
-    redirect: '/apps',
+    redirect: '/dashboard',
     meta: { requiresAuth: true },
     children: [
+      { path: 'dashboard', name: 'Dashboard', component: () => import('../views/Dashboard.vue'), meta: { title: '运营总览' } },
       { path: 'apps', name: 'Apps', component: () => import('../views/Apps.vue'), meta: { title: '应用管理' } },
       {
         path: 'apps/:app_id/interfaces',

@@ -10,7 +10,7 @@ js_sdk/
 ├── package.json                 # NPM 包配置
 ├── js_example.html             # 完整示例页面
 ├── lemon-kami-complete.js      # ✅ 推荐 - 完整可读版本
-└── lemon-kami.js               # ✅ 浏览器入口版本（与完整版本保持一致）
+├── lemon-kami.js               # ✅ 浏览器入口版本（与完整版本保持一致）
 ```
 
 ### 📦 文件说明
@@ -38,9 +38,18 @@ js_sdk/
 - ✅ 方便查看源码和修改
 - ✅ 体积小，加载快
 
-#### 浏览器入口
+#### SDK 入口
 
-`lemon-kami-complete.js` 和 `lemon-kami.js` 当前保持同一套可读实现。业务页面应直接引用 `lemon-kami.js`。
+`lemon-kami-complete.js` 和 `lemon-kami.js` 当前保持同一套可读实现。
+
+### 对接流程
+
+1. 客户端启动后可先请求 `GET /api/v1/sdk/apps/{app_id}/config`，读取公告、版本更新、下载外链和安全策略。
+2. 用户输入卡密后调用 `sdk.verify(kamiCode)`，验证接口只检查授权、激活和绑定，不扣次数。
+3. 次数卡在用户实际完成一次业务动作后，业务端再调用 `POST /api/v1/sdk/consume` 扣减次数。
+4. 行为、心跳或业务日志使用 `sdk.reportEvent(kamiCode, eventType, extraData)` 上报。
+
+当前 JavaScript SDK 入口只保留 Lemon 命名：`lemon-kami.js` 和 `lemon-kami-complete.js`。
 
 ---
 
@@ -66,8 +75,7 @@ js_sdk/
 ```javascript
 const sdk = new LemonKamiSDK({
     appId: 'your_app_id',           // 从后台管理获取
-    clientToken: 'short_lived_client_token',
-    clientSecret: 'short_lived_client_secret',
+    appSecret: 'your_app_secret',   // 从后台管理获取
     serverUrl: 'http://localhost:8000'  // 服务器地址
 });
 
@@ -136,9 +144,7 @@ new LemonKamiSDK(options)
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | appId | string | ✅ | 应用 ID，从后台管理获取 |
-| appSecret | string | ❌ | 应用密钥，仅建议服务端或受信环境使用 |
-| clientToken | string | ❌ | 短期客户端 Token，浏览器推荐 |
-| clientSecret | string | ❌ | 短期客户端签名密钥，浏览器推荐 |
+| appSecret | string | ✅ | 应用密钥，从后台管理获取 |
 | serverUrl | string | ❌ | 服务器地址，默认 `http://localhost:8000` |
 | publicKey | string | ❌ | RSA 公钥（可选，会自动从服务器获取） |
 
@@ -147,13 +153,10 @@ new LemonKamiSDK(options)
 ```javascript
 const sdk = new LemonKamiSDK({
     appId: 'app_123456',
-    clientToken: 'short_lived_client_token',
-    clientSecret: 'short_lived_client_secret',
+    appSecret: 'secret_abcdef',
     serverUrl: 'https://api.example.com'
 });
 ```
-
-浏览器页面推荐由业务后端使用 App Secret 调用 `/api/v1/sdk/client-token`，再把短期 `clientToken` 和 `clientSecret` 下发给页面。页面不应长期保存 App Secret。
 
 ### verify(kamiCode)
 
@@ -171,10 +174,11 @@ const sdk = new LemonKamiSDK({
 {
     success: true/false,
     message: "验证结果描述",
-    kami_type: "time_count/time/device/unlimited",  // 卡密类型
-    expire_time: "2024-12-31 23:59:59",  // 到期时间（仅计时卡密）
-    remaining_count: 100,  // 剩余次数（仅计次卡密）
-    bound_device: "device_uuid"  // 绑定设备（仅设备卡密）
+    kami_type: "month/times/points/lifetime",  // 卡密类型
+    expire_time: "2026-12-31 23:59:59",  // 到期时间，永久卡为 null
+    times_remaining: 100,  // 次数卡剩余次数
+    authorization_owner: "device/user/auto",
+    user_bind_mode: "none/auto/required"
 }
 ```
 
@@ -335,8 +339,7 @@ window.addEventListener('beforeunload', stopHeartbeat);
         async function init() {
             sdk = new LemonKamiSDK({
                 appId: 'your_app_id',
-                clientToken: 'short_lived_client_token',
-                clientSecret: 'short_lived_client_secret',
+                appSecret: 'your_app_secret',
                 serverUrl: 'http://localhost:8000'
             });
             
@@ -398,7 +401,7 @@ window.addEventListener('beforeunload', stopHeartbeat);
 // composables/useLemonKami.js
 import { ref, onMounted, onUnmounted } from 'vue'
 
-export function useLemonKami(appId, clientToken, clientSecret, serverUrl = 'http://localhost:8000') {
+export function useLemonKami(appId, appSecret, serverUrl = 'http://localhost:8000') {
     const sdk = ref(null)
     const initialized = ref(false)
     const currentKami = ref(null)
@@ -415,8 +418,7 @@ export function useLemonKami(appId, clientToken, clientSecret, serverUrl = 'http
         
         sdk.value = new window.LemonKamiSDK({
             appId,
-            clientToken,
-            clientSecret,
+            appSecret,
             serverUrl
         })
         
@@ -524,8 +526,7 @@ const verifyResult = ref(null)
 
 const { initialized, verify } = useLemonKami(
     'your_app_id',
-    'short_lived_client_token',
-    'short_lived_client_secret',
+    'your_app_secret',
     'http://localhost:8000'
 )
 
@@ -545,7 +546,7 @@ async function handleVerify() {
 // hooks/useLemonKami.js
 import { useState, useEffect, useRef } from 'react'
 
-export function useLemonKami(appId, clientToken, clientSecret, serverUrl = 'http://localhost:8000') {
+export function useLemonKami(appId, appSecret, serverUrl = 'http://localhost:8000') {
     const [sdk, setSdk] = useState(null)
     const [initialized, setInitialized] = useState(false)
     const currentKamiRef = useRef(null)
@@ -561,8 +562,7 @@ export function useLemonKami(appId, clientToken, clientSecret, serverUrl = 'http
             
             const newSdk = new window.LemonKamiSDK({
                 appId,
-                clientToken,
-                clientSecret,
+                appSecret,
                 serverUrl
             })
             
@@ -578,7 +578,7 @@ export function useLemonKami(appId, clientToken, clientSecret, serverUrl = 'http
         return () => {
             stopHeartbeat()
         }
-    }, [appId, clientToken, clientSecret, serverUrl])
+    }, [appId, appSecret, serverUrl])
 
     // 验证卡密
     async function verify(kamiCode) {
@@ -656,8 +656,7 @@ function App() {
     
     const { initialized, verify } = useLemonKami(
         'your_app_id',
-        'short_lived_client_token',
-        'short_lived_client_secret',
+        'your_app_secret',
         'http://localhost:8000'
     )
 
@@ -729,9 +728,9 @@ SDK 会自动生成唯一的设备指纹，包括：
 
 ⚠️ **重要提示：**
 
-1. **不要在浏览器长期暴露 App Secret**
-   - 推荐由业务后端换取短期 `clientToken` / `clientSecret`
-   - 只有服务端或受信环境才直接使用 `appSecret`
+1. **不要在客户端暴露 App Secret**
+   - 建议通过后端代理调用 SDK
+   - 或使用环境变量配置
 
 2. **HTTPS 推荐**
    - 生产环境务必使用 HTTPS
@@ -789,8 +788,7 @@ window.JSEncrypt = JSEncrypt
 // 使用 SDK
 const sdk = new LemonKamiSDK({
     appId: 'your_app_id',
-    clientToken: 'short_lived_client_token',
-    clientSecret: 'short_lived_client_secret'
+    appSecret: 'your_app_secret'
 })
 ```
 
@@ -838,8 +836,7 @@ if (sdk.publicKey && sdk.fingerprint) {
 ```javascript
 const sdk = new LemonKamiSDK({
     appId: 'xxx',
-    clientToken: 'short_lived_client_token',
-    clientSecret: 'short_lived_client_secret',
+    appSecret: 'xxx',
     serverUrl: 'https://api.yourdomain.com'
 });
 ```

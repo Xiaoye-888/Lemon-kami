@@ -48,7 +48,10 @@
           <el-option label="已使用" value="active" />
           <el-option label="已冻结" value="frozen" />
         </el-select>
-        <el-select v-model="queryParams.batch_no" placeholder="全部批次" clearable class="filter-control" @change="loadKamis">
+        <el-select v-model="queryParams.spec_id" placeholder="全部规格" clearable class="filter-control" @change="handleSpecChange">
+          <el-option v-for="spec in specStats" :key="spec.id" :label="getSpecOptionLabel(spec)" :value="spec.id" />
+        </el-select>
+        <el-select v-model="queryParams.batch_no" placeholder="全部批次" clearable class="filter-control" @change="handleBatchChange">
           <el-option v-for="batch in batchStats" :key="batch.batch_no" :label="batch.batch_no" :value="batch.batch_no" />
         </el-select>
         <el-select v-model="queryParams.kami_type" placeholder="全部类型" clearable class="filter-control" @change="loadKamis">
@@ -74,6 +77,13 @@
         <div>
           <el-button link type="primary" @click="goCurrentBatch">进入批次详情</el-button>
           <el-button link @click="clearBatchFilter">查看全部卡密</el-button>
+        </div>
+      </div>
+      <div v-else-if="queryParams.spec_id && currentSpec" class="current-batch-bar">
+        <span>当前规格：{{ currentSpec.spec_name }}</span>
+        <div>
+          <el-button link type="primary" @click="goCurrentSpec">进入规格详情</el-button>
+          <el-button link @click="clearSpecFilter">查看全部卡密</el-button>
         </div>
       </div>
 
@@ -164,7 +174,7 @@
     <el-dialog v-model="generateDialogVisible" title="生成卡密" width="640px">
       <el-alert
         v-if="generateForm.app_id && batchStats.length === 0"
-        title="当前应用暂无批次，需先创建批次后才能生成卡密。"
+        title="当前应用暂无批次，需先在批次管理中创建规格并生成批次。"
         type="warning"
         :closable="false"
         show-icon
@@ -240,12 +250,14 @@ import {
   Search,
   VideoPlay
 } from '@element-plus/icons-vue'
-import { batchCreateKamis, deleteKamis, exportKamis, freezeKami, getKamiBatches, getKamis } from '../api/kami'
+import { batchCreateKamis, deleteKamis, exportKamis, freezeKami, getKamiBatches, getKamiSpecs, getKamis } from '../api/kami'
 import { getApps } from '../api/admin'
 import { formatBeijingTime } from '../utils/datetime'
 import {
   TYPE_OPTIONS,
   getMachineBindModeText,
+  getSpecBenefitText,
+  getSpecPolicyText,
   getStatusText,
   getStatusType,
   getTypeText,
@@ -259,6 +271,7 @@ const generating = ref(false)
 const kamis = ref([])
 const selectedKamis = ref([])
 const batchStats = ref([])
+const specStats = ref([])
 const apps = ref([])
 const total = ref(0)
 const quickDate = ref('')
@@ -278,6 +291,7 @@ const queryParams = reactive({
   status: '',
   kami_type: '',
   keyword: '',
+  spec_id: '',
   batch_no: '',
   page: 1,
   page_size: 20
@@ -293,6 +307,7 @@ const generateForm = reactive({
 })
 
 const selectedBatch = computed(() => batchStats.value.find((item) => item.batch_no === generateForm.batch_no))
+const currentSpec = computed(() => specStats.value.find((item) => String(item.id) === String(queryParams.spec_id)))
 
 const codePreview = computed(() => {
   const option = charsetOptions.find((item) => item.value === generateForm.charset) || charsetOptions[0]
@@ -321,9 +336,11 @@ const loadApps = async () => {
     const res = await getApps()
     apps.value = res.data || []
     if (route.query.app_id) queryParams.app_id = String(route.query.app_id)
+    if (route.query.spec_id) queryParams.spec_id = Number(route.query.spec_id)
     if (route.query.batch_no) queryParams.batch_no = String(route.query.batch_no)
     if (!queryParams.app_id && apps.value.length > 0) queryParams.app_id = apps.value[0].app_id
     await loadKamis()
+    openGenerateDialogFromRoute()
   } catch (error) {
     console.error('加载应用失败:', error)
     ElMessage.error('加载应用失败')
@@ -331,7 +348,22 @@ const loadApps = async () => {
 }
 
 const handleAppChange = () => {
+  queryParams.spec_id = ''
   queryParams.batch_no = ''
+  queryParams.page = 1
+  selectedKamis.value = []
+  loadKamis()
+}
+
+const handleSpecChange = () => {
+  if (queryParams.spec_id) queryParams.batch_no = ''
+  queryParams.page = 1
+  selectedKamis.value = []
+  loadKamis()
+}
+
+const handleBatchChange = () => {
+  if (queryParams.batch_no) queryParams.spec_id = ''
   queryParams.page = 1
   selectedKamis.value = []
   loadKamis()
@@ -339,6 +371,13 @@ const handleAppChange = () => {
 
 const clearBatchFilter = () => {
   queryParams.batch_no = ''
+  queryParams.page = 1
+  selectedKamis.value = []
+  loadKamis()
+}
+
+const clearSpecFilter = () => {
+  queryParams.spec_id = ''
   queryParams.page = 1
   selectedKamis.value = []
   loadKamis()
@@ -359,6 +398,7 @@ const resetFilters = () => {
   queryParams.status = ''
   queryParams.kami_type = ''
   queryParams.keyword = ''
+  queryParams.spec_id = ''
   queryParams.batch_no = ''
   queryParams.page = 1
   quickDate.value = ''
@@ -371,8 +411,22 @@ const normalizeKamiParams = () => {
   if (!params.status) delete params.status
   if (!params.kami_type) delete params.kami_type
   if (!params.keyword) delete params.keyword
+  if (!params.spec_id) delete params.spec_id
   if (!params.batch_no) delete params.batch_no
+  if (params.batch_no) delete params.spec_id
   return params
+}
+
+const loadSpecs = async () => {
+  if (!queryParams.app_id) {
+    specStats.value = []
+    return
+  }
+  const params = { app_id: queryParams.app_id }
+  if (queryParams.kami_type) params.kami_type = queryParams.kami_type
+  const res = await getKamiSpecs(params)
+  specStats.value = res.data?.items || []
+  if (queryParams.spec_id && !currentSpec.value) queryParams.spec_id = ''
 }
 
 const loadBatches = async () => {
@@ -389,11 +443,13 @@ const loadKamis = async () => {
     kamis.value = []
     total.value = 0
     batchStats.value = []
+    specStats.value = []
     return
   }
 
   loading.value = true
   try {
+    await loadSpecs()
     await loadBatches()
     const res = await getKamis(normalizeKamiParams())
     kamis.value = res.data.items || []
@@ -419,6 +475,13 @@ const showGenerateDialog = () => {
   generateForm.code_length = 16
   generateForm.charset = 'upper_numeric'
   generateDialogVisible.value = true
+}
+
+const openGenerateDialogFromRoute = () => {
+  if (route.query.action !== 'generate') return
+  showGenerateDialog()
+  const { action, ...query } = route.query
+  router.replace({ path: route.path, query })
 }
 
 const openSdkTestScene = () => {
@@ -465,10 +528,11 @@ const handleExportKamis = async () => {
   }
   const params = { app_id: queryParams.app_id }
   if (queryParams.status) params.status = queryParams.status
+  if (queryParams.spec_id && !queryParams.batch_no) params.spec_id = queryParams.spec_id
   if (queryParams.batch_no) params.batch_no = queryParams.batch_no
   if (queryParams.kami_type) params.kami_type = queryParams.kami_type
   const response = await exportKamis(params)
-  downloadBlob(response, `kamis_${queryParams.app_id}_${queryParams.batch_no || 'all'}.csv`)
+  downloadBlob(response, `kamis_${queryParams.app_id}_${queryParams.batch_no || (queryParams.spec_id ? `spec_${queryParams.spec_id}` : 'all')}.csv`)
 }
 
 const downloadBlob = (response, filename) => {
@@ -491,17 +555,24 @@ const handleDeleteSelected = async () => {
   if (!queryParams.app_id || selectedKamis.value.length === 0) return
   const count = selectedKamis.value.length
   try {
-    await ElMessageBox.confirm(`确定删除选中的 ${count} 个卡密吗？已激活或已兑换卡密会自动跳过。`, '删除卡密', {
-      type: 'warning'
-    })
+    await ElMessageBox.confirm(
+      `确定删除选中的 ${count} 个卡密吗？请先确认这些卡密的授权、积分、次数或使用记录已经迁移，删除后不可恢复。`,
+      '确认删除卡密',
+      {
+        type: 'warning',
+        confirmButtonText: '已迁移并确认删除',
+        cancelButtonText: '取消'
+      }
+    )
     const payload = {
       app_id: queryParams.app_id,
       kami_codes: selectedKamis.value.map((item) => item.kami_code)
     }
+    if (queryParams.spec_id && !queryParams.batch_no) payload.spec_id = queryParams.spec_id
     if (queryParams.batch_no) payload.batch_no = queryParams.batch_no
     const res = await deleteKamis(payload)
     const data = res.data
-    ElMessage.success(`已删除 ${data.deleted_count} 个，跳过 ${data.skipped_count} 个`)
+    ElMessage.success(`已删除 ${data.deleted_count} 个，未处理 ${data.skipped_count} 个`)
     await loadKamis()
   } catch (error) {
     if (error !== 'cancel') console.error('删除卡密失败:', error)
@@ -523,6 +594,10 @@ const goCurrentBatch = () => {
   router.push({ path: '/kamis/batches', query: { app_id: queryParams.app_id, batch_no: queryParams.batch_no } })
 }
 
+const goCurrentSpec = () => {
+  router.push({ path: '/kamis/batches', query: { app_id: queryParams.app_id, spec_id: queryParams.spec_id } })
+}
+
 const copyToClipboard = async (text) => {
   try {
     await navigator.clipboard.writeText(text)
@@ -537,6 +612,11 @@ const getBatchConfigText = (batch) => {
   if (batch.kami_type === 'points') return `面额 ${batch.points_amount || 0} 积分`
   if (batch.kami_type === 'times') return `${batch.times_total || 0}次`
   return getValidityText(batch)
+}
+
+const getSpecOptionLabel = (spec) => {
+  const policy = getSpecPolicyText(spec)
+  return `${spec.spec_name} / ${getTypeText(spec.kami_type)} / ${getSpecBenefitText(spec)} / ${policy}`
 }
 
 const formatOptionalTime = (value) => (value ? formatBeijingTime(value) : '-')

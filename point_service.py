@@ -3,7 +3,6 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from models import (
@@ -16,6 +15,7 @@ from models import (
     UserPointAccount,
     UserPointLot,
     get_now_naive,
+    is_kami_code_expired,
 )
 
 
@@ -37,6 +37,15 @@ def _metadata_to_json(metadata: Optional[dict]) -> Optional[str]:
     return json.dumps(metadata, ensure_ascii=False)
 
 
+def _metadata_from_json(metadata_json: Optional[str]) -> dict:
+    if not metadata_json:
+        return {}
+    try:
+        return json.loads(metadata_json)
+    except json.JSONDecodeError:
+        return {}
+
+
 def _lot_sort_key(lot: UserPointLot):
     return (
         lot.expires_at is None,
@@ -45,21 +54,11 @@ def _lot_sort_key(lot: UserPointLot):
     )
 
 
-def _active_lots(
-    session: Session,
-    user_id: int,
-    now: datetime,
-    lock: bool = False,
-    app_id: Optional[str] = None,
-) -> list[UserPointLot]:
+def _active_lots(session: Session, user_id: int, now: datetime, lock: bool = False) -> list[UserPointLot]:
     statement = select(UserPointLot).where(
         UserPointLot.user_id == user_id,
         UserPointLot.points_remaining > 0,
     )
-    if app_id:
-        statement = statement.where(
-            or_(UserPointLot.app_id == app_id, UserPointLot.app_id.is_(None))
-        )
     if lock:
         statement = statement.with_for_update()
     lots = session.exec(statement).all()
@@ -69,14 +68,8 @@ def _active_lots(
     )
 
 
-def _deduct_from_lots(
-    session: Session,
-    user_id: int,
-    amount: int,
-    now: datetime,
-    app_id: Optional[str] = None,
-) -> bool:
-    lots = _active_lots(session, user_id, now, lock=True, app_id=app_id)
+def _deduct_from_lots(session: Session, user_id: int, amount: int, now: datetime) -> bool:
+    lots = _active_lots(session, user_id, now, lock=True)
     if not lots:
         return False
 
@@ -200,8 +193,9 @@ def redeem_points_kami(session: Session, user: EndUser, kami_code: str) -> dict:
         raise PointServiceError("not_points_kami", "Kami is not a points kami")
     if kami.status == KamiStatus.frozen:
         raise PointServiceError("kami_frozen", "Kami is frozen")
-    if user.app_id and user.app_id != kami.app_id:
-        raise PointServiceError("app_mismatch", "Kami does not belong to the current user's app", 403)
+    now = get_now_naive()
+    if is_kami_code_expired(kami, now):
+        raise PointServiceError("kami_expired", "卡密已过期")
     if kami.redeemed_by_user_id is not None or kami.status != KamiStatus.unused:
         raise PointServiceError("already_redeemed", "Kami has already been redeemed")
     if not kami.points_amount or kami.points_amount <= 0:
@@ -210,7 +204,6 @@ def redeem_points_kami(session: Session, user: EndUser, kami_code: str) -> dict:
     account = get_or_create_account(session, user.id, lock=True)
     balance_before = account.balance
     balance_after = balance_before + kami.points_amount
-    now = get_now_naive()
 
     account.balance = balance_after
     account.total_recharged += kami.points_amount
@@ -280,7 +273,6 @@ def consume_points(
     existing = session.exec(
         select(PointTransaction).where(
             PointTransaction.user_id == user_id,
-            PointTransaction.app_id == app_id,
             PointTransaction.transaction_type == PointTransactionType.consume,
             PointTransaction.biz_id == biz_id,
         )
@@ -297,18 +289,12 @@ def consume_points(
 
     now = get_now_naive()
     account = get_or_create_account(session, user_id, lock=True)
-    lot_deducted = _deduct_from_lots(session, user_id, amount, now, app_id=app_id)
-    has_any_lots = session.exec(
+    lot_deducted = _deduct_from_lots(session, user_id, amount, now)
+    has_lots = session.exec(
         select(UserPointLot).where(UserPointLot.user_id == user_id)
     ).first() is not None
-    lots_statement = select(UserPointLot).where(UserPointLot.user_id == user_id)
-    if app_id:
-        lots_statement = lots_statement.where(
-            or_(UserPointLot.app_id == app_id, UserPointLot.app_id.is_(None))
-        )
-    has_lots = session.exec(lots_statement).first() is not None
 
-    if account.balance < amount or ((has_any_lots or has_lots) and not lot_deducted):
+    if account.balance < amount or (has_lots and not lot_deducted):
         raise PointServiceError("insufficient_balance", "Insufficient points balance")
 
     balance_before = account.balance
@@ -413,4 +399,118 @@ def adjust_points(
         "transaction_id": tx.transaction_id,
         "amount": amount,
         "balance": account.balance,
+    }
+
+
+def refund_points(
+    session: Session,
+    user_id: int,
+    refund_biz_id: str,
+    consume_biz_id: Optional[str] = None,
+    consume_transaction_id: Optional[str] = None,
+    amount: Optional[int] = None,
+    remark: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    admin_username: Optional[str] = None,
+) -> dict:
+    if not refund_biz_id:
+        raise PointServiceError("missing_refund_biz_id", "refund_biz_id is required")
+    if not consume_biz_id and not consume_transaction_id:
+        raise PointServiceError("missing_consume_reference", "consume_biz_id or consume_transaction_id is required")
+    if amount is not None and amount <= 0:
+        raise PointServiceError("invalid_amount", "Refund amount must be greater than zero")
+
+    existing = session.exec(
+        select(PointTransaction).where(
+            PointTransaction.user_id == user_id,
+            PointTransaction.transaction_type == PointTransactionType.refund,
+            PointTransaction.biz_id == refund_biz_id,
+        )
+    ).first()
+    if existing:
+        if amount is not None and existing.amount != amount:
+            raise PointServiceError("biz_id_conflict", "refund_biz_id was used with a different amount")
+        return {
+            "transaction_id": existing.transaction_id,
+            "amount": existing.amount,
+            "balance": existing.balance_after,
+            "idempotent": True,
+        }
+
+    conditions = [
+        PointTransaction.user_id == user_id,
+        PointTransaction.transaction_type == PointTransactionType.consume,
+    ]
+    if consume_transaction_id:
+        conditions.append(PointTransaction.transaction_id == consume_transaction_id)
+    else:
+        conditions.append(PointTransaction.biz_id == consume_biz_id)
+
+    consume_tx = session.exec(select(PointTransaction).where(*conditions)).first()
+    if not consume_tx:
+        raise PointServiceError("consume_transaction_not_found", "Consume transaction not found", 404)
+
+    refund_amount = amount or abs(consume_tx.amount)
+    consumed_amount = abs(consume_tx.amount)
+
+    refund_txs = session.exec(
+        select(PointTransaction).where(
+            PointTransaction.user_id == user_id,
+            PointTransaction.transaction_type == PointTransactionType.refund,
+        )
+    ).all()
+    already_refunded = 0
+    for tx in refund_txs:
+        tx_metadata = _metadata_from_json(tx.metadata_json)
+        if tx_metadata.get("refunded_transaction_id") == consume_tx.transaction_id:
+            already_refunded += tx.amount
+
+    if already_refunded + refund_amount > consumed_amount:
+        raise PointServiceError("refund_amount_exceeded", "Refund amount exceeds refundable points")
+
+    account = get_or_create_account(session, user_id, lock=True)
+    now = get_now_naive()
+    balance_before = account.balance
+    balance_after = balance_before + refund_amount
+    account.balance = balance_after
+    account.updated_at = now
+
+    refund_metadata = {
+        **(metadata or {}),
+        "refunded_transaction_id": consume_tx.transaction_id,
+        "consume_biz_id": consume_tx.biz_id,
+    }
+    transaction_id = _new_transaction_id()
+    tx = PointTransaction(
+        transaction_id=transaction_id,
+        user_id=user_id,
+        transaction_type=PointTransactionType.refund,
+        amount=refund_amount,
+        balance_before=balance_before,
+        balance_after=balance_after,
+        biz_id=refund_biz_id,
+        remark=remark,
+        metadata_json=_metadata_to_json(refund_metadata),
+        operator=admin_username,
+        created_at=now,
+    )
+
+    session.add(account)
+    session.add(tx)
+    _create_lot(
+        session,
+        user_id=user_id,
+        transaction_id=transaction_id,
+        amount=refund_amount,
+        now=now,
+    )
+    session.commit()
+    session.refresh(account)
+    session.refresh(tx)
+
+    return {
+        "transaction_id": tx.transaction_id,
+        "amount": refund_amount,
+        "balance": account.balance,
+        "idempotent": False,
     }

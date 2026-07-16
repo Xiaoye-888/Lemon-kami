@@ -30,16 +30,10 @@ class KamiType(str, Enum):
     times = "times"  # 次数卡
 
 
-class AdminRole(str, Enum):
-    super_admin = "super_admin"
-    admin = "admin"
-    operator = "operator"
-    auditor = "auditor"
-
-
 class PointTransactionType(str, Enum):
     recharge = "recharge"
     consume = "consume"
+    refund = "refund"
     adjust = "adjust"
 
 
@@ -73,6 +67,7 @@ class AuthorizationTransactionType(str, Enum):
     consume = "consume"
     adjust = "adjust"
     expire = "expire"
+    refund = "refund"
 
 
 class KamiStatus(str, Enum):
@@ -87,6 +82,11 @@ class MachineBindMode(str, Enum):
     one_card_multi_device = "one_card_multi_device"
 
 
+class KamiSpecGroup(str, Enum):
+    common = "common"
+    custom = "custom"
+
+
 class AdminUser(SQLModel, table=True):
     __tablename__ = "admin_users"
 
@@ -96,7 +96,6 @@ class AdminUser(SQLModel, table=True):
     email: Optional[str] = Field(default=None, description="邮箱")
     phone: Optional[str] = Field(default=None, description="手机号")
     is_admin: bool = Field(default=False, description="是否为超级管理员")
-    role: AdminRole = Field(default=AdminRole.operator, index=True, description="RBAC role")
     status: int = Field(default=1, description="状态：1启用，0禁用")
     created_at: datetime = Field(default_factory=get_now_naive, description="创建时间")
     last_login: Optional[datetime] = Field(default=None, description="最后登录时间")
@@ -133,7 +132,7 @@ class UserPointAccount(SQLModel, table=True):
 class PointTransaction(SQLModel, table=True):
     __tablename__ = "point_transactions"
     __table_args__ = (
-        UniqueConstraint("user_id", "app_id", "transaction_type", "biz_id", name="uk_point_tx_user_app_type_biz"),
+        UniqueConstraint("user_id", "transaction_type", "biz_id", name="uk_point_tx_user_type_biz"),
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -169,14 +168,10 @@ class UserPointLot(SQLModel, table=True):
 
 class AuthorizationAccount(SQLModel, table=True):
     __tablename__ = "authorization_accounts"
-    __table_args__ = (
-        UniqueConstraint("app_id", "owner_type", "owner_key", name="uk_authorization_account_owner"),
-    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     app_id: str = Field(max_length=64, index=True, description="App ID")
     owner_type: AuthorizationOwnerType = Field(index=True, description="Authorization owner type")
-    owner_key: str = Field(default="", max_length=512, index=True, description="Stable owner identity key")
     user_id: Optional[int] = Field(default=None, index=True, description="End-user ID")
     username: Optional[str] = Field(default=None, max_length=64, index=True, description="End-user username")
     device_uuid: Optional[str] = Field(default=None, max_length=255, index=True, description="Device UUID")
@@ -207,9 +202,6 @@ class AuthorizationLot(SQLModel, table=True):
 
 class AuthorizationTransaction(SQLModel, table=True):
     __tablename__ = "authorization_transactions"
-    __table_args__ = (
-        UniqueConstraint("account_id", "transaction_type", "biz_id", name="uk_authorization_tx_account_type_biz"),
-    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     transaction_id: str = Field(unique=True, index=True, description="Public transaction ID")
@@ -272,10 +264,51 @@ class App(SQLModel, table=True):
     )
 
 
+class KamiSpec(SQLModel, table=True):
+    __tablename__ = "kami_specs"
+    __table_args__ = (
+        UniqueConstraint("app_id", "spec_key", name="uk_kami_spec_app_key"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    app_id: str = Field(max_length=64, foreign_key="apps.app_id", index=True, description="App ID")
+    spec_key: str = Field(max_length=255, index=True, description="Deterministic specification identity")
+    spec_name: str = Field(max_length=128, index=True, description="Specification display name")
+    spec_group: KamiSpecGroup = Field(default=KamiSpecGroup.custom, index=True, description="common/custom")
+    kami_type: KamiType = Field(index=True, description="Kami type")
+    points_amount: Optional[int] = Field(default=None, description="Points face value")
+    points_valid_days: Optional[int] = Field(default=None, description="Points validity days after redeem")
+    time_value: Optional[int] = Field(default=None, description="Time-card duration value")
+    time_unit: Optional[str] = Field(default=None, max_length=32, description="Time-card duration unit")
+    times_total: Optional[int] = Field(default=None, description="Total allowed uses for times cards")
+    machine_bind_mode: MachineBindMode = Field(
+        default=MachineBindMode.one_card_one_device,
+        index=True,
+        description="Machine binding mode",
+    )
+    max_bind_devices: int = Field(default=1, description="Max bound devices, 0 means unlimited")
+    authorization_owner: AuthorizationOwnerMode = Field(
+        default=AuthorizationOwnerMode.device,
+        index=True,
+        description="Authorization owner strategy",
+    )
+    user_bind_mode: UserBindMode = Field(
+        default=UserBindMode.none,
+        index=True,
+        description="User binding policy",
+    )
+    status: int = Field(default=1, index=True, description="1 enabled, 0 disabled")
+    sort_order: int = Field(default=0, index=True, description="Manual sort order")
+    remark: Optional[str] = Field(default=None, description="Admin remark")
+    created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Created time")
+    updated_at: datetime = Field(default_factory=get_now_naive, description="Updated time")
+
+
 class Kami(SQLModel, table=True):
     __tablename__ = "kamis"
 
     id: Optional[int] = Field(default=None, primary_key=True)
+    spec_id: Optional[int] = Field(default=None, foreign_key="kami_specs.id", index=True)
     app_id: str = Field(max_length=64, foreign_key="apps.app_id", index=True, description="所属应用ID")
     kami_code: str = Field(unique=True, index=True, description="卡密代码")
     kami_type: KamiType = Field(description="卡密类型")
@@ -295,6 +328,8 @@ class Kami(SQLModel, table=True):
     code_prefix: Optional[str] = Field(default=None, max_length=32, description="Generation prefix")
     code_length: Optional[int] = Field(default=None, description="Random suffix length")
     charset: Optional[str] = Field(default=None, max_length=32, description="Generation charset")
+    code_valid_days: Optional[int] = Field(default=None, description="Code validity days before first use")
+    code_expires_at: Optional[datetime] = Field(default=None, index=True, description="Code expiration before first use")
     bind_ip: Optional[str] = Field(default=None, description="Bound activation IP")
     unbind_count: int = Field(default=0, description="Device unbind count")
     last_unbind_at: Optional[datetime] = Field(default=None, description="Last unbind time")
@@ -332,6 +367,7 @@ class KamiBatch(SQLModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
+    spec_id: Optional[int] = Field(default=None, foreign_key="kami_specs.id", index=True)
     app_id: str = Field(max_length=64, foreign_key="apps.app_id", index=True, description="App ID")
     batch_no: str = Field(max_length=64, index=True, description="Batch number")
     kami_type: KamiType = Field(index=True, description="Kami type")
@@ -343,6 +379,7 @@ class KamiBatch(SQLModel, table=True):
     code_prefix: Optional[str] = Field(default=None, max_length=32, description="Generation prefix")
     code_length: int = Field(default=16, description="Random suffix length")
     charset: str = Field(default="upper_numeric", max_length=32, description="Generation charset")
+    code_valid_days: Optional[int] = Field(default=None, description="Code validity days before first use")
     machine_bind_mode: MachineBindMode = Field(
         default=MachineBindMode.one_card_one_device,
         index=True,
@@ -365,6 +402,18 @@ class KamiBatch(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=get_now_naive, description="Updated time")
 
 
+def is_kami_code_expired(kami: Optional[Kami], now: Optional[datetime] = None) -> bool:
+    if not kami or kami.status != KamiStatus.unused or not kami.code_expires_at:
+        return False
+    check_time = now or get_now_naive()
+    if check_time.tzinfo is not None:
+        check_time = check_time.replace(tzinfo=None)
+    expires_at = kami.code_expires_at
+    if expires_at.tzinfo is not None:
+        expires_at = expires_at.replace(tzinfo=None)
+    return expires_at < check_time
+
+
 class KamiDeviceBinding(SQLModel, table=True):
     __tablename__ = "kami_device_bindings"
     __table_args__ = (
@@ -379,27 +428,6 @@ class KamiDeviceBinding(SQLModel, table=True):
     bind_ip: Optional[str] = Field(default=None, description="绑定IP")
     first_bind_at: datetime = Field(default_factory=get_now_naive, description="首次绑定时间")
     last_verify_at: datetime = Field(default_factory=get_now_naive, description="最近验证时间")
-
-
-class KamiConsumeTransaction(SQLModel, table=True):
-    __tablename__ = "kami_consume_transactions"
-    __table_args__ = (
-        UniqueConstraint("app_id", "kami_code", "biz_id", name="uk_kami_consume_app_kami_biz"),
-    )
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    consume_id: str = Field(unique=True, index=True, max_length=64, description="Public consume transaction ID")
-    app_id: str = Field(max_length=64, foreign_key="apps.app_id", index=True, description="App ID")
-    kami_code: str = Field(foreign_key="kamis.kami_code", index=True, description="Kami code")
-    biz_id: str = Field(max_length=128, index=True, description="Caller idempotency key")
-    amount: int = Field(description="Consumed times amount")
-    times_total: Optional[int] = Field(default=None, description="Times card total")
-    times_remaining: Optional[int] = Field(default=None, index=True, description="Remaining times after consume")
-    device_uuid: Optional[str] = Field(default=None, max_length=255, index=True, description="Device UUID")
-    fingerprint: Optional[str] = Field(default=None, index=True, description="Device fingerprint")
-    ip_address: Optional[str] = Field(default=None, max_length=255, description="Client IP")
-    payload_json: Optional[str] = Field(default=None, description="Stable response payload JSON")
-    created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Created time")
 
 
 class Device(SQLModel, table=True):

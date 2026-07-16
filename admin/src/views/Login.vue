@@ -141,13 +141,13 @@
             </div>
           </div>
           
-          <div class="contact-card douyin">
+          <div class="contact-card qq">
             <div class="contact-card-icon">
-              <el-icon :size="32"><VideoCamera /></el-icon>
+              <img class="contact-card-img" :src="qqIcon" alt="QQ" />
             </div>
             <div class="contact-card-info">
-              <div class="contact-label">抖音</div>
-              <div class="contact-value">小柠檬spider</div>
+              <div class="contact-label">QQ</div>
+              <div class="contact-value">981388</div>
             </div>
           </div>
         </div>
@@ -191,12 +191,12 @@ import {
   Moon,
   Sunny,
   View,
-  ChatDotRound,
-  VideoCamera
+  ChatDotRound
 } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
 import { useThemeStore } from '../stores/theme'
 import { aesEncryptForLogin } from '../utils/crypto'
+import qqIcon from '../assets/qq.png'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -819,9 +819,9 @@ html:not(.dark) .sdk-icon {
   border-color: #07c16030;
 }
 
-.contact-card.douyin {
-  background: linear-gradient(135deg, #fe2c5510 0%, #fe2c5505 100%);
-  border-color: #fe2c5530;
+.contact-card.qq {
+  background: linear-gradient(135deg, #69a8e810 0%, #69a8e805 100%);
+  border-color: #69a8e840;
 }
 
 .contact-card-icon {
@@ -839,8 +839,15 @@ html:not(.dark) .sdk-icon {
   color: #07c160;
 }
 
-.contact-card.douyin .contact-card-icon {
-  color: #fe2c55;
+.contact-card.qq .contact-card-icon {
+  color: #69a8e8;
+}
+
+.contact-card-img {
+  width: 32px;
+  height: 32px;
+  display: block;
+  object-fit: contain;
 }
 
 .contact-card-info {

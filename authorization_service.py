@@ -3,7 +3,6 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from models import (
@@ -25,27 +24,6 @@ def _transaction_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
 
-def authorization_owner_key(
-    owner_type: str,
-    user_id: Optional[int] = None,
-    username: Optional[str] = None,
-    device_uuid: Optional[str] = None,
-    fingerprint: Optional[str] = None,
-) -> str:
-    owner = AuthorizationOwnerType(owner_type)
-    if owner == AuthorizationOwnerType.user:
-        if user_id is not None:
-            return f"user_id:{user_id}"
-        if username:
-            return f"username:{username.strip().lower()}"
-        raise ValueError("user authorization requires user_id or username")
-    if device_uuid:
-        return f"device_uuid:{device_uuid}"
-    if fingerprint:
-        return f"fingerprint:{fingerprint}"
-    raise ValueError("device authorization requires device_uuid or fingerprint")
-
-
 def get_or_create_authorization_account(
     session: Session,
     app_id: str,
@@ -56,38 +34,20 @@ def get_or_create_authorization_account(
     fingerprint: Optional[str] = None,
 ) -> AuthorizationAccount:
     owner = AuthorizationOwnerType(owner_type)
-    owner_key = authorization_owner_key(
-        owner_type=owner.value,
-        user_id=user_id,
-        username=username,
-        device_uuid=device_uuid,
-        fingerprint=fingerprint,
-    )
     statement = select(AuthorizationAccount).where(
         AuthorizationAccount.app_id == app_id,
         AuthorizationAccount.owner_type == owner,
-        AuthorizationAccount.owner_key == owner_key,
     )
-    account = session.exec(statement).first()
-    if not account:
-        legacy_statement = select(AuthorizationAccount).where(
-            AuthorizationAccount.app_id == app_id,
-            AuthorizationAccount.owner_type == owner,
-            AuthorizationAccount.owner_key == "",
-        )
-        if owner == AuthorizationOwnerType.user:
-            if user_id is not None:
-                legacy_statement = legacy_statement.where(AuthorizationAccount.user_id == user_id)
-            else:
-                legacy_statement = legacy_statement.where(AuthorizationAccount.username == username)
-        elif device_uuid:
-            legacy_statement = legacy_statement.where(AuthorizationAccount.device_uuid == device_uuid)
+    if owner == AuthorizationOwnerType.user:
+        if user_id is not None:
+            statement = statement.where(AuthorizationAccount.user_id == user_id)
         else:
-            legacy_statement = legacy_statement.where(AuthorizationAccount.fingerprint == fingerprint)
-        account = session.exec(legacy_statement).first()
+            statement = statement.where(AuthorizationAccount.username == username)
+    else:
+        statement = statement.where(AuthorizationAccount.device_uuid == device_uuid)
 
+    account = session.exec(statement).first()
     if account:
-        account.owner_key = owner_key
         if username and not account.username:
             account.username = username
         if fingerprint and not account.fingerprint:
@@ -101,21 +61,13 @@ def get_or_create_authorization_account(
     account = AuthorizationAccount(
         app_id=app_id,
         owner_type=owner,
-        owner_key=owner_key,
         user_id=user_id,
         username=username,
         device_uuid=device_uuid,
         fingerprint=fingerprint,
     )
     session.add(account)
-    try:
-        session.commit()
-    except IntegrityError:
-        session.rollback()
-        account = session.exec(statement).first()
-        if account:
-            return account
-        raise
+    session.commit()
     session.refresh(account)
     return account
 
@@ -206,11 +158,6 @@ def consume_times(
             "times_balance": existing.balance_after,
             "idempotent": True,
         }
-    account = session.exec(
-        select(AuthorizationAccount)
-        .where(AuthorizationAccount.id == account.id)
-        .with_for_update()
-    ).one()
     if account.times_balance < amount:
         raise ValueError("insufficient times balance")
 
@@ -222,7 +169,6 @@ def consume_times(
             AuthorizationLot.benefit_type == AuthorizationBenefitType.times,
             AuthorizationLot.amount_remaining > 0,
         )
-        .with_for_update()
         .order_by(AuthorizationLot.expires_at.is_(None), AuthorizationLot.expires_at, AuthorizationLot.id)
     ).all()
     for lot in lots:
@@ -248,24 +194,7 @@ def consume_times(
         biz_id=biz_id,
     )
     session.add(account)
-    try:
-        session.commit()
-    except IntegrityError:
-        session.rollback()
-        existing = session.exec(
-            select(AuthorizationTransaction).where(
-                AuthorizationTransaction.account_id == account.id,
-                AuthorizationTransaction.transaction_type == AuthorizationTransactionType.consume,
-                AuthorizationTransaction.biz_id == biz_id,
-            )
-        ).first()
-        if existing:
-            return {
-                "transaction_id": existing.transaction_id,
-                "times_balance": existing.balance_after,
-                "idempotent": True,
-            }
-        raise
+    session.commit()
     session.refresh(account)
     return {
         "transaction_id": tx.transaction_id,
@@ -359,3 +288,4 @@ def grant_points(
     session.commit()
     session.refresh(account)
     return {"transaction_id": tx.transaction_id, "points_balance": account.points_balance}
+

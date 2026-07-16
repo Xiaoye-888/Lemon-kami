@@ -25,6 +25,26 @@ export const TIME_UNIT_OPTIONS = {
   years: '年'
 }
 
+export function getSpecGroupText(group) {
+  return group === 'common' ? '常用规格' : '自定义规格'
+}
+
+export function getSpecBenefitText(row) {
+  if (!row) return '-'
+  if (row.kami_type === 'points') return `${row.points_amount || 0}积分`
+  if (row.kami_type === 'times') return `${row.times_total || 0}次`
+  return getValidityText(row)
+}
+
+export function getSpecPolicyText(row) {
+  if (!row) return '-'
+  return [
+    getMachineBindModeText(row.machine_bind_mode, row.max_bind_devices),
+    getAuthorizationOwnerText(row.authorization_owner),
+    getUserBindModeText(row.user_bind_mode)
+  ].filter(Boolean).join(' / ')
+}
+
 export const AUTHORIZATION_OWNER_OPTIONS = [
   { label: '设备授权', value: 'device' },
   { label: '用户授权', value: 'user' },

@@ -2,6 +2,18 @@
 
 本文档覆盖本次新增和增强的卡密验证核心能力，不包含代理商、支付、商城、工单。
 
+## 0. 客户端对接流程
+
+推荐客户端按下面顺序接入：
+
+1. 启动软件后调用 `GET /api/v1/sdk/apps/{app_id}/config` 获取公告、版本、更新说明、下载外链和安全策略。
+2. 用户输入卡密后调用 `POST /api/v1/sdk/verify` 验证授权。验证接口只做激活、绑定和可用性检查，不扣次数。
+3. 次数卡在用户实际完成一次业务动作后调用 `POST /api/v1/sdk/consume` 扣减次数，例如生成 1 章小说后扣 1 次。
+4. 软件可按需调用 `POST /api/v1/sdk/report` 上报登录、心跳、业务动作等事件。
+5. 需要下载 SDK 时使用 `GET /api/sdk/download?type=python|javascript|java`。
+
+当前 SDK 入口只保留 Lemon 命名：JavaScript 使用 `lemon-kami.js`，Python 使用 `lemon_kami.py`，Java 使用 `com.lemon.kami.LemonKamiSDK`。
+
 ## 1. 卡密类型
 
 | 类型 | 值 | 说明 |
@@ -229,7 +241,25 @@ Query 参数：
 
 旧的 `/api/v1/admin/apps/{app_id}/core-config` 入口已移除，避免同一配置被两个入口同时修改。
 
-## 7. 管理端：卡密列表/批次/导出增强字段
+## 7. 管理端：卡密规格管理
+
+后台现在按“应用 -> 卡密类型 -> 规格 -> 批次 -> 卡密”管理库存。规格属于应用，批次属于规格，卡密属于批次。SDK 客户端不需要调用规格接口，客户端仍然只调用验证、消费、应用配置、公告和下载接口。
+
+规格用于解决同一应用下多种积分面额、次数面额或时间卡混在批次列表里难管理的问题。相同应用、卡密类型、权益和绑定策略会归入同一个规格；例如 150 积分、一机一码、自动识别授权会固定落到同一个规格下，后续继续在该规格下生成新批次。
+
+管理端规格接口：
+
+- `GET /api/v1/admin/kami-specs`：查询规格列表，支持 `app_id`、`kami_type`、`spec_group`、`keyword`。
+- `POST /api/v1/admin/kami-specs`：创建规格。
+- `PUT /api/v1/admin/kami-specs/{id}`：更新规格分组、状态、排序和备注。
+- `DELETE /api/v1/admin/kami-specs/{id}`：删除空规格；规格下仍有批次或卡密时会拒绝删除。
+- `POST /api/v1/admin/kami-specs/{id}/generate`：按规格生成一个新批次和卡密。
+- `GET /api/v1/admin/kami-specs/{id}/batches`：查看规格下的批次记录。
+- `GET /api/v1/admin/kami-specs/{id}/kamis`：查看规格下的卡密。
+
+旧的批次接口仍然保留兼容，管理端直接创建批次或使用旧生成入口时，后台会自动为批次和卡密补上 `spec_id`。
+
+## 8. 管理端：卡密列表/批次/导出增强字段
 
 以下接口已返回新增字段：
 

@@ -19,6 +19,10 @@
         :unique-opened="true"
         class="side-menu"
       >
+        <el-menu-item index="/dashboard">
+          <el-icon><DataAnalysis /></el-icon>
+          <span>运营总览</span>
+        </el-menu-item>
         <el-menu-item index="/apps">
           <el-icon><Setting /></el-icon>
           <span>应用管理</span>
@@ -142,7 +146,8 @@ import {
   Expand,
   Moon,
   Sunny,
-  Connection
+  Connection,
+  DataAnalysis
 } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
 import { useThemeStore } from '../stores/theme'
@@ -172,23 +177,43 @@ const handleCommand = (command) => {
 }
 
 .layout__aside {
+  position: relative;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(180deg, #fffef3 0%, #f3fbdf 100%);
-  border-right: 1px solid #e2efb8;
-  box-shadow: 8px 0 26px rgba(132, 111, 0, 0.08);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.88), rgba(242, 248, 255, 0.72)),
+    rgba(255, 255, 255, 0.76);
+  border-right: 1px solid rgba(188, 214, 242, 0.66);
+  box-shadow: 10px 0 28px rgba(30, 64, 105, 0.08);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
   flex-shrink: 0;
+}
+
+.layout__aside::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(255, 255, 255, 0.22) 42%, rgba(235, 246, 255, 0.34)),
+    radial-gradient(circle at 22px 22px, rgba(47, 128, 237, 0.08), transparent 120px);
+}
+
+.layout__aside > * {
+  position: relative;
+  z-index: 1;
 }
 
 :deep(.side-menu) {
   flex: 1;
   border-right: none;
   --el-menu-bg-color: transparent;
-  --el-menu-text-color: #47637f;
-  --el-menu-active-color: #5f7f00;
-  --el-menu-hover-bg-color: rgba(132, 204, 22, 0.14);
+  --el-menu-text-color: #475569;
+  --el-menu-active-color: #2f80ed;
+  --el-menu-hover-bg-color: rgba(241, 247, 255, 0.76);
   padding: 8px 10px 24px;
 }
 
@@ -204,14 +229,14 @@ const handleCommand = (command) => {
 }
 
 :deep(.side-menu .el-menu-item:hover) {
-  background: rgba(132, 204, 22, 0.14) !important;
+  background: rgba(241, 247, 255, 0.78) !important;
 }
 
 :deep(.side-menu .el-menu-item.is-active) {
-  background: linear-gradient(90deg, rgba(250, 204, 21, 0.26), rgba(132, 204, 22, 0.1)) !important;
-  color: #5f7f00 !important;
+  background: rgba(234, 244, 255, 0.92) !important;
+  color: #2f80ed !important;
   font-weight: 600;
-  box-shadow: inset 3px 0 0 #facc15, 0 8px 18px rgba(132, 111, 0, 0.08);
+  box-shadow: inset 3px 0 0 #2f80ed, 0 10px 22px rgba(47, 128, 237, 0.1);
 }
 
 .logo {
@@ -222,8 +247,8 @@ const handleCommand = (command) => {
   gap: 10px;
   padding: 0 14px 0 12px;
   color: #0f172a;
-  background: linear-gradient(135deg, #ffffff 0%, #fff7bf 56%, #e4f7bb 100%);
-  border-bottom: 1px solid #e2efb8;
+  background: rgba(255, 255, 255, 0.54);
+  border-bottom: 1px solid rgba(188, 214, 242, 0.56);
   flex-shrink: 0;
 }
 
@@ -259,6 +284,42 @@ const handleCommand = (command) => {
   font-size: 11px;
   opacity: 0.8;
   margin-top: 2px;
+}
+
+html.dark .layout__aside {
+  background:
+    linear-gradient(160deg, rgba(15, 23, 42, 0.88), rgba(30, 41, 59, 0.78)),
+    rgba(15, 23, 42, 0.76);
+  border-right-color: rgba(71, 85, 105, 0.72);
+  box-shadow: 10px 0 28px rgba(0, 0, 0, 0.18);
+}
+
+html.dark .layout__aside::before {
+  background:
+    linear-gradient(180deg, rgba(30, 41, 59, 0.58), rgba(15, 23, 42, 0.26)),
+    radial-gradient(circle at 22px 22px, rgba(56, 189, 248, 0.1), transparent 120px);
+}
+
+html.dark .logo {
+  color: #e5e7eb;
+  background: rgba(15, 23, 42, 0.52);
+  border-bottom-color: rgba(71, 85, 105, 0.72);
+}
+
+html.dark :deep(.side-menu) {
+  --el-menu-text-color: #cbd5e1;
+  --el-menu-active-color: #60a5fa;
+  --el-menu-hover-bg-color: rgba(51, 65, 85, 0.78);
+}
+
+html.dark :deep(.side-menu .el-menu-item:hover) {
+  background: rgba(51, 65, 85, 0.78) !important;
+}
+
+html.dark :deep(.side-menu .el-menu-item.is-active) {
+  background: rgba(30, 64, 105, 0.78) !important;
+  color: #93c5fd !important;
+  box-shadow: inset 3px 0 0 #60a5fa, 0 10px 22px rgba(15, 23, 42, 0.22);
 }
 
 .layout__main {
@@ -379,11 +440,11 @@ html.dark .main-content {
   background-attachment: local;
 }
 
-:deep(.main-content .el-button--primary) {
+:deep(.main-content .el-button--primary:not(.is-link)) {
   background: linear-gradient(135deg, #2f80ed, #38bdf8) !important;
   border: none;
 }
-:deep(.main-content .el-button--primary.is-plain) {
+:deep(.main-content .el-button--primary.is-plain:not(.is-link)) {
   background: var(--el-color-primary-light-8) !important;
   color: #1d4ed8;
   border: 1px solid #9fc8fb;

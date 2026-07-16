@@ -168,12 +168,8 @@
                 <input type="text" id="appId" placeholder="从后台管理获取" value="">
             </div>
             <div class="form-group">
-                <label for="clientToken">Client Token:</label>
-                <input type="text" id="clientToken" placeholder="由业务后端签发的短期 client token" value="">
-            </div>
-            <div class="form-group">
-                <label for="clientSecret">Client Secret:</label>
-                <input type="password" id="clientSecret" placeholder="与 client token 配套的短期签名密钥" value="">
+                <label for="appSecret">App Secret:</label>
+                <input type="password" id="appSecret" placeholder="从后台管理获取" value="">
             </div>
             <div class="form-group">
                 <label for="serverUrl">服务器地址:</label>
@@ -236,17 +232,9 @@
         window.addEventListener('DOMContentLoaded', function() {
             const urlParams = new URLSearchParams(window.location.search);
             const appIdFromUrl = urlParams.get('app_id');
-            const clientTokenFromUrl = urlParams.get('client_token');
-            const clientSecretFromUrl = urlParams.get('client_secret');
 
             if (appIdFromUrl) {
                 document.getElementById('appId').value = appIdFromUrl;
-            }
-            if (clientTokenFromUrl) {
-                document.getElementById('clientToken').value = clientTokenFromUrl;
-            }
-            if (clientSecretFromUrl) {
-                document.getElementById('clientSecret').value = clientSecretFromUrl;
             }
 
             const serverUrlInput = document.getElementById('serverUrl');
@@ -283,12 +271,11 @@
         // 初始化 SDK
         async function initSDK() {
             const appId = document.getElementById('appId').value.trim();
-            const clientToken = document.getElementById('clientToken').value.trim();
-            const clientSecret = document.getElementById('clientSecret').value.trim();
+            const appSecret = document.getElementById('appSecret').value.trim();
             const serverUrl = document.getElementById('serverUrl').value.trim();
 
-            if (!appId || !clientToken || !clientSecret) {
-                showResult('initResult', '请填写 App ID、Client Token 和 Client Secret', 'error');
+            if (!appId || !appSecret) {
+                showResult('initResult', '请填写 App ID 和 App Secret', 'error');
                 return;
             }
 
@@ -298,8 +285,7 @@
 
                 sdk = new LemonKamiSDK({
                     appId: appId,
-                    clientToken: clientToken,
-                    clientSecret: clientSecret,
+                    appSecret: appSecret,
                     serverUrl: serverUrl,
                     rsaPublicKey: rsaPublicKey
                 });

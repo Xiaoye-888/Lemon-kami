@@ -4,11 +4,9 @@ Lemon Kami - FastAPI 主应用入口
 
 import logging
 import os
-import uuid
-from contextlib import asynccontextmanager
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from database import init_db
@@ -64,58 +62,23 @@ logger.addHandler(file_handler)
 
 # 获取应用日志记录器
 app_logger = logging.getLogger("lemon_kami")
-api_docs_enabled = settings.DEBUG or settings.ENABLE_API_DOCS
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """应用启动和关闭生命周期。"""
-    init_db()
-    app_logger.info("✅ Database initialized successfully")
-    app_logger.info(f"Application started in {'DEBUG' if settings.DEBUG else 'PRODUCTION'} mode")
-    app_logger.info(f"Log file: {log_file}")
-    yield
-
 
 # 创建 FastAPI 应用
 app = FastAPI(
     title="Lemon Kami API",
     description="小柠檬网络验证 - 多租户卡密分发与验证平台",
     version="1.0.0",
-    debug=settings.DEBUG,  # 控制是否显示调试信息
-    docs_url="/docs" if api_docs_enabled else None,
-    redoc_url="/redoc" if api_docs_enabled else None,
-    openapi_url="/openapi.json" if api_docs_enabled else None,
-    lifespan=lifespan,
+    debug=settings.DEBUG  # 控制是否显示调试信息
 )
 
-
-def _get_cors_allowed_origins() -> list[str]:
-    return [
-        origin.strip()
-        for origin in settings.CORS_ALLOWED_ORIGINS.split(",")
-        if origin.strip() and origin.strip() != "*"
-    ]
-
-
 # 配置 CORS（跨域资源共享）
-cors_allowed_origins = _get_cors_allowed_origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_allowed_origins,
-    allow_credentials=bool(cors_allowed_origins),
+    allow_origins=["*"],  # 生产环境应限制具体域名
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.middleware("http")
-async def request_id_middleware(request: Request, call_next):
-    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
-    return response
-
 
 # SDK 文件路径配置
 sdk_base_dir = os.path.join(os.path.dirname(__file__), "sdk")
@@ -162,6 +125,15 @@ app.include_router(user_router)
 app.include_router(docs_router)
 
 
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时初始化数据库"""
+    init_db()
+    app_logger.info("✅ Database initialized successfully")
+    app_logger.info(f"Application started in {'DEBUG' if settings.DEBUG else 'PRODUCTION'} mode")
+    app_logger.info(f"Log file: {log_file}")
+
+
 @app.get("/", tags=["Root"])
 async def root():
     """根路径"""
@@ -175,14 +147,7 @@ async def root():
 @app.get("/health", tags=["Health"])
 async def health_check():
     """健康检查接口"""
-    return {
-        "status": "healthy",
-        "components": {
-            "api": "healthy",
-            "database": "configured" if settings.DATABASE_URL else "missing",
-            "redis": "configured" if settings.REDIS_URL else "missing",
-        },
-    }
+    return {"status": "healthy"}
 
 
 if __name__ == "__main__":

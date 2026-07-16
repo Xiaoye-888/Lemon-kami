@@ -136,7 +136,13 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import request from '../utils/request'
+import {
+  createAdminUser,
+  deleteAdminUser,
+  getAdminUsers,
+  resetAdminUserPassword,
+  updateAdminUser
+} from '../api/admin'
 import { useUserStore } from '../stores/user'
 import { formatBeijingTime } from '../utils/datetime'
 
@@ -168,10 +174,7 @@ const resetForm = reactive({
 const loadUsers = async () => {
   loading.value = true
   try {
-    const res = await request({
-      url: '/admin/users',
-      method: 'get'
-    })
+    const res = await getAdminUsers()
     users.value = res.data
   } catch (error) {
     console.error('加载失败:', error)
@@ -217,26 +220,18 @@ const handleSubmit = async () => {
   try {
     if (isEdit.value) {
       // 编辑
-      await request({
-        url: `/admin/users/${currentUser.value.id}`,
-        method: 'put',
-        params: {
-          email: form.email,
-          phone: form.phone
-        }
+      await updateAdminUser(currentUser.value.id, {
+        email: form.email,
+        phone: form.phone
       })
       ElMessage.success('更新成功')
     } else {
       // 创建
-      await request({
-        url: '/admin/users',
-        method: 'post',
-        params: {
-          username: form.username,
-          password: form.password,
-          email: form.email,
-          phone: form.phone
-        }
+      await createAdminUser({
+        username: form.username,
+        password: form.password,
+        email: form.email,
+        phone: form.phone
       })
       ElMessage.success('创建成功')
     }
@@ -265,11 +260,7 @@ const handleResetPassword = async () => {
 
   resetting.value = true
   try {
-    await request({
-      url: `/admin/users/${currentUser.value.id}/password`,
-      method: 'put',
-      params: { new_password: resetForm.new_password }
-    })
+    await resetAdminUserPassword(currentUser.value.id, resetForm.new_password)
     ElMessage.success('密码重置成功')
     resetPasswordVisible.value = false
   } catch (error) {
@@ -291,11 +282,7 @@ const toggleStatus = async (row) => {
       type: 'warning'
     })
     
-    await request({
-      url: `/admin/users/${row.id}`,
-      method: 'put',
-      params: { status: newStatus }
-    })
+    await updateAdminUser(row.id, { status: newStatus })
     ElMessage.success(`${action}成功`)
     loadUsers()
   } catch (error) {
@@ -314,10 +301,7 @@ const handleDelete = async (row) => {
       type: 'error'
     })
     
-    await request({
-      url: `/admin/users/${row.id}`,
-      method: 'delete'
-    })
+    await deleteAdminUser(row.id)
     ElMessage.success('删除成功')
     loadUsers()
   } catch (error) {

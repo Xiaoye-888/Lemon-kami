@@ -204,4 +204,3 @@ def create_client(
         )
     """
     return LemonClient(host, app_id, app_secret, public_key)
-

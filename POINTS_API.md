@@ -10,7 +10,7 @@ This document describes the user-bound points system added to Lemon Kami. Normal
 4. The system creates a point lot and a recharge transaction.
 5. Business system calls the consume API with a unique `biz_id`.
 6. Consumption deducts from available point lots by earliest expiration first.
-7. Admin can query, export, or adjust points.
+7. Admin can query, export, adjust, or refund points.
 
 ## Key Fields
 
@@ -19,22 +19,28 @@ This document describes the user-bound points system added to Lemon Kami. Normal
 - `kamis.points_valid_days`: validity days after redemption; `null` means permanent.
 - `end_users.app_id`: optional owning application ID for app-level user management.
 - `user_point_accounts.balance`: ledger balance.
-- `user_point_lots.points_remaining`: remaining points in each recharge/adjust lot.
-- `point_transactions.transaction_type`: `recharge`, `consume`, `adjust`.
+- `user_point_lots.points_remaining`: remaining points in each recharge/refund/adjust lot.
+- `point_transactions.transaction_type`: `recharge`, `consume`, `refund`, `adjust`.
 - `point_transactions.biz_id`: business idempotency key.
 
 ## Authentication
 
-End-user APIs use:
+End-user APIs accept either:
 
 ```http
 Authorization: Bearer <end-user-jwt>
 ```
 
-Admin APIs use:
+or:
 
 ```http
-Authorization: Bearer <admin-jwt>
+?token=<end-user-jwt>
+```
+
+Admin APIs use the existing admin JWT token query pattern:
+
+```http
+?token=<admin-jwt>
 ```
 
 ## End-User APIs
@@ -177,7 +183,7 @@ Returns current user's point lots, remaining points, and expiration time.
 
 `GET /api/v1/user/points/transactions?page=1&page_size=20`
 
-Returns recharge, consume, and adjustment transactions for the current user.
+Returns recharge, consume, refund, and adjustment transactions for the current user.
 
 ## Admin APIs
 
@@ -246,7 +252,7 @@ Returns CSV.
 
 ### Delete Selected Kamis
 
-`POST /api/v1/admin/kamis/delete`
+`POST /api/v1/admin/kamis/delete?token=admin-jwt`
 
 ```json
 {
@@ -330,7 +336,7 @@ Optional filters:
 Optional filters:
 
 - `user_id`
-- `transaction_type`: `recharge`, `consume`, or `adjust`
+- `transaction_type`: `recharge`, `consume`, `refund`, or `adjust`
 
 ### Export Point Transactions
 
@@ -361,6 +367,32 @@ Returns CSV.
 
 Use a negative `amount` to deduct points. The system rejects adjustments that would make the balance negative.
 
+### Refund Points
+
+`POST /api/v1/admin/points/refund`
+
+```json
+{
+  "user_id": 1,
+  "consume_biz_id": "order-20260712-0001",
+  "consume_transaction_id": null,
+  "refund_biz_id": "refund-20260712-0001",
+  "amount": 45,
+  "remark": "order canceled",
+  "metadata": {
+    "ticket": "T-2001"
+  }
+}
+```
+
+Rules:
+
+- Provide either `consume_biz_id` or `consume_transaction_id`.
+- `refund_biz_id` is required and idempotent.
+- `amount` is optional; if omitted, the system refunds the full refundable amount.
+- Total refunds cannot exceed the original consume amount.
+- Refund creates a `refund` transaction and a permanent point lot.
+
 ## Error Codes
 
 Point service errors are returned in FastAPI `detail`:
@@ -383,5 +415,9 @@ Common codes:
 - `invalid_points_amount`
 - `invalid_amount`
 - `missing_biz_id`
+- `missing_refund_biz_id`
+- `missing_consume_reference`
+- `consume_transaction_not_found`
+- `refund_amount_exceeded`
 - `biz_id_conflict`
 - `insufficient_balance`

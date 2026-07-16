@@ -23,6 +23,7 @@ def get_now():
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field as PydanticField
+from passlib.context import CryptContext
 from sqlalchemy import or_
 from sqlmodel import Session, select
 from database import get_session
@@ -33,33 +34,44 @@ from models import (
     EventLog,
     Device,
     AdminUser,
-    AdminRole,
     EndUser,
     UserPointAccount,
     UserPointLot,
     PointTransaction,
     PointTransactionType,
+    AuthorizationBenefitType,
     KamiType,
     KamiStatus,
     MachineBindMode,
     KamiBatch,
+    KamiSpec,
+    KamiSpecGroup,
     KamiDeviceBinding,
     AppAuthorization,
     ApiInterface,
     AppInterfaceConfig,
     AuthorizationAccount,
     AuthorizationLot,
+    AuthorizationTransaction,
+    AuthorizationTransactionType,
     AuthorizationOwnerMode,
     AuthorizationOwnerType,
     UserBindMode,
+    is_kami_code_expired,
+)
+from kami_spec_service import (
+    build_spec_key,
+    build_spec_name,
+    find_or_create_spec_for_batch,
+    infer_spec_group,
 )
 from datetime_utils import to_api_beijing_iso
 from crypto import RSACrypto
 from config import settings
 from jose import jwt, JWTError
+import hashlib
 import os
-from passlib.context import CryptContext
-from point_service import PointServiceError, adjust_points
+from point_service import PointServiceError, adjust_points, refund_points
 from authorization_service import (
     get_or_create_authorization_account,
     grant_points,
@@ -74,42 +86,28 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def hash_password(password: str) -> str:
-    """Hash passwords with bcrypt."""
+    """Hash a password for newly created or reset admin users."""
     return pwd_context.hash(password)
 
 
-def _verify_legacy_sha256_password(plain_password: str, hashed_password: str) -> bool:
-    import hashlib
-
-    try:
-        salt, stored_hash = hashed_password.split("$", 1)
-    except ValueError:
-        return False
-    password_hash = hashlib.sha256((plain_password + salt).encode("utf-8")).hexdigest()
-    return password_hash == stored_hash
-
-
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """验证密码"""
+    """Verify bcrypt hashes and legacy salt$sha256 hashes."""
     if not hashed_password:
         return False
-    if "$" in hashed_password and not hashed_password.startswith("$2"):
-        return _verify_legacy_sha256_password(plain_password, hashed_password)
+
+    if hashed_password.startswith(("$2a$", "$2b$", "$2y$")):
+        try:
+            return pwd_context.verify(plain_password, hashed_password)
+        except Exception:
+            logger.exception("Failed to verify bcrypt admin password hash")
+            return False
+
     try:
-        return pwd_context.verify(plain_password, hashed_password)
+        salt, stored_hash = hashed_password.split('$', 1)
+        password_hash = hashlib.sha256((plain_password + salt).encode('utf-8')).hexdigest()
+        return password_hash == stored_hash
     except Exception:
         return False
-
-
-def password_needs_rehash(hashed_password: str) -> bool:
-    if not hashed_password:
-        return True
-    if "$" in hashed_password and not hashed_password.startswith("$2"):
-        return True
-    try:
-        return pwd_context.needs_update(hashed_password)
-    except Exception:
-        return True
 
 
 def _cleanup_used_times_kamis(session: Session, app_id: str):
@@ -182,23 +180,18 @@ def check_app_permission(session: Session, app_id: str, username: str, is_admin:
     return False
 
 
-def build_audit_diff(
-    before: dict,
-    after: dict,
-    sensitive_fields: Optional[set[str]] = None,
-) -> dict:
-    sensitive = sensitive_fields or set()
-    diff = {}
-    for key in sorted(set(before) | set(after)):
-        before_value = before.get(key)
-        after_value = after.get(key)
-        if before_value == after_value:
-            continue
-        if key in sensitive:
-            diff[key] = {"before": "***", "after": "***"}
-        else:
-            diff[key] = {"before": before_value, "after": after_value}
-    return diff
+def _visible_app_ids_for_user(session: Session, username: str, is_admin: bool) -> Optional[List[str]]:
+    """Return None for admin all-app access, otherwise the app IDs visible to this user."""
+    if is_admin:
+        return None
+
+    owned_app_ids = session.exec(
+        select(App.app_id).where(App.created_by == username)
+    ).all()
+    authorized_app_ids = session.exec(
+        select(AppAuthorization.app_id).where(AppAuthorization.username == username)
+    ).all()
+    return sorted(set(owned_app_ids) | set(authorized_app_ids))
 
 
 def log_admin_action(session: Session, username: str, event_type: str, app_id: Optional[str] = None, 
@@ -241,6 +234,16 @@ class PointAdjustRequest(BaseModel):
     metadata: Optional[dict] = None
 
 
+class PointRefundRequest(BaseModel):
+    user_id: int
+    refund_biz_id: str
+    consume_biz_id: Optional[str] = None
+    consume_transaction_id: Optional[str] = None
+    amount: Optional[int] = PydanticField(None, gt=0)
+    remark: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
 class EndUserPasswordResetRequest(BaseModel):
     password: str = PydanticField(..., min_length=6, max_length=128)
 
@@ -258,6 +261,7 @@ class AuthorizationGrantRequest(BaseModel):
 
 class DeleteKamisRequest(BaseModel):
     app_id: str = PydanticField(..., max_length=64)
+    spec_id: Optional[int] = None
     batch_no: Optional[str] = PydanticField(None, max_length=64)
     kami_codes: List[str] = PydanticField(..., min_length=1, max_length=1000)
 
@@ -302,6 +306,40 @@ class KamiBatchUpdateRequest(BaseModel):
     user_bind_mode: Optional[str] = PydanticField(None, max_length=32)
     status: Optional[int] = PydanticField(None, ge=0, le=1)
     remark: Optional[str] = None
+
+
+class KamiSpecCreateRequest(BaseModel):
+    app_id: str = PydanticField(..., max_length=64)
+    kami_type: str
+    spec_group: str = PydanticField(KamiSpecGroup.custom.value, max_length=32)
+    points_amount: Optional[int] = PydanticField(None, gt=0)
+    points_valid_days: Optional[int] = PydanticField(None, ge=1)
+    times_total: Optional[int] = PydanticField(None, gt=0)
+    time_value: Optional[int] = PydanticField(None, gt=0)
+    time_unit: Optional[str] = PydanticField(None, max_length=32)
+    machine_bind_mode: str = PydanticField(MachineBindMode.one_card_one_device.value, max_length=32)
+    max_bind_devices: Optional[int] = PydanticField(None, ge=0, le=1000)
+    authorization_owner: str = PydanticField(AuthorizationOwnerMode.device.value, max_length=32)
+    user_bind_mode: str = PydanticField(UserBindMode.none.value, max_length=32)
+    status: int = PydanticField(1, ge=0, le=1)
+    sort_order: int = PydanticField(0, ge=0)
+    remark: Optional[str] = None
+
+
+class KamiSpecUpdateRequest(BaseModel):
+    spec_group: Optional[str] = PydanticField(None, max_length=32)
+    status: Optional[int] = PydanticField(None, ge=0, le=1)
+    sort_order: Optional[int] = PydanticField(None, ge=0)
+    remark: Optional[str] = None
+
+
+class KamiSpecGenerateRequest(BaseModel):
+    count: int = PydanticField(..., ge=1, le=1000)
+    batch_no: Optional[str] = PydanticField(None, min_length=1, max_length=64)
+    code_prefix: Optional[str] = PydanticField(None, max_length=32)
+    code_length: int = PydanticField(16, ge=4, le=64)
+    charset: str = PydanticField("upper_numeric", max_length=32)
+    code_valid_days: Optional[int] = PydanticField(None, ge=1, le=36500)
 
 
 class InterfaceCreateRequest(BaseModel):
@@ -608,50 +646,224 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 def verify_token(token: str) -> dict:
     """验证 JWT Token"""
     try:
-        payload = jwt.decode(
-            token,
-            settings.SECRET_KEY,
-            algorithms=[settings.ALGORITHM],
-            options={"verify_exp": False},
-        )
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    try:
-        expires_at = payload.get("exp")
-        if expires_at is not None and int(expires_at) <= int(get_now().timestamp()):
-            raise HTTPException(status_code=401, detail="Invalid token")
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=401, detail="Invalid token")
-    return payload
-
-
-def _role_value(current_user: dict) -> str:
-    role = current_user.get("role")
-    if role:
-        return role.value if hasattr(role, "value") else str(role)
-    return AdminRole.super_admin.value if current_user.get("is_admin", False) else AdminRole.operator.value
-
-
-def _require_role(current_user: dict, allowed_roles: set[str]):
-    role = _role_value(current_user)
-    if role == AdminRole.super_admin.value or role in allowed_roles:
-        return
-    raise HTTPException(status_code=403, detail="权限不足")
-
 
 async def get_current_user(
+    token: Optional[str] = Query(None, description="JWT Token"),
     authorization: Optional[str] = Header(None, description="Bearer JWT Token"),
 ):
     """获取当前用户（依赖注入）"""
-    resolved_token = None
-    if authorization:
+    resolved_token = token
+    if not resolved_token and authorization:
         scheme, _, credentials = authorization.partition(" ")
-        if scheme.lower() == "bearer" and credentials:
-            resolved_token = credentials.strip()
+        resolved_token = credentials if scheme.lower() == "bearer" and credentials else authorization
     if not resolved_token:
         raise HTTPException(status_code=401, detail="Missing token")
     return verify_token(resolved_token)
+
+
+# ==================== 仪表盘接口 ====================
+
+@router.get("/dashboard", summary="获取运营仪表盘")
+async def get_dashboard(
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """获取当前管理员可见范围内的关键运营指标。"""
+    from sqlmodel import func
+
+    username = current_user.get("sub")
+    is_admin = current_user.get("is_admin", False)
+    visible_app_ids = _visible_app_ids_for_user(session, username, is_admin)
+
+    def scoped_conditions(model):
+        if visible_app_ids is None:
+            return []
+        if not visible_app_ids:
+            return [model.app_id == "__no_visible_apps__"]
+        return [model.app_id.in_(visible_app_ids)]
+
+    def count_rows(model, *conditions) -> int:
+        statement = select(func.count(model.id))
+        merged_conditions = list(conditions)
+        if hasattr(model, "app_id"):
+            merged_conditions.extend(scoped_conditions(model))
+        if merged_conditions:
+            statement = statement.where(*merged_conditions)
+        return int(session.exec(statement).one() or 0)
+
+    def sum_signed_amount(model, amount_column, *conditions) -> int:
+        statement = select(func.coalesce(func.sum(amount_column), 0))
+        merged_conditions = list(conditions)
+        if hasattr(model, "app_id"):
+            merged_conditions.extend(scoped_conditions(model))
+        if merged_conditions:
+            statement = statement.where(*merged_conditions)
+        return int(session.exec(statement).one() or 0)
+
+    def sum_authorization_amount(*conditions) -> int:
+        if visible_app_ids is not None and not visible_app_ids:
+            return 0
+
+        statement = (
+            select(func.coalesce(func.sum(AuthorizationTransaction.amount), 0))
+            .join(
+                AuthorizationAccount,
+                AuthorizationTransaction.account_id == AuthorizationAccount.id,
+            )
+        )
+        merged_conditions = list(conditions)
+        if visible_app_ids is not None:
+            merged_conditions.append(AuthorizationAccount.app_id.in_(visible_app_ids))
+        if merged_conditions:
+            statement = statement.where(*merged_conditions)
+        return int(session.exec(statement).one() or 0)
+
+    app_conditions = []
+    if visible_app_ids is not None:
+        if not visible_app_ids:
+            app_conditions.append(App.app_id == "__no_visible_apps__")
+        else:
+            app_conditions.append(App.app_id.in_(visible_app_ids))
+
+    apps_statement = select(App)
+    if app_conditions:
+        apps_statement = apps_statement.where(*app_conditions)
+    apps = session.exec(apps_statement.order_by(App.created_at.desc())).all()
+    app_name_map = {app.app_id: app.name for app in apps}
+
+    today_start = get_now().replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
+    sdk_event_types = ["verify", "activate", "consume", "app_config", "unbind", "report"]
+    verify_event_types = ["verify", "activate"]
+
+    recent_statement = select(EventLog)
+    recent_conditions = scoped_conditions(EventLog)
+    if recent_conditions:
+        recent_statement = recent_statement.where(*recent_conditions)
+    recent_logs = session.exec(
+        recent_statement.order_by(EventLog.created_at.desc()).limit(8)
+    ).all()
+    points_consumed_today = abs(
+        sum_signed_amount(
+            PointTransaction,
+            PointTransaction.amount,
+            PointTransaction.transaction_type == PointTransactionType.consume,
+            PointTransaction.created_at >= today_start,
+        )
+    )
+    times_consumed_today = abs(
+        sum_authorization_amount(
+            AuthorizationTransaction.transaction_type == AuthorizationTransactionType.consume,
+            AuthorizationTransaction.benefit_type == AuthorizationBenefitType.times,
+            AuthorizationTransaction.created_at >= today_start,
+        )
+    )
+    verify_total_today = count_rows(
+        EventLog,
+        EventLog.event_type.in_(verify_event_types),
+        EventLog.created_at >= today_start,
+    )
+    verify_success_today = count_rows(
+        EventLog,
+        EventLog.event_type.in_(verify_event_types),
+        EventLog.status == 1,
+        EventLog.created_at >= today_start,
+    )
+    verify_success_rate = (
+        round(verify_success_today * 100 / verify_total_today, 1)
+        if verify_total_today
+        else None
+    )
+    active_apps_statement = (
+        select(EventLog.app_id)
+        .where(
+            EventLog.event_type.in_(sdk_event_types),
+            EventLog.created_at >= today_start,
+            EventLog.app_id.is_not(None),
+        )
+        .distinct()
+    )
+    active_apps_conditions = scoped_conditions(EventLog)
+    if active_apps_conditions:
+        active_apps_statement = active_apps_statement.where(*active_apps_conditions)
+    active_apps_today = len([app_id for app_id in session.exec(active_apps_statement).all() if app_id])
+
+    latest_sdk_statement = select(EventLog).where(EventLog.event_type.in_(sdk_event_types))
+    latest_sdk_conditions = scoped_conditions(EventLog)
+    if latest_sdk_conditions:
+        latest_sdk_statement = latest_sdk_statement.where(*latest_sdk_conditions)
+    latest_sdk_log = session.exec(
+        latest_sdk_statement.order_by(EventLog.created_at.desc()).limit(1)
+    ).first()
+    abnormal_calls_today = count_rows(
+        EventLog,
+        EventLog.event_type.in_(sdk_event_types),
+        EventLog.status == 0,
+        EventLog.created_at >= today_start,
+    )
+
+    return {
+        "success": True,
+        "data": {
+            "overview": {
+                "apps_total": len(apps),
+                "apps_enabled": sum(1 for app in apps if app.status == 1),
+                "batches_total": count_rows(KamiBatch),
+                "kamis_total": count_rows(Kami),
+                "kamis_unused": count_rows(Kami, Kami.status == KamiStatus.unused),
+                "kamis_active": count_rows(Kami, Kami.status == KamiStatus.active),
+                "kamis_frozen": count_rows(Kami, Kami.status == KamiStatus.frozen),
+                "devices_total": count_rows(Device),
+                "end_users_total": count_rows(EndUser),
+                "authorization_accounts_total": count_rows(AuthorizationAccount),
+                "event_logs_total": count_rows(EventLog),
+            },
+            "today": {
+                "new_kamis": count_rows(Kami, Kami.created_at >= today_start),
+                "verify_events": count_rows(EventLog, EventLog.event_type == "verify", EventLog.created_at >= today_start),
+                "consume_events": count_rows(EventLog, EventLog.event_type == "consume", EventLog.created_at >= today_start),
+                "failed_events": count_rows(EventLog, EventLog.status == 0, EventLog.created_at >= today_start),
+                "points_consumed": points_consumed_today,
+                "times_consumed": times_consumed_today,
+                "new_end_users": count_rows(EndUser, EndUser.created_at >= today_start),
+            },
+            "risk": {
+                "normal_devices": count_rows(Device, Device.risk_level == 0),
+                "warning_devices": count_rows(Device, Device.risk_level == 1),
+                "blocked_devices": count_rows(Device, Device.risk_level == 2),
+            },
+            "integration_health": {
+                "active_apps_today": active_apps_today,
+                "verify_success_rate": verify_success_rate,
+                "verify_success_total": verify_success_today,
+                "verify_total": verify_total_today,
+                "latest_sdk_call_at": (
+                    to_api_beijing_iso(latest_sdk_log.created_at, naive="civil")
+                    if latest_sdk_log
+                    else None
+                ),
+                "latest_sdk_call_type": latest_sdk_log.event_type if latest_sdk_log else None,
+                "abnormal_calls_today": abnormal_calls_today,
+            },
+            "recent_events": [
+                {
+                    "id": log.id,
+                    "app_id": log.app_id,
+                    "app_name": app_name_map.get(log.app_id, "未知应用" if log.app_id else "系统"),
+                    "event_type": log.event_type,
+                    "status": log.status,
+                    "message": log.message,
+                    "kami_code": log.kami_code,
+                    "created_at": to_api_beijing_iso(log.created_at, naive="civil"),
+                }
+                for log in recent_logs
+            ],
+        },
+    }
 
 
 # ==================== 应用管理接口 ====================
@@ -1169,9 +1381,174 @@ def get_user_bind_mode_value(mode) -> str:
     return mode.value if hasattr(mode, "value") else str(mode)
 
 
+def _code_validity_text(days: Optional[int]) -> str:
+    return f"生成后 {days} 天" if days else "不限期"
+
+
+def _code_validity_summary(days_values: List[Optional[int]]) -> str:
+    if not days_values:
+        return "-"
+    unique_values = []
+    for value in days_values:
+        normalized = int(value) if value else None
+        if normalized not in unique_values:
+            unique_values.append(normalized)
+    if len(unique_values) == 1:
+        return _code_validity_text(unique_values[0])
+    return "多种有效期"
+
+
+def _apply_kami_status_filter(statement, status: Optional[str], now: datetime):
+    if not status:
+        return statement
+    if status == "expired":
+        return statement.where(
+            Kami.status == KamiStatus.unused,
+            Kami.code_expires_at != None,
+            Kami.code_expires_at < now,
+        )
+    try:
+        status_enum = KamiStatus(status)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    statement = statement.where(Kami.status == status_enum)
+    if status_enum == KamiStatus.unused:
+        statement = statement.where(
+            or_(Kami.code_expires_at == None, Kami.code_expires_at >= now)
+        )
+    return statement
+
+
+def _kami_code_validity_payload(kami: Kami, now: datetime) -> dict:
+    expired = is_kami_code_expired(kami, now)
+    return {
+        "code_valid_days": kami.code_valid_days,
+        "code_expires_at": to_api_beijing_iso(kami.code_expires_at, naive="civil")
+        if kami.code_expires_at
+        else None,
+        "code_validity_text": _code_validity_text(kami.code_valid_days),
+        "is_code_expired": expired,
+        "display_status": "expired" if expired else kami.status.value,
+    }
+
+
+def _kami_spec_stats(session: Session, spec_id: int) -> dict:
+    batches = session.exec(select(KamiBatch).where(KamiBatch.spec_id == spec_id)).all()
+    kamis = session.exec(select(Kami).where(Kami.spec_id == spec_id)).all()
+    now = get_now().replace(tzinfo=None)
+    stats = {
+        "batch_count": len(batches),
+        "total_count": len(kamis),
+        "unused_count": 0,
+        "active_count": 0,
+        "frozen_count": 0,
+        "expired_count": 0,
+        "redeemed_count": 0,
+        "times_remaining_total": 0,
+        "points_remaining_total": 0,
+        "code_valid_days_values": [batch.code_valid_days for batch in batches],
+        "code_validity_text": _code_validity_summary([batch.code_valid_days for batch in batches]),
+    }
+    for kami in kamis:
+        if kami.status == KamiStatus.unused:
+            if is_kami_code_expired(kami, now):
+                stats["expired_count"] += 1
+            else:
+                stats["unused_count"] += 1
+            if kami.kami_type == KamiType.points and not is_kami_code_expired(kami, now):
+                stats["points_remaining_total"] += kami.points_amount or 0
+        elif kami.status == KamiStatus.active:
+            stats["active_count"] += 1
+        elif kami.status == KamiStatus.frozen:
+            stats["frozen_count"] += 1
+        if kami.redeemed_by_user_id is not None:
+            stats["redeemed_count"] += 1
+        stats["times_remaining_total"] += kami.times_remaining or 0
+    return stats
+
+
+def _kami_batch_stats(session: Session, batch: KamiBatch) -> dict:
+    kamis = session.exec(
+        select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
+    ).all()
+    now = get_now().replace(tzinfo=None)
+    stats = {
+        "total_count": len(kamis),
+        "unused_count": 0,
+        "active_count": 0,
+        "frozen_count": 0,
+        "expired_count": 0,
+        "redeemed_count": 0,
+        "times_remaining_total": 0,
+        "points_remaining_total": 0,
+        "code_valid_days_values": [batch.code_valid_days],
+        "code_validity_text": _code_validity_text(batch.code_valid_days),
+    }
+    for kami in kamis:
+        if kami.status == KamiStatus.unused:
+            if is_kami_code_expired(kami, now):
+                stats["expired_count"] += 1
+            else:
+                stats["unused_count"] += 1
+            if kami.kami_type == KamiType.points and not is_kami_code_expired(kami, now):
+                stats["points_remaining_total"] += kami.points_amount or 0
+        elif kami.status == KamiStatus.active:
+            stats["active_count"] += 1
+        elif kami.status == KamiStatus.frozen:
+            stats["frozen_count"] += 1
+        if kami.redeemed_by_user_id is not None:
+            stats["redeemed_count"] += 1
+        stats["times_remaining_total"] += kami.times_remaining or 0
+    return stats
+
+
+def _kami_spec_payload(spec: KamiSpec, stats: Optional[dict] = None) -> dict:
+    payload = {
+        "id": spec.id,
+        "app_id": spec.app_id,
+        "spec_key": spec.spec_key,
+        "spec_name": spec.spec_name,
+        "spec_group": _enum_value(spec.spec_group),
+        "kami_type": spec.kami_type.value,
+        "points_amount": spec.points_amount,
+        "points_valid_days": spec.points_valid_days,
+        "time_value": spec.time_value,
+        "time_unit": spec.time_unit,
+        "times_total": spec.times_total,
+        "machine_bind_mode": get_machine_bind_mode_value(spec.machine_bind_mode),
+        "max_bind_devices": spec.max_bind_devices,
+        "authorization_owner": get_authorization_owner_value(spec.authorization_owner),
+        "user_bind_mode": get_user_bind_mode_value(spec.user_bind_mode),
+        "status": spec.status,
+        "sort_order": spec.sort_order,
+        "remark": spec.remark,
+        "created_at": to_api_beijing_iso(spec.created_at, naive="civil")
+        if spec.created_at
+        else None,
+        "updated_at": to_api_beijing_iso(spec.updated_at, naive="civil")
+        if spec.updated_at
+        else None,
+    }
+    payload.update(stats or {
+        "batch_count": 0,
+        "total_count": 0,
+        "unused_count": 0,
+        "active_count": 0,
+        "frozen_count": 0,
+        "expired_count": 0,
+        "redeemed_count": 0,
+        "times_remaining_total": 0,
+        "points_remaining_total": 0,
+        "code_valid_days_values": [],
+        "code_validity_text": "-",
+    })
+    return payload
+
+
 def _kami_batch_payload(batch: KamiBatch) -> dict:
     return {
         "id": batch.id,
+        "spec_id": batch.spec_id,
         "batch_no": batch.batch_no,
         "app_id": batch.app_id,
         "kami_type": batch.kami_type.value,
@@ -1183,6 +1560,8 @@ def _kami_batch_payload(batch: KamiBatch) -> dict:
         "code_prefix": batch.code_prefix,
         "code_length": batch.code_length,
         "charset": batch.charset,
+        "code_valid_days": batch.code_valid_days,
+        "code_validity_text": _code_validity_text(batch.code_valid_days),
         "machine_bind_mode": get_machine_bind_mode_value(batch.machine_bind_mode),
         "max_bind_devices": batch.max_bind_devices,
         "authorization_owner": get_authorization_owner_value(batch.authorization_owner),
@@ -1260,6 +1639,400 @@ def _enum_value(value):
     return value.value if hasattr(value, "value") else value
 
 
+def _validate_spec_payload(
+    payload: KamiSpecCreateRequest,
+) -> tuple[KamiType, MachineBindMode, AuthorizationOwnerMode, UserBindMode, Optional[int], Optional[str], int, KamiSpecGroup]:
+    validation_payload = KamiBatchCreateRequest(
+        app_id=payload.app_id,
+        batch_no="__spec_validation__",
+        kami_type=payload.kami_type,
+        points_amount=payload.points_amount,
+        points_valid_days=payload.points_valid_days,
+        times_total=payload.times_total,
+        time_value=payload.time_value,
+        time_unit=payload.time_unit,
+        code_length=16,
+        charset="upper_numeric",
+        machine_bind_mode=payload.machine_bind_mode,
+        max_bind_devices=payload.max_bind_devices,
+        authorization_owner=payload.authorization_owner,
+        user_bind_mode=payload.user_bind_mode,
+        status=payload.status,
+        remark=payload.remark,
+    )
+    (
+        kami_type_enum,
+        machine_bind_mode_enum,
+        authorization_owner_enum,
+        user_bind_mode_enum,
+        time_value,
+        time_unit,
+        max_bind_devices,
+    ) = _validate_batch_payload(validation_payload)
+    try:
+        spec_group = KamiSpecGroup(payload.spec_group)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid spec_group")
+    if "spec_group" not in payload.model_fields_set:
+        spec_group = KamiSpecGroup(
+            infer_spec_group(
+                kami_type_enum,
+                payload.points_amount,
+                payload.points_valid_days,
+                payload.times_total,
+                time_value,
+                time_unit,
+            )
+        )
+    return (
+        kami_type_enum,
+        machine_bind_mode_enum,
+        authorization_owner_enum,
+        user_bind_mode_enum,
+        time_value,
+        time_unit,
+        max_bind_devices,
+        spec_group,
+    )
+
+
+def _get_spec_or_404(session: Session, spec_id: int) -> KamiSpec:
+    spec = session.get(KamiSpec, spec_id)
+    if not spec:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    return spec
+
+
+@router.get("/kami-specs", summary="获取卡密规格列表")
+async def list_kami_specs(
+    app_id: str,
+    kami_type: Optional[str] = Query(None, description="卡密类型"),
+    spec_group: Optional[str] = Query(None, description="common/custom"),
+    keyword: Optional[str] = Query(None, description="搜索规格名称"),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    app = session.exec(select(App).where(App.app_id == app_id)).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="App not found")
+    username = current_user.get("sub")
+    is_admin = current_user.get("is_admin", False)
+    if not check_app_permission(session, app_id, username, is_admin):
+        raise HTTPException(status_code=403, detail="无权查看此应用的卡密规格")
+
+    statement = select(KamiSpec).where(KamiSpec.app_id == app_id)
+    if kami_type:
+        try:
+            statement = statement.where(KamiSpec.kami_type == KamiType(kami_type))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid kami_type")
+    if spec_group:
+        try:
+            statement = statement.where(KamiSpec.spec_group == KamiSpecGroup(spec_group))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid spec_group")
+    if keyword:
+        statement = statement.where(KamiSpec.spec_name.like(f"%{keyword}%"))
+
+    specs = session.exec(statement).all()
+    items = [_kami_spec_payload(spec, _kami_spec_stats(session, spec.id)) for spec in specs]
+    items.sort(key=lambda item: (item["spec_group"] != "common", item["sort_order"], item["spec_name"]))
+    return {"success": True, "data": {"items": items, "total": len(items)}}
+
+
+@router.post("/kami-specs", summary="创建卡密规格")
+async def create_kami_spec(
+    payload: KamiSpecCreateRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    app = session.exec(select(App).where(App.app_id == payload.app_id)).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="App not found")
+    username = current_user.get("sub")
+    is_admin = current_user.get("is_admin", False)
+    if not check_app_permission(session, payload.app_id, username, is_admin):
+        raise HTTPException(status_code=403, detail="无权创建此应用的卡密规格")
+
+    (
+        kami_type_enum,
+        machine_bind_mode_enum,
+        authorization_owner_enum,
+        user_bind_mode_enum,
+        time_value,
+        time_unit,
+        max_bind_devices,
+        spec_group,
+    ) = _validate_spec_payload(payload)
+    spec_key = build_spec_key(
+        kami_type=kami_type_enum,
+        points_amount=payload.points_amount if kami_type_enum == KamiType.points else None,
+        points_valid_days=payload.points_valid_days if kami_type_enum == KamiType.points else None,
+        times_total=payload.times_total if kami_type_enum == KamiType.times else None,
+        time_value=time_value,
+        time_unit=time_unit,
+        machine_bind_mode=machine_bind_mode_enum,
+        max_bind_devices=max_bind_devices,
+        authorization_owner=authorization_owner_enum,
+        user_bind_mode=user_bind_mode_enum,
+    )
+    existing = session.exec(
+        select(KamiSpec).where(KamiSpec.app_id == payload.app_id, KamiSpec.spec_key == spec_key)
+    ).first()
+    if existing:
+        return {"success": True, "message": "规格已存在", "data": _kami_spec_payload(existing, _kami_spec_stats(session, existing.id))}
+
+    now = get_now().replace(tzinfo=None)
+    spec = KamiSpec(
+        app_id=payload.app_id,
+        spec_key=spec_key,
+        spec_name=build_spec_name(
+            kami_type_enum,
+            payload.points_amount if kami_type_enum == KamiType.points else None,
+            payload.points_valid_days if kami_type_enum == KamiType.points else None,
+            payload.times_total if kami_type_enum == KamiType.times else None,
+            time_value,
+            time_unit,
+        ),
+        spec_group=spec_group,
+        kami_type=kami_type_enum,
+        points_amount=payload.points_amount if kami_type_enum == KamiType.points else None,
+        points_valid_days=payload.points_valid_days if kami_type_enum == KamiType.points else None,
+        times_total=payload.times_total if kami_type_enum == KamiType.times else None,
+        time_value=time_value,
+        time_unit=time_unit,
+        machine_bind_mode=machine_bind_mode_enum,
+        max_bind_devices=max_bind_devices,
+        authorization_owner=authorization_owner_enum,
+        user_bind_mode=user_bind_mode_enum,
+        status=payload.status,
+        sort_order=payload.sort_order,
+        remark=payload.remark,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(spec)
+    session.commit()
+    session.refresh(spec)
+    log_admin_action(
+        session=session,
+        username=username,
+        event_type="kami_spec_create",
+        app_id=payload.app_id,
+        payload=_kami_spec_payload(spec),
+        message=f"用户 {username} 创建了卡密规格 {spec.spec_name}",
+    )
+    return {"success": True, "message": "规格已创建", "data": _kami_spec_payload(spec, _kami_spec_stats(session, spec.id))}
+
+
+@router.put("/kami-specs/{spec_id}", summary="更新卡密规格")
+async def update_kami_spec(
+    spec_id: int,
+    payload: KamiSpecUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    spec = _get_spec_or_404(session, spec_id)
+    username = current_user.get("sub")
+    is_admin = current_user.get("is_admin", False)
+    if not check_app_permission(session, spec.app_id, username, is_admin):
+        raise HTTPException(status_code=403, detail="无权更新此应用的卡密规格")
+    data = payload.model_dump(exclude_unset=True)
+    if "spec_group" in data and data["spec_group"] is not None:
+        try:
+            spec.spec_group = KamiSpecGroup(data["spec_group"])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid spec_group")
+    if "status" in data and data["status"] is not None:
+        spec.status = data["status"]
+    if "sort_order" in data and data["sort_order"] is not None:
+        spec.sort_order = data["sort_order"]
+    if "remark" in data:
+        spec.remark = data["remark"]
+    spec.updated_at = get_now().replace(tzinfo=None)
+    session.add(spec)
+    session.commit()
+    session.refresh(spec)
+    return {"success": True, "message": "规格已更新", "data": _kami_spec_payload(spec, _kami_spec_stats(session, spec.id))}
+
+
+@router.delete("/kami-specs/{spec_id}", summary="删除卡密规格")
+async def delete_kami_spec(
+    spec_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    spec = _get_spec_or_404(session, spec_id)
+    username = current_user.get("sub")
+    is_admin = current_user.get("is_admin", False)
+    if not check_app_permission(session, spec.app_id, username, is_admin):
+        raise HTTPException(status_code=403, detail="无权删除此应用的卡密规格")
+
+    existing_batch = session.exec(select(KamiBatch).where(KamiBatch.spec_id == spec.id)).first()
+    existing_kami = session.exec(select(Kami).where(Kami.spec_id == spec.id)).first()
+    if existing_batch or existing_kami:
+        raise HTTPException(status_code=400, detail="规格下仍有批次或卡密，请先删除批次和卡密后再删除规格。")
+
+    app_id = spec.app_id
+    spec_name = spec.spec_name
+    payload_data = _kami_spec_payload(spec, _kami_spec_stats(session, spec.id))
+    session.delete(spec)
+    session.commit()
+    log_admin_action(
+        session=session,
+        username=username,
+        event_type="kami_spec_delete",
+        app_id=app_id,
+        payload=payload_data,
+        message=f"用户 {username} 删除了卡密规格 {spec_name}",
+    )
+    return {"success": True, "message": "规格已删除", "data": {"id": spec_id, "spec_name": spec_name}}
+
+
+@router.post("/kami-specs/{spec_id}/generate", summary="按规格生成卡密")
+async def generate_kamis_for_spec(
+    spec_id: int,
+    payload: KamiSpecGenerateRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    spec = _get_spec_or_404(session, spec_id)
+    username = current_user.get("sub")
+    is_admin = current_user.get("is_admin", False)
+    if not check_app_permission(session, spec.app_id, username, is_admin):
+        raise HTTPException(status_code=403, detail="无权在此规格下生成卡密")
+    if spec.status != 1:
+        raise HTTPException(status_code=400, detail="规格已停用，无法生成卡密")
+    if payload.charset not in KAMI_CHARSETS:
+        raise HTTPException(status_code=400, detail="Invalid charset")
+
+    batch_no = payload.batch_no or f"{spec.spec_name}-{get_now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6]}"
+    duplicate = session.exec(
+        select(KamiBatch).where(KamiBatch.app_id == spec.app_id, KamiBatch.batch_no == batch_no)
+    ).first()
+    if duplicate:
+        raise HTTPException(status_code=400, detail="批次号已存在")
+
+    now = get_now().replace(tzinfo=None)
+    batch = KamiBatch(
+        spec_id=spec.id,
+        app_id=spec.app_id,
+        batch_no=batch_no,
+        kami_type=spec.kami_type,
+        points_amount=spec.points_amount,
+        points_valid_days=spec.points_valid_days,
+        time_value=spec.time_value,
+        time_unit=spec.time_unit,
+        times_total=spec.times_total,
+        code_prefix=payload.code_prefix or None,
+        code_length=payload.code_length,
+        charset=payload.charset,
+        code_valid_days=payload.code_valid_days,
+        machine_bind_mode=spec.machine_bind_mode,
+        max_bind_devices=spec.max_bind_devices,
+        authorization_owner=spec.authorization_owner,
+        user_bind_mode=spec.user_bind_mode,
+        status=1,
+        remark=f"由规格 {spec.spec_name} 生成",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(batch)
+    session.commit()
+    session.refresh(batch)
+    result = await batch_create_kamis(
+        app_id=spec.app_id,
+        count=payload.count,
+        batch_no=batch.batch_no,
+        code_prefix=None,
+        code_length=None,
+        charset=None,
+        code_valid_days=payload.code_valid_days,
+        current_user=current_user,
+        session=session,
+    )
+    result["data"]["spec_id"] = spec.id
+    result["data"]["batch_id"] = batch.id
+    return result
+
+
+@router.get("/kami-specs/{spec_id}/batches", summary="获取规格下批次")
+async def list_kami_spec_batches(
+    spec_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    spec = _get_spec_or_404(session, spec_id)
+    username = current_user.get("sub")
+    is_admin = current_user.get("is_admin", False)
+    if not check_app_permission(session, spec.app_id, username, is_admin):
+        raise HTTPException(status_code=403, detail="无权查看此规格的批次")
+    batches = session.exec(
+        select(KamiBatch).where(KamiBatch.spec_id == spec.id).order_by(KamiBatch.created_at.desc())
+    ).all()
+    items = []
+    for batch in batches:
+        item = _kami_batch_payload(batch)
+        item.update(_kami_batch_stats(session, batch))
+        items.append(item)
+    return {"success": True, "data": items}
+
+
+@router.get("/kami-specs/{spec_id}/kamis", summary="获取规格下卡密")
+async def list_kami_spec_kamis(
+    spec_id: int,
+    status: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    spec = _get_spec_or_404(session, spec_id)
+    username = current_user.get("sub")
+    is_admin = current_user.get("is_admin", False)
+    if not check_app_permission(session, spec.app_id, username, is_admin):
+        raise HTTPException(status_code=403, detail="无权查看此规格的卡密")
+    now = get_now().replace(tzinfo=None)
+    statement = select(Kami).where(Kami.spec_id == spec.id)
+    statement = _apply_kami_status_filter(statement, status, now)
+    all_items = session.exec(statement.order_by(Kami.id.desc())).all()
+    start = (page - 1) * page_size
+    page_items = all_items[start:start + page_size]
+    return {
+        "success": True,
+        "data": {
+            "items": [
+                {
+                    "id": kami.id,
+                    "spec_id": kami.spec_id,
+                    "app_id": kami.app_id,
+                    "kami_code": kami.kami_code,
+                    "kami_type": kami.kami_type.value,
+                    "status": kami.status.value,
+                    "batch_no": kami.batch_no,
+                    "points_amount": kami.points_amount,
+                    "points_valid_days": kami.points_valid_days,
+                    "time_value": kami.time_value,
+                    "time_unit": kami.time_unit,
+                    "times_total": kami.times_total,
+                    "times_remaining": kami.times_remaining,
+                    "machine_bind_mode": get_machine_bind_mode_value(kami.machine_bind_mode),
+                    "max_bind_devices": kami.max_bind_devices,
+                    "authorization_owner": get_authorization_owner_value(kami.authorization_owner),
+                    "user_bind_mode": get_user_bind_mode_value(kami.user_bind_mode),
+                    "created_at": to_api_beijing_iso(kami.created_at, naive="civil") if kami.created_at else None,
+                    "last_verify_at": to_api_beijing_iso(kami.last_verify_at, naive="civil") if kami.last_verify_at else None,
+                    **_kami_code_validity_payload(kami, now),
+                }
+                for kami in page_items
+            ],
+            "total": len(all_items),
+            "page": page,
+            "page_size": page_size,
+        },
+    }
+
+
 @router.post("/kamis/batches", summary="创建卡密批次")
 async def create_kami_batch(
     payload: KamiBatchCreateRequest,
@@ -1315,6 +2088,11 @@ async def create_kami_batch(
         created_at=now,
         updated_at=now,
     )
+    session.add(batch)
+    session.commit()
+    session.refresh(batch)
+    spec = find_or_create_spec_for_batch(session, batch)
+    batch.spec_id = spec.id
     session.add(batch)
     session.commit()
     session.refresh(batch)
@@ -1495,6 +2273,7 @@ async def batch_create_kamis(
     code_prefix: Optional[str] = Query(None, max_length=32, description="卡密前缀"),
     code_length: Optional[int] = Query(None, ge=4, le=64, description="随机后缀长度"),
     charset: Optional[str] = Query(None, description="字符集：upper_numeric/numeric/upper/lower_mixed"),
+    code_valid_days: Optional[int] = Query(None, ge=1, le=36500, description="卡密生成后未使用有效天数，不传则继承批次"),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
@@ -1527,6 +2306,13 @@ async def batch_create_kamis(
     if batch.status != 1:
         raise HTTPException(status_code=400, detail="批次已停用，无法生成卡密")
 
+    if not batch.spec_id:
+        spec = find_or_create_spec_for_batch(session, batch)
+        batch.spec_id = spec.id
+        session.add(batch)
+        session.commit()
+        session.refresh(batch)
+
     kami_type = batch.kami_type.value
     times = batch.times_total
     points_amount = batch.points_amount
@@ -1538,6 +2324,9 @@ async def batch_create_kamis(
     code_prefix = (batch.code_prefix or "") if code_prefix is None else code_prefix
     code_length = batch.code_length if code_length is None else code_length
     charset = batch.charset if charset is None else charset
+    if not isinstance(code_valid_days, int):
+        code_valid_days = None
+    code_valid_days = batch.code_valid_days if code_valid_days is None else code_valid_days
 
     try:
         kami_type_enum = KamiType(kami_type)
@@ -1578,6 +2367,8 @@ async def batch_create_kamis(
         time_value = batch.time_value
     if batch.time_unit:
         time_unit = batch.time_unit
+    now = get_now().replace(tzinfo=None)
+    code_expires_at = now + timedelta(days=code_valid_days) if code_valid_days else None
 
     for _ in range(count):
         kami_code = generate_kami_code(code_length, code_prefix, charset)
@@ -1591,6 +2382,7 @@ async def batch_create_kamis(
             kami_code = generate_kami_code(code_length, code_prefix, charset)
 
         kami = Kami(
+            spec_id=batch.spec_id,
             app_id=app_id,
             kami_code=kami_code,
             kami_type=kami_type_enum,
@@ -1605,10 +2397,13 @@ async def batch_create_kamis(
             code_prefix=code_prefix or None,
             code_length=code_length,
             charset=charset,
+            code_valid_days=code_valid_days,
+            code_expires_at=code_expires_at,
             machine_bind_mode=machine_bind_mode_enum,
             max_bind_devices=max_bind_devices,
             authorization_owner=authorization_owner_enum,
             user_bind_mode=user_bind_mode_enum,
+            created_at=now,
         )
 
         kamis.append(kami)
@@ -1630,6 +2425,7 @@ async def batch_create_kamis(
             "times": times if kami_type_enum == KamiType.times else None,
             "points_amount": points_amount if kami_type_enum == KamiType.points else None,
             "batch_no": effective_batch_no,
+            "spec_id": batch.spec_id,
             "points_valid_days": points_valid_days if kami_type_enum == KamiType.points else None,
             "machine_bind_mode": machine_bind_mode_enum.value,
             "max_bind_devices": max_bind_devices,
@@ -1638,6 +2434,8 @@ async def batch_create_kamis(
             "code_prefix": code_prefix,
             "code_length": code_length,
             "charset": charset,
+            "code_valid_days": code_valid_days,
+            "code_validity_text": _code_validity_text(code_valid_days),
         },
         message=f"用户 {username} 生成了 {count} 个{getTypeText(kami_type)}卡密"
     )
@@ -1651,6 +2449,7 @@ async def batch_create_kamis(
             "times": times if kami_type_enum == KamiType.times else None,
             "points_amount": points_amount if kami_type_enum == KamiType.points else None,
             "batch_no": effective_batch_no,
+            "spec_id": batch.spec_id,
             "points_valid_days": points_valid_days if kami_type_enum == KamiType.points else None,
             "machine_bind_mode": machine_bind_mode_enum.value,
             "max_bind_devices": max_bind_devices,
@@ -1659,6 +2458,8 @@ async def batch_create_kamis(
             "code_prefix": code_prefix,
             "code_length": code_length,
             "charset": charset,
+            "code_valid_days": code_valid_days,
+            "code_validity_text": _code_validity_text(code_valid_days),
             "codes": generated_codes
         }
     }
@@ -1669,6 +2470,7 @@ async def list_kamis(
     app_id: str,
     status: Optional[str] = Query(None, description="卡密状态过滤"),
     kami_type: Optional[str] = Query(None, description="卡密类型过滤"),
+    spec_id: Optional[int] = Query(None, description="卡密规格ID"),
     batch_no: Optional[str] = Query(None, description="卡密批次号"),
     keyword: Optional[str] = Query(None, description="搜索卡密、批次号或机器码"),
     page: int = Query(1, ge=1),
@@ -1693,14 +2495,9 @@ async def list_kamis(
     # 自动清理过期或已使用的次数卡
     _cleanup_used_times_kamis(session, app_id)
 
+    now = get_now().replace(tzinfo=None)
     statement = select(Kami).where(Kami.app_id == app_id)
-
-    if status:
-        try:
-            status_enum = KamiStatus(status)
-            statement = statement.where(Kami.status == status_enum)
-        except ValueError:
-            pass
+    statement = _apply_kami_status_filter(statement, status, now)
     if kami_type:
         try:
             statement = statement.where(Kami.kami_type == KamiType(kami_type))
@@ -1708,6 +2505,8 @@ async def list_kamis(
             raise HTTPException(status_code=400, detail="Invalid kami_type")
     if batch_no:
         statement = statement.where(Kami.batch_no == batch_no)
+    elif spec_id:
+        statement = statement.where(Kami.spec_id == spec_id)
     if keyword:
         keyword_like = f"%{keyword}%"
         statement = statement.where(
@@ -1759,12 +2558,7 @@ async def list_kamis(
 
     # 统计总数
     count_stmt = select(Kami).where(Kami.app_id == app_id)
-    if status:
-        try:
-            status_enum = KamiStatus(status)
-            count_stmt = count_stmt.where(Kami.status == status_enum)
-        except ValueError:
-            pass
+    count_stmt = _apply_kami_status_filter(count_stmt, status, now)
     if kami_type:
         try:
             count_stmt = count_stmt.where(Kami.kami_type == KamiType(kami_type))
@@ -1772,6 +2566,8 @@ async def list_kamis(
             raise HTTPException(status_code=400, detail="Invalid kami_type")
     if batch_no:
         count_stmt = count_stmt.where(Kami.batch_no == batch_no)
+    elif spec_id:
+        count_stmt = count_stmt.where(Kami.spec_id == spec_id)
     if keyword:
         keyword_like = f"%{keyword}%"
         count_stmt = count_stmt.where(
@@ -1792,6 +2588,7 @@ async def list_kamis(
             "items": [
                 {
                     "id": kami.id,
+                    "spec_id": kami.spec_id,
                     "kami_code": kami.kami_code,
                     "kami_type": kami.kami_type.value,
                     "status": kami.status.value,
@@ -1808,6 +2605,7 @@ async def list_kamis(
                     "code_prefix": kami.code_prefix,
                     "code_length": kami.code_length,
                     "charset": kami.charset,
+                    **_kami_code_validity_payload(kami, now),
                     "bind_ip": kami.bind_ip,
                     "unbind_count": kami.unbind_count,
                     "last_unbind_at": to_api_beijing_iso(kami.last_unbind_at, naive="civil")
@@ -1900,11 +2698,21 @@ async def list_kami_batches(
     if kami_type:
         batch_statement = batch_statement.where(KamiBatch.kami_type == KamiType(kami_type))
     batch_configs = session.exec(batch_statement).all()
+    spec_ids = sorted({batch.spec_id for batch in batch_configs if batch.spec_id})
+    specs_by_id = {}
+    if spec_ids:
+        specs_by_id = {
+            spec.id: spec
+            for spec in session.exec(select(KamiSpec).where(KamiSpec.id.in_(spec_ids))).all()
+        }
 
     batches = {}
     for batch in batch_configs:
         item = _kami_batch_payload(batch)
+        spec = specs_by_id.get(batch.spec_id)
         item.update({
+            "spec_name": spec.spec_name if spec else None,
+            "spec_group": _enum_value(spec.spec_group) if spec else None,
             "total_count": 0,
             "unused_count": 0,
             "active_count": 0,
@@ -1922,6 +2730,9 @@ async def list_kami_batches(
             {
                 "batch_no": batch_key,
                 "app_id": app_id,
+                "spec_id": kami.spec_id,
+                "spec_name": None,
+                "spec_group": None,
                 "kami_type": kami.kami_type.value,
                 "points_amount": kami.points_amount,
                 "points_valid_days": kami.points_valid_days,
@@ -1977,6 +2788,7 @@ async def export_kamis(
     app_id: str,
     status: Optional[str] = Query(None, description="卡密状态"),
     kami_type: Optional[str] = Query(None, description="卡密类型"),
+    spec_id: Optional[int] = Query(None, description="卡密规格ID"),
     batch_no: Optional[str] = Query(None, description="卡密批次号"),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
@@ -2004,11 +2816,14 @@ async def export_kamis(
             raise HTTPException(status_code=400, detail="Invalid kami_type")
     if batch_no:
         statement = statement.where(Kami.batch_no == batch_no)
+    elif spec_id:
+        statement = statement.where(Kami.spec_id == spec_id)
 
     rows = []
     for kami in session.exec(statement.order_by(Kami.id.desc())).all():
         rows.append({
             "id": kami.id,
+            "spec_id": kami.spec_id,
             "app_id": kami.app_id,
             "kami_code": kami.kami_code,
             "kami_type": kami.kami_type.value,
@@ -2042,6 +2857,7 @@ async def export_kamis(
         filename=f"kamis_{app_id}.csv",
         fieldnames=[
             "id",
+            "spec_id",
             "app_id",
             "kami_code",
             "kami_type",
@@ -2080,7 +2896,7 @@ async def delete_kamis(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
-    """删除选中的未使用卡密，已激活或已兑换卡密会跳过以保留审计链路。"""
+    """删除选中的卡密；已激活/已兑换卡密也允许删除，调用方需先确认数据已迁移。"""
     app = session.exec(select(App).where(App.app_id == payload.app_id)).first()
     if not app:
         raise HTTPException(status_code=404, detail="App not found")
@@ -2100,10 +2916,13 @@ async def delete_kamis(
     )
     if payload.batch_no:
         statement = statement.where(Kami.batch_no == payload.batch_no)
+    elif payload.spec_id:
+        statement = statement.where(Kami.spec_id == payload.spec_id)
 
     found_kamis = session.exec(statement).all()
     found_by_code = {kami.kami_code: kami for kami in found_kamis}
     deleted_codes = []
+    deleted_details = []
     skipped = []
 
     for code in kami_codes:
@@ -2111,14 +2930,30 @@ async def delete_kamis(
         if not kami:
             skipped.append({"kami_code": code, "reason": "not_found_or_batch_mismatch"})
             continue
-        if (
-            kami.status == KamiStatus.active
-            or kami.redeemed_by_user_id is not None
-            or kami.bind_uuid
-        ):
-            skipped.append({"kami_code": code, "reason": "already_used"})
-            continue
 
+        bindings = session.exec(
+            select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code == kami.kami_code)
+        ).all()
+        for binding in bindings:
+            session.delete(binding)
+
+        related_logs = session.exec(
+            select(EventLog).where(EventLog.kami_code == kami.kami_code)
+        ).all()
+        for log in related_logs:
+            log.kami_code = None
+            session.add(log)
+
+        deleted_details.append({
+            "kami_code": code,
+            "status": kami.status.value if hasattr(kami.status, "value") else str(kami.status),
+            "batch_no": kami.batch_no,
+            "spec_id": kami.spec_id,
+            "bind_uuid": kami.bind_uuid,
+            "redeemed_by_user_id": kami.redeemed_by_user_id,
+            "device_binding_count": len(bindings),
+            "detached_event_log_count": len(related_logs),
+        })
         deleted_codes.append(code)
         session.delete(kami)
 
@@ -2133,9 +2968,11 @@ async def delete_kamis(
             "batch_no": payload.batch_no,
             "requested_codes": kami_codes,
             "deleted_codes": deleted_codes,
+            "deleted_details": deleted_details,
             "skipped": skipped,
             "deleted_count": len(deleted_codes),
             "skipped_count": len(skipped),
+            "delete_policy": "allow_used_after_admin_confirmation",
         },
         message=f"用户 {username} 删除了 {len(deleted_codes)} 个卡密，跳过 {len(skipped)} 个",
     )
@@ -2381,35 +3218,45 @@ async def admin_login(
     pipe.execute()
     
     # 2. 解析请求体
-    username = None
-    password = None
+    username = request.query_params.get("username")
+    password = request.query_params.get("password")
     
     try:
         body = await request.json()
         
         encrypted_data = body.get('encrypted_data')
         iv = body.get('iv')
+        username = body.get('username')
+        password = body.get('password')
         
-        if not encrypted_data or not iv:
-            raise HTTPException(status_code=400, detail="登录请求必须使用加密参数")
-
-        from crypto import CryptoHelper
-
-        aes_key_b64 = _get_login_aes_key_b64()
-        decrypted_data = CryptoHelper.aes_decrypt(
-            encrypted_data=encrypted_data,
-            key_b64=aes_key_b64,
-            iv=iv
-        )
-
-        username = decrypted_data.get('username')
-        password = decrypted_data.get('password')
-
-        if not username or not password:
-            raise HTTPException(status_code=400, detail="解密后的数据不完整")
+        # 如果是加密请求，使用 AES 解密
+        if encrypted_data and iv:
+            from crypto import CryptoHelper
+            
+            # 获取 AES 密钥
+            aes_key_b64 = _get_login_aes_key_b64()
+            
+            # 使用 CryptoHelper 的 AES 解密方法
+            decrypted_data = CryptoHelper.aes_decrypt(
+                encrypted_data=encrypted_data,
+                key_b64=aes_key_b64,
+                iv=iv
+            )
+            
+            username = decrypted_data.get('username')
+            password = decrypted_data.get('password')
+            
+            if not username or not password:
+                raise HTTPException(status_code=400, detail="解密后的数据不完整")
+        else:
+            # 如果没有提供加密参数，则使用明文（兼容旧版本）
+            if not username or not password:
+                raise HTTPException(status_code=400, detail="缺少用户名或密码")
             
     except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
+        # 如果不是 JSON，尝试从 query params 获取（兼容旧版本）
+        if not username or not password:
+            raise HTTPException(status_code=400, detail="缺少用户名或密码")
     except HTTPException:
         raise
     except Exception as e:
@@ -2428,27 +3275,47 @@ async def admin_login(
         "user_agent": request.headers.get("user-agent", "")
     }
     
+    # 如果没有用户，创建默认管理员
     if not user:
-        log_data["success"] = False
-        log_data["message"] = "用户名不存在"
-        _record_login_log(redis_client, log_data)
-        try:
-            admin_event_log = EventLog(
-                app_id="admin",
-                kami_code=None,
-                event_type="admin_login",
-                ip_address=client_ip,
-                device_uuid=None,
-                user_agent=request.headers.get("user-agent", ""),
-                status=0,
-                message=f"管理员登录失败：用户名 {username} 不存在",
-                payload=None
+        # 检查是否是默认账号
+        if user:
+            password_hash = hash_password(password)
+            user = AdminUser(
+                username=username,
+                password_hash=password_hash,
+                email="admin@example.com",
+                is_admin=True,  # 默认管理员
+                status=1,
+                failed_attempts=0
             )
-            session.add(admin_event_log)
+            session.add(user)
             session.commit()
-        except Exception:
-            logger.exception("记录管理员登录失败日志失败")
-        raise HTTPException(status_code=401, detail="用户名或密码错误")
+            session.refresh(user)
+            log_data["success"] = True
+            log_data["message"] = "首次登录，自动创建账号"
+        else:
+            log_data["success"] = False
+            log_data["message"] = "用户名不存在"
+            # 记录失败日志到 Redis
+            _record_login_log(redis_client, log_data)
+            # 记录到数据库
+            try:
+                admin_event_log = EventLog(
+                    app_id="admin",
+                    kami_code=None,
+                    event_type="admin_login",
+                    ip_address=client_ip,
+                    device_uuid=None,
+                    user_agent=request.headers.get("user-agent", ""),
+                    status=0,
+                    message=f"管理员登录失败：用户名 {username} 不存在",
+                    payload=None
+                )
+                session.add(admin_event_log)
+                session.commit()
+            except Exception:
+                logger.exception("记录管理员登录失败日志失败")
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
     else:
         # 4. 检查账号是否被锁定
         if user.locked_until:
@@ -2512,9 +3379,6 @@ async def admin_login(
                     status_code=401,
                     detail=f"用户名或密码错误，还剩 {remaining_attempts} 次机会"
                 )
-
-        if password_needs_rehash(user.password_hash):
-            user.password_hash = hash_password(password)
         
         # 检查状态
         if user.status != 1:
@@ -2555,15 +3419,7 @@ async def admin_login(
         logger.exception("记录管理员登录成功日志失败")
     
     # 生成 Token
-    user_role = user.role.value if hasattr(user.role, "value") else str(user.role)
-    token = create_access_token(
-        data={
-            "sub": username,
-            "user_id": user.id,
-            "is_admin": user.is_admin,
-            "role": user_role,
-        }
-    )
+    token = create_access_token(data={"sub": username, "user_id": user.id, "is_admin": user.is_admin})
     return {
         "success": True,
         "token": token,
@@ -2572,7 +3428,6 @@ async def admin_login(
             "username": user.username,
             "email": user.email,
             "is_admin": user.is_admin,
-            "role": user_role,
             "last_login": to_api_beijing_iso(user.last_login, naive="civil")
             if user.last_login
             else None
@@ -2721,7 +3576,7 @@ async def get_event_logs(
 # ==================== 普通用户与积分管理 ====================
 
 def _require_admin(current_user: dict):
-    if _role_value(current_user) not in {AdminRole.super_admin.value, AdminRole.admin.value}:
+    if not current_user.get("is_admin", False):
         raise HTTPException(status_code=403, detail="需要管理员权限")
 
 
@@ -3157,14 +4012,6 @@ async def grant_user_authorization(
     user = session.get(EndUser, payload.user_id)
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
-    if user.app_id and user.app_id != payload.app_id:
-        raise HTTPException(
-            status_code=403,
-            detail={"code": "APP_MISMATCH", "message": "用户所属应用与授权应用不一致"},
-        )
-    if not user.app_id:
-        user.app_id = payload.app_id
-        session.add(user)
 
     account = get_or_create_authorization_account(
         session=session,
@@ -3501,6 +4348,36 @@ async def admin_adjust_points(
     return {"success": True, "message": "积分已调整", "data": result}
 
 
+@router.post("/points/refund", summary="管理员退款返还积分")
+async def admin_refund_points(
+    payload: PointRefundRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """按消费流水或消费 biz_id 返还积分，refund_biz_id 保证幂等。"""
+    _require_admin(current_user)
+    user = session.get(EndUser, payload.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="End user not found")
+
+    try:
+        result = refund_points(
+            session=session,
+            user_id=payload.user_id,
+            consume_biz_id=payload.consume_biz_id,
+            consume_transaction_id=payload.consume_transaction_id,
+            refund_biz_id=payload.refund_biz_id,
+            amount=payload.amount,
+            remark=payload.remark,
+            metadata=payload.metadata,
+            admin_username=current_user.get("sub"),
+        )
+    except PointServiceError as error:
+        _handle_point_error(error)
+
+    return {"success": True, "message": "积分已退款", "data": result}
+
+
 # ==================== 管理员账号管理 ====================
 
 @router.get("/users", summary="获取管理员列表")
@@ -3521,7 +4398,6 @@ async def list_admin_users(
                 "email": user.email,
                 "phone": user.phone,
                 "is_admin": user.is_admin,
-                "role": user.role.value if hasattr(user.role, "value") else str(user.role),
                 "status": user.status,
                 "created_at": to_api_beijing_iso(user.created_at, naive="civil"),
                 "last_login": to_api_beijing_iso(user.last_login, naive="civil")
@@ -3540,17 +4416,13 @@ async def create_admin_user(
     email: Optional[str] = None,
     phone: Optional[str] = None,
     is_admin: bool = False,
-    role: str = AdminRole.operator.value,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
     """创建新的管理员账号（只有 admin 可以创建）"""
     # 权限检查：只有 admin 可以创建用户
-    _require_admin(current_user)
-    try:
-        admin_role = AdminRole(role)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="无效角色")
+    if not current_user.get("is_admin", False):
+        raise HTTPException(status_code=403, detail="无权创建用户，需要管理员权限")
     
     # 检查用户名是否已存在
     statement = select(AdminUser).where(AdminUser.username == username)
@@ -3569,7 +4441,6 @@ async def create_admin_user(
         email=email,
         phone=phone,
         is_admin=is_admin,
-        role=AdminRole.super_admin if is_admin else admin_role,
         status=1
     )
     
@@ -3586,7 +4457,6 @@ async def create_admin_user(
             "email": user.email,
             "phone": user.phone,
             "is_admin": user.is_admin,
-            "role": user.role.value if hasattr(user.role, "value") else str(user.role),
             "status": user.status
         }
     }

@@ -27,6 +27,61 @@ export function getKamiBatches(params) {
   })
 }
 
+export function getKamiSpecs(params) {
+  return request({
+    url: '/admin/kami-specs',
+    method: 'get',
+    params
+  })
+}
+
+export function createKamiSpec(data) {
+  return request({
+    url: '/admin/kami-specs',
+    method: 'post',
+    data
+  })
+}
+
+export function updateKamiSpec(specId, data) {
+  return request({
+    url: `/admin/kami-specs/${specId}`,
+    method: 'put',
+    data
+  })
+}
+
+export function deleteKamiSpec(specId) {
+  return request({
+    url: `/admin/kami-specs/${specId}`,
+    method: 'delete'
+  })
+}
+
+export function generateKamisForSpec(specId, data) {
+  return request({
+    url: `/admin/kami-specs/${specId}/generate`,
+    method: 'post',
+    data
+  })
+}
+
+export function getKamiSpecBatches(specId, params) {
+  return request({
+    url: `/admin/kami-specs/${specId}/batches`,
+    method: 'get',
+    params
+  })
+}
+
+export function getKamiSpecKamis(specId, params) {
+  return request({
+    url: `/admin/kami-specs/${specId}/kamis`,
+    method: 'get',
+    params
+  })
+}
+
 export function createKamiBatch(data) {
   return request({
     url: '/admin/kamis/batches',

@@ -24,7 +24,7 @@ wheels/
 venv/
 env/
 ENV/
-.lemon_kami_env/
+.youzi_kami_env/
 
 # IDE
 .vscode/

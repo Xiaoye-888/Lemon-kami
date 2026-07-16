@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Request
 from sqlmodel import Session, select
-from sqlalchemy.exc import IntegrityError
 from database import engine, get_session
 from models import (
     App,
@@ -19,25 +18,20 @@ from models import (
     KamiType,
     MachineBindMode,
     KamiDeviceBinding,
-    KamiConsumeTransaction,
     UserBindMode,
     get_now,
+    is_kami_code_expired,
 )
 from datetime_utils import to_api_beijing_iso
 from dependencies import get_decrypted_data
 from interface_service import get_app_interface_config, require_app_interface_enabled
 from redis_client import get_redis
-from crypto import CryptoHelper, HMACSigner
-from config import settings
-from jose import jwt
+from crypto import CryptoHelper
 import json
 import base64
 import os
 import logging
 import uuid as uuid_lib
-import time
-import secrets
-import hmac
 
 router = APIRouter(prefix="/api/v1/sdk", tags=["SDK"])
 logger = logging.getLogger(__name__)
@@ -155,74 +149,6 @@ async def get_public_key(
     }
 
 
-@router.post("/client-token")
-async def issue_client_token(
-    payload: dict,
-    session: Session = Depends(get_session),
-    redis_client = Depends(get_redis),
-):
-    """签发短期 SDK client token，避免浏览器长期持有 App Secret。"""
-    app_id = payload.get("app_id")
-    timestamp = payload.get("timestamp")
-    nonce = payload.get("nonce")
-    sign = payload.get("sign")
-    ttl_seconds = int(payload.get("ttl_seconds") or 600)
-    ttl_seconds = max(60, min(ttl_seconds, 3600))
-
-    if not all([app_id, timestamp, nonce, sign]):
-        raise HTTPException(status_code=400, detail="Missing required fields")
-
-    app = session.exec(select(App).where(App.app_id == app_id)).first()
-    if not app:
-        raise HTTPException(status_code=404, detail="App not found")
-    if app.status != 1:
-        raise HTTPException(status_code=403, detail="App is disabled")
-
-    try:
-        timestamp_value = int(timestamp)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid timestamp")
-
-    tolerance = app.timestamp_tolerance_seconds or settings.TIMESTAMP_TOLERANCE
-    if abs(int(time.time()) - timestamp_value) > tolerance:
-        raise HTTPException(status_code=400, detail="Timestamp expired")
-
-    nonce_key = f"sdk_client_token_nonce:{app_id}:{nonce}"
-    if redis_client.exists(nonce_key):
-        raise HTTPException(status_code=400, detail="Nonce already used")
-
-    sign_data = f"{app_id}{timestamp_value}{nonce}{ttl_seconds}"
-    expected_sign = HMACSigner.generate_sign(sign_data, app.app_secret)
-    if not hmac.compare_digest(expected_sign, sign):
-        raise HTTPException(status_code=401, detail="Invalid signature")
-
-    redis_client.setex(nonce_key, settings.NONCE_TTL, "1")
-
-    sdk_secret = secrets.token_urlsafe(32)
-    expire_at = get_now() + timedelta(seconds=ttl_seconds)
-    token = jwt.encode(
-        {
-            "role": "sdk_client",
-            "app_id": app_id,
-            "sdk_secret": sdk_secret,
-            "jti": secrets.token_urlsafe(16),
-            "exp": expire_at,
-        },
-        settings.SECRET_KEY,
-        algorithm=settings.ALGORITHM,
-    )
-
-    return {
-        "success": True,
-        "data": {
-            "app_id": app_id,
-            "client_token": token,
-            "client_secret": sdk_secret,
-            "expires_in": ttl_seconds,
-        },
-    }
-
-
 def _client_ip_from_request(request: Request) -> str:
     return request.client.host if request.client else ""
 
@@ -307,41 +233,32 @@ def _times_available_error(kami: Kami) -> Optional[dict]:
     return None
 
 
-def _find_consume_transaction(
+def _find_consume_event_payload(
     session: Session,
     app_id: str,
     kami_code: str,
     biz_id: str,
-) -> Optional[KamiConsumeTransaction]:
-    return session.exec(
-        select(KamiConsumeTransaction)
+) -> Optional[dict]:
+    events = session.exec(
+        select(EventLog)
         .where(
-            KamiConsumeTransaction.app_id == app_id,
-            KamiConsumeTransaction.kami_code == kami_code,
-            KamiConsumeTransaction.biz_id == biz_id,
+            EventLog.app_id == app_id,
+            EventLog.kami_code == kami_code,
+            EventLog.event_type == "consume",
+            EventLog.status == 1,
         )
-    ).first()
-
-
-def _consume_transaction_payload(
-    transaction: KamiConsumeTransaction,
-    idempotent: bool = True,
-) -> dict:
-    try:
-        payload = json.loads(transaction.payload_json or "{}")
-    except json.JSONDecodeError:
-        payload = {}
-    payload.update({
-        "success": True,
-        "message": "核销成功",
-        "consume_id": transaction.consume_id,
-        "biz_id": transaction.biz_id,
-        "amount": transaction.amount,
-        "idempotent": idempotent,
-        "times_total": transaction.times_total,
-        "times_remaining": transaction.times_remaining or 0,
-    })
-    return payload
+        .order_by(EventLog.id.desc())
+    ).all()
+    for event in events:
+        if not event.payload:
+            continue
+        try:
+            payload = json.loads(event.payload)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("biz_id") == biz_id:
+            return payload
+    return None
 
 
 def _machine_bind_mode(kami: Kami) -> MachineBindMode:
@@ -709,6 +626,12 @@ async def verify_kami(
     cached_bind = redis_client.hgetall(cache_key)
     now_naive = get_now().replace(tzinfo=None)
 
+    if is_kami_code_expired(kami, now_naive):
+        _record_event_log(session, app_id, kami_code, "verify", client_ip, uuid, user_agent,
+                         status=0, message="卡密已过期")
+        response_data = {"success": False, "message": "卡密已过期"}
+        return encrypt_response(response_data, app_info.get("app_secret", ""))
+
     if kami.expire_time and now_naive > kami.expire_time:
         _record_event_log(session, app_id, kami_code, "verify", client_ip, uuid, user_agent,
                          status=0, message="卡密已过期")
@@ -993,15 +916,13 @@ async def consume_kami(
     app_info = data.get("_app_info", {})
     app_id = app_info.get("app_id")
     amount = int(data.get("amount") or 1)
-    biz_id = str(data.get("biz_id") or "").strip()
+    biz_id = data.get("biz_id") or f"consume_{uuid_lib.uuid4().hex}"
 
     client_ip = _client_ip_from_request(request)
     user_agent = request.headers.get("user-agent", "")
 
     if not all([kami_code, fingerprint]):
         raise HTTPException(status_code=400, detail="Missing required fields: kami and fingerprint")
-    if not biz_id:
-        raise HTTPException(status_code=400, detail="biz_id is required")
 
     app = session.exec(select(App).where(App.app_id == app_id)).first()
     if not app:
@@ -1016,15 +937,22 @@ async def consume_kami(
         response_data = {"success": False, "message": "核销接口未开通或已关闭"}
         return encrypt_response(response_data, app_info.get("app_secret", ""))
 
-    existing_transaction = _find_consume_transaction(session, app_id, kami_code, biz_id)
-    if existing_transaction:
-        response_data = _consume_transaction_payload(existing_transaction, idempotent=True)
+    existing_payload = _find_consume_event_payload(session, app_id, kami_code, biz_id)
+    if existing_payload:
+        response_data = {
+            "success": True,
+            "message": "核销成功",
+            "consume_id": existing_payload.get("consume_id"),
+            "biz_id": biz_id,
+            "amount": existing_payload.get("amount", amount),
+            "idempotent": True,
+            "times_total": existing_payload.get("times_total"),
+            "times_remaining": existing_payload.get("times_remaining"),
+        }
         return encrypt_response(response_data, app_info.get("app_secret", ""))
 
     kami = session.exec(
-        select(Kami)
-        .where(Kami.kami_code == kami_code, Kami.app_id == app_id)
-        .with_for_update()
+        select(Kami).where(Kami.kami_code == kami_code, Kami.app_id == app_id)
     ).first()
     if not kami:
         response_data = {"success": False, "message": "卡密不存在"}
@@ -1037,6 +965,22 @@ async def consume_kami(
         return encrypt_response(response_data, app_info.get("app_secret", ""))
 
     now_naive = get_now().replace(tzinfo=None)
+    if is_kami_code_expired(kami, now_naive):
+        _record_event_log(
+            session,
+            app_id,
+            kami_code,
+            "consume",
+            client_ip,
+            uuid,
+            user_agent,
+            status=0,
+            message="卡密已过期",
+            payload={"biz_id": biz_id, "amount": amount},
+        )
+        response_data = {"success": False, "message": "卡密已过期"}
+        return encrypt_response(response_data, app_info.get("app_secret", ""))
+
     if kami.expire_time and now_naive > kami.expire_time:
         response_data = {"success": False, "message": "卡密已过期"}
         return encrypt_response(response_data, app_info.get("app_secret", ""))
@@ -1128,6 +1072,11 @@ async def consume_kami(
         return encrypt_response(times_error, app_info.get("app_secret", ""))
 
     consume_id = f"tc_{uuid_lib.uuid4().hex[:16]}"
+    app.api_call_count += 1
+    session.add(kami)
+    session.add(app)
+    session.commit()
+
     response_data = {
         "success": True,
         "message": "核销成功",
@@ -1146,34 +1095,6 @@ async def consume_kami(
         "times_total": kami.times_total,
         "times_remaining": kami.times_remaining or 0,
     }
-
-    transaction = KamiConsumeTransaction(
-        consume_id=consume_id,
-        app_id=app_id,
-        kami_code=kami_code,
-        biz_id=biz_id,
-        amount=amount,
-        times_total=kami.times_total,
-        times_remaining=kami.times_remaining or 0,
-        device_uuid=uuid or None,
-        fingerprint=fingerprint,
-        ip_address=client_ip or None,
-        payload_json=json.dumps(response_data, ensure_ascii=False),
-    )
-    app.api_call_count += 1
-    session.add(kami)
-    session.add(app)
-    session.add(transaction)
-    try:
-        session.commit()
-    except IntegrityError:
-        session.rollback()
-        existing_transaction = _find_consume_transaction(session, app_id, kami_code, biz_id)
-        if existing_transaction:
-            response_data = _consume_transaction_payload(existing_transaction, idempotent=True)
-            return encrypt_response(response_data, app_info.get("app_secret", ""))
-        raise
-
     _record_event_log(
         session, app_id, kami_code, "consume", client_ip, uuid, user_agent,
         status=1, message="核销成功", payload=response_data
@@ -1184,15 +1105,54 @@ async def consume_kami(
 @router.get("/apps/{app_id}/config")
 async def get_app_config(
     app_id: str,
+    request: Request,
     session: Session = Depends(get_session)
 ):
     """获取应用公告、版本、更新和核心安全策略。"""
+    client_ip = _client_ip_from_request(request)
+    user_agent = request.headers.get("user-agent", "")
     app = session.exec(select(App).where(App.app_id == app_id)).first()
     if not app:
+        _record_event_log(
+            session,
+            app_id,
+            None,
+            "app_config",
+            client_ip,
+            None,
+            user_agent,
+            status=0,
+            message="应用不存在",
+        )
         raise HTTPException(status_code=404, detail="App not found")
     if app.status != 1:
+        _record_event_log(
+            session,
+            app_id,
+            None,
+            "app_config",
+            client_ip,
+            None,
+            user_agent,
+            status=0,
+            message="应用已禁用",
+        )
         raise HTTPException(status_code=403, detail="App is disabled")
-    require_app_interface_enabled(session, app_id, "sdk.app_config")
+    try:
+        require_app_interface_enabled(session, app_id, "sdk.app_config")
+    except HTTPException as exc:
+        _record_event_log(
+            session,
+            app_id,
+            None,
+            "app_config",
+            client_ip,
+            None,
+            user_agent,
+            status=0,
+            message=f"应用配置接口不可用: {exc.detail}",
+        )
+        raise
 
     files = []
     if app.download_url:
@@ -1203,7 +1163,7 @@ async def get_app_config(
             "note": app.download_note,
         })
 
-    return {
+    response_data = {
         "success": True,
         "data": {
             "app_id": app.app_id,
@@ -1233,6 +1193,24 @@ async def get_app_config(
             },
         }
     }
+    _record_event_log(
+        session,
+        app_id,
+        None,
+        "app_config",
+        client_ip,
+        None,
+        user_agent,
+        status=1,
+        message="应用配置读取成功",
+        payload={
+            "notice_enabled": app.notice_enabled,
+            "has_update_url": bool(app.update_url),
+            "has_download_url": bool(app.download_url),
+            "file_count": len(files),
+        },
+    )
+    return response_data
 
 
 @router.post("/release-device")

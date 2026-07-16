@@ -1,48 +1,76 @@
-# Environment files with real secrets
-.env
-.env.local
-.env.*.local
-
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
 .Python
-.venv/
-venv/
 env/
+venv/
 ENV/
-.lemon_kami_env/
-.pytest_cache/
-.coverage
-htmlcov/
-*.egg-info/
 build/
+develop-eggs/
 dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Node / frontend
-node_modules/
-admin/node_modules/
-admin/dist/
-admin/dist-ssr/
-npm-debug.log*
-yarn-debug.log*
-pnpm-debug.log*
+# Virtual Environment
+.venv
+venv/
+ENV/
 
-# Local data and logs
-*.log
-logs/
-*.db
-*.sqlite
-*.sqlite3
-lemon_kami_dev.db
-.device_uuid
-
-# Editors / OS
+# IDE
 .vscode/
 .idea/
-.DS_Store
-Thumbs.db
 *.swp
 *.swo
 *~
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+login_keys*.env
+login_keys*.txt
+*_private_key*.pem
+*.key
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Local agent memory
+.engramory-memory/
+.superpowers/
+
+# Local/generated bundles
+backups/
+ob/
+*.tar
+*.tar.gz
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/

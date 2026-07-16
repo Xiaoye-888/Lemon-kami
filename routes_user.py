@@ -18,7 +18,7 @@ from point_service import (
     get_points_balance_summary,
     redeem_points_kami,
 )
-from routes_admin import hash_password, password_needs_rehash, verify_password
+from routes_admin import hash_password, verify_password
 
 
 router = APIRouter(prefix="/api/v1/user", tags=["End User Points"])
@@ -61,10 +61,11 @@ def create_user_access_token(user: EndUser) -> str:
 
 
 async def get_current_end_user(
+    token: Optional[str] = Query(None),
     authorization: Optional[str] = Header(None),
     session: Session = Depends(get_session),
 ) -> EndUser:
-    raw_token = None
+    raw_token = token
     if authorization and authorization.lower().startswith("bearer "):
         raw_token = authorization.split(" ", 1)[1].strip()
     if not raw_token:
@@ -178,9 +179,6 @@ async def login_user(payload: LoginRequest, session: Session = Depends(get_sessi
         raise HTTPException(status_code=403, detail="User is disabled")
     require_app_interface_enabled(session, user.app_id, "user.login")
 
-    if password_needs_rehash(user.password_hash):
-        user.password_hash = hash_password(payload.password)
-
     user.last_login = get_now().replace(tzinfo=None)
     session.add(user)
     session.commit()
@@ -250,21 +248,7 @@ async def consume_user_points(
     current_user: EndUser = Depends(get_current_end_user),
     session: Session = Depends(get_session),
 ):
-    if current_user.app_id:
-        if payload.app_id and payload.app_id != current_user.app_id:
-            raise HTTPException(
-                status_code=403,
-                detail={"code": "APP_MISMATCH", "message": "请求应用与当前用户所属应用不一致"},
-            )
-        app_id = current_user.app_id
-    else:
-        if not payload.app_id:
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "APP_REQUIRED", "message": "未绑定应用的用户必须传入 app_id"},
-            )
-        app_id = payload.app_id
-
+    app_id = payload.app_id or current_user.app_id
     config = require_app_interface_enabled(session, app_id, "points.consume")
     min_amount = _int_config(config, "min_amount", 1) or 1
     max_amount = _int_config(config, "max_amount")

@@ -26,6 +26,14 @@ export function getApps() {
   })
 }
 
+// 获取运营仪表盘
+export function getDashboard() {
+  return request({
+    url: '/admin/dashboard',
+    method: 'get'
+  })
+}
+
 // 创建应用
 export function createApp(data) {
   return request({
@@ -48,6 +56,52 @@ export function updateAppStatus(appId, status) {
 export function deleteApp(appId) {
   return request({
     url: `/admin/apps/${appId}`,
+    method: 'delete'
+  })
+}
+
+export function getAdminEventLogs(params) {
+  return request({
+    url: '/admin/event-logs',
+    method: 'get',
+    params
+  })
+}
+
+export function getAdminUsers() {
+  return request({
+    url: '/admin/users',
+    method: 'get'
+  })
+}
+
+export function createAdminUser(params) {
+  return request({
+    url: '/admin/users',
+    method: 'post',
+    params
+  })
+}
+
+export function updateAdminUser(userId, params) {
+  return request({
+    url: `/admin/users/${userId}`,
+    method: 'put',
+    params
+  })
+}
+
+export function resetAdminUserPassword(userId, newPassword) {
+  return request({
+    url: `/admin/users/${userId}/password`,
+    method: 'put',
+    params: { new_password: newPassword }
+  })
+}
+
+export function deleteAdminUser(userId) {
+  return request({
+    url: `/admin/users/${userId}`,
     method: 'delete'
   })
 }

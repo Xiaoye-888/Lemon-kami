@@ -144,7 +144,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import request from '../utils/request'
+import { getAdminEventLogs } from '../api/admin'
 import { formatBeijingTime } from '../utils/datetime'
 
 const loading = ref(false)
@@ -165,11 +165,7 @@ const queryParams = reactive({
 const loadLogs = async () => {
   loading.value = true
   try {
-    const res = await request({
-      url: '/admin/event-logs',
-      method: 'get',
-      params: queryParams
-    })
+    const res = await getAdminEventLogs(queryParams)
     logs.value = res.data
     total.value = res.total
   } catch (error) {

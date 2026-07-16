@@ -8,9 +8,7 @@ class LemonKamiSDK {
    * 初始化 SDK
    * @param {Object} config - 配置对象
    * @param {string} config.appId - 应用ID
-   * @param {string} [config.appSecret] - 应用密钥（服务端/受信环境使用）
-   * @param {string} [config.clientToken] - 短期客户端 Token（浏览器推荐）
-   * @param {string} [config.clientSecret] - 短期客户端签名密钥（浏览器推荐）
+   * @param {string} config.appSecret - 应用密钥
    * @param {string} [config.serverUrl='http://localhost:8000'] - 服务器地址
    * @param {string} [config.rsaPublicKey] - RSA公钥（可选）
    * @param {boolean} [config.autoReleaseOnUnload=true] - 页面关闭时自动释放设备名额
@@ -25,12 +23,7 @@ class LemonKamiSDK {
     }
     
     this.appId = config.appId;
-    this.appSecret = config.appSecret || null;
-    this.clientToken = config.clientToken || null;
-    this.clientSecret = config.clientSecret || null;
-    if (!this.appSecret && !this.clientSecret) {
-      throw new Error('请提供 appSecret，或提供 clientToken + clientSecret');
-    }
+    this.appSecret = config.appSecret;
     this.serverUrl = (config.serverUrl || 'http://localhost:8000').replace(/\/$/, '');
     this.rsaPublicKey = config.rsaPublicKey || null;
     this.deviceUuid = this._getDeviceUuid();
@@ -133,25 +126,6 @@ class LemonKamiSDK {
   }
 
   /**
-   * 设置短期客户端 Token
-   * @param {string} clientToken - 短期客户端 Token
-   * @param {string} clientSecret - 短期客户端签名密钥
-   */
-  setClientToken(clientToken, clientSecret) {
-    this.clientToken = clientToken;
-    this.clientSecret = clientSecret;
-  }
-
-  /**
-   * 当前请求签名密钥。浏览器优先使用短期 client secret。
-   * @returns {string}
-   * @private
-   */
-  _signingSecret() {
-    return this.clientSecret || this.appSecret;
-  }
-
-  /**
    * 从服务器获取RSA公钥
    * @private
    */
@@ -211,7 +185,7 @@ class LemonKamiSDK {
     // 生成 HMAC-SHA256 签名（与后端保持一致）
     const encryptedDataBase64 = encryptedData.toString(CryptoJS.enc.Base64);
     const signStr = `${timestamp}${nonce}${encryptedDataBase64}`;
-    const signature = this._hmacSha256(signStr, this._signingSecret());
+    const signature = this._hmacSha256(signStr, this.appSecret);
 
     // 返回符合后端格式的字典
     const result = {
@@ -223,10 +197,6 @@ class LemonKamiSDK {
       encrypted_data: encryptedDataBase64,
       iv: aesIv.toString(CryptoJS.enc.Base64)
     };
-
-    if (this.clientToken) {
-      result.client_token = this.clientToken;
-    }
 
     return result;
   }
@@ -460,7 +430,7 @@ class LemonKamiSDK {
 
       // 验证签名
       const signStr = `${timestamp}${nonce}${encrypted_data}`;
-      const expectedSign = this._hmacSha256(signStr, this._signingSecret());
+      const expectedSign = this._hmacSha256(signStr, this.appSecret);
 
       if (expectedSign !== sign) {
         throw new Error("响应签名验证失败");

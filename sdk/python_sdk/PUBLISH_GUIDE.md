@@ -162,6 +162,7 @@ twine upload dist/*
 
 `lemon-kami-sdk` 这个名字必须在 PyPI 上是唯一的。如果被占用，需要改名：
 - `lemon-kami-client`
+- `lemon-license-sdk`
 - `kami-auth-sdk`
 
 ### 2. 不要重复上传同一版本
