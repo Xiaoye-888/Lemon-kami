@@ -137,7 +137,7 @@
             </div>
             <div class="contact-card-info">
               <div class="contact-label">微信</div>
-              <div class="contact-value">d18880848565</div>
+              <div class="contact-value">981388</div>
             </div>
           </div>
           
