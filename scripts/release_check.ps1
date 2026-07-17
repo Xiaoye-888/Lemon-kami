@@ -73,6 +73,7 @@ function Invoke-ReleaseBoundaryStaticChecks {
     $prodComposePath = Join-Path $root "docker-compose.prod.yml"
     $remoteDeployPath = Join-Path $root "scripts\remote_deploy.sh"
     $envExamplePath = Join-Path $root ".env.example"
+    $adminNginxPath = Join-Path $root "admin\nginx.conf"
 
     foreach ($pattern in @(".env", "*.db", "logs", "backups", ".venv", ".engramory-memory", "admin")) {
         Assert-Contains $rootDockerIgnore $pattern
@@ -134,6 +135,15 @@ function Invoke-ReleaseBoundaryStaticChecks {
         "BOOTSTRAP_ADMIN_PASSWORD=CHANGE_ME_INITIAL_ADMIN_PASSWORD"
     )) {
         Assert-Contains $envExamplePath $pattern
+    }
+
+    foreach ($pattern in @(
+        "location = /docs/api",
+        "location ^~ /docs/api/",
+        "try_files /index.html =404",
+        "try_files `$uri `$uri/ /index.html"
+    )) {
+        Assert-Contains $adminNginxPath $pattern
     }
 
     $directRequestImports = Get-ChildItem -Path (Join-Path $root "admin\src\views") -Filter "*.vue" -File |

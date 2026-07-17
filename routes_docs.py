@@ -1,6 +1,7 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import RedirectResponse
 from sqlmodel import Session, or_, select
 
 from database import get_session
@@ -11,8 +12,14 @@ from routes_admin import _ensure_builtin_interfaces, _interface_payload
 router = APIRouter(prefix="/api/v1/docs", tags=["Public API Docs"])
 
 
+def _browser_prefers_html(accept_header: str) -> bool:
+    accept = accept_header.lower()
+    return "text/html" in accept and "application/json" not in accept
+
+
 @router.get("/interfaces", summary="公开接口文档列表")
 async def list_public_interface_docs(
+    request: Request,
     category: Optional[str] = Query(None, description="接口分类"),
     keyword: Optional[str] = Query(None, description="接口名称、标识、说明或地址关键字"),
     page: int = Query(1, ge=1),
@@ -20,6 +27,9 @@ async def list_public_interface_docs(
     session: Session = Depends(get_session),
 ):
     """获取公开 API 文档需要的接口定义，不要求管理员登录。"""
+    if _browser_prefers_html(request.headers.get("accept", "")):
+        return RedirectResponse(url="/docs/api#basic-info")
+
     _ensure_builtin_interfaces(session)
     statement = select(ApiInterface).where(ApiInterface.status == 1)
     count_statement = select(ApiInterface).where(ApiInterface.status == 1)
