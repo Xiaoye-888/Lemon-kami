@@ -102,6 +102,31 @@ jobs:
           BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
         run: |
           set -Eeuo pipefail
+
+          strip_leading_bom() {
+            local key="$1"
+            local value="${!key:-}"
+            value="${value#$'\xef\xbb\xbf'}"
+            printf -v "${key}" '%s' "${value}"
+          }
+
+          for key in \
+            SERVER_HOST \
+            SERVER_USER \
+            SERVER_SSH_KEY \
+            SERVER_PORT \
+            DEPLOY_APP_DIR \
+            DEPLOY_DIR \
+            MYSQL_ROOT_PASSWORD \
+            MYSQL_PASSWORD \
+            DATABASE_URL \
+            SECRET_KEY \
+            CORS_ALLOWED_ORIGINS \
+            LOGIN_AES_KEY \
+            BOOTSTRAP_ADMIN_PASSWORD; do
+            strip_leading_bom "${key}"
+          done
+
           SERVER_HOST="${SERVER_HOST:-${DEFAULT_SERVER_HOST}}"
           CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-${DEFAULT_CORS_ALLOWED_ORIGINS}}"
 
@@ -177,6 +202,38 @@ jobs:
           TZ: ${{ secrets.TZ }}
         run: |
           set -Eeuo pipefail
+
+          strip_leading_bom() {
+            local key="$1"
+            local value="${!key:-}"
+            value="${value#$'\xef\xbb\xbf'}"
+            printf -v "${key}" '%s' "${value}"
+          }
+
+          for key in \
+            HTTP_PORT \
+            MYSQL_ROOT_PASSWORD \
+            MYSQL_DATABASE \
+            MYSQL_USER \
+            MYSQL_PASSWORD \
+            DATABASE_URL \
+            REDIS_URL \
+            SECRET_KEY \
+            ALGORITHM \
+            ACCESS_TOKEN_EXPIRE_MINUTES \
+            DEBUG \
+            ENABLE_API_DOCS \
+            TIMESTAMP_TOLERANCE \
+            NONCE_TTL \
+            RATE_LIMIT_MAX \
+            RATE_LIMIT_WINDOW \
+            CORS_ALLOWED_ORIGINS \
+            LOGIN_AES_KEY \
+            BOOTSTRAP_ADMIN_PASSWORD \
+            TZ; do
+            strip_leading_bom "${key}"
+          done
+
           CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-${DEFAULT_CORS_ALLOWED_ORIGINS}}"
 
           required=(
