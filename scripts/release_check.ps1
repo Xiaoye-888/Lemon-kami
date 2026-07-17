@@ -97,6 +97,10 @@ function Invoke-ReleaseBoundaryStaticChecks {
         "secrets.SERVER_SSH_KEY",
         "secrets.DEPLOY_APP_DIR",
         "secrets.DEPLOY_DIR",
+        "DEFAULT_SERVER_HOST: 154.12.26.231",
+        "DEFAULT_CORS_ALLOWED_ORIGINS: http://154.12.26.231",
+        'SERVER_HOST="${SERVER_HOST:-${DEFAULT_SERVER_HOST}}"',
+        'CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-${DEFAULT_CORS_ALLOWED_ORIGINS}}"',
         "Validate deployment secrets",
         "must be an absolute Linux path when set.",
         "must not be /.",
@@ -131,7 +135,7 @@ function Invoke-ReleaseBoundaryStaticChecks {
         "APP_IMAGE_TAG=latest",
         "HTTP_PORT=80",
         "ENABLE_API_DOCS=false",
-        "CORS_ALLOWED_ORIGINS=http://YOUR_SERVER_IP",
+        "CORS_ALLOWED_ORIGINS=http://154.12.26.231",
         "BOOTSTRAP_ADMIN_PASSWORD=CHANGE_ME_INITIAL_ADMIN_PASSWORD"
     )) {
         Assert-Contains $envExamplePath $pattern

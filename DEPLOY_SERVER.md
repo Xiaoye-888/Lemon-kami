@@ -29,9 +29,8 @@ You can override both paths with GitHub Secrets. Custom deployment paths must be
 
 Set these in GitHub repository settings under **Secrets and variables > Actions**.
 
-SSH and server:
+SSH:
 
-- `SERVER_HOST`: VPS hostname or IP address
 - `SERVER_USER`: SSH username
 - `SERVER_SSH_KEY`: private key used by GitHub Actions to SSH into the server
 
@@ -41,7 +40,6 @@ Runtime:
 - `MYSQL_PASSWORD`
 - `DATABASE_URL`
 - `SECRET_KEY`
-- `CORS_ALLOWED_ORIGINS`
 - `LOGIN_AES_KEY`
 - `BOOTSTRAP_ADMIN_PASSWORD`
 
@@ -49,10 +47,12 @@ Do not commit real secret values to the repository. Use `.env.example` only as a
 
 ## Optional GitHub Secrets
 
+- `SERVER_HOST`: VPS hostname or IP address, defaults to `154.12.26.231`
 - `SERVER_PORT`: SSH port, defaults to `22`
 - `DEPLOY_APP_DIR`: server app directory, defaults to `/opt/lemon-kami`
 - `DEPLOY_DIR`: temporary upload directory, defaults to `/tmp/lemon-kami-deploy`
 - `HTTP_PORT`: public frontend port, defaults to `80`
+- `CORS_ALLOWED_ORIGINS`: CORS origin list, defaults to `http://154.12.26.231`
 - `MYSQL_DATABASE`: defaults to `lemon_kami`
 - `MYSQL_USER`: defaults to `lemon_user`
 - `REDIS_URL`: defaults to `redis://redis:6379/0`
