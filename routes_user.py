@@ -1,7 +1,8 @@
+import json
 from datetime import timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field as PydanticField
 from sqlmodel import Session, select
@@ -17,7 +18,9 @@ from models import (
     AuthorizationLot,
     AuthorizationOwnerType,
     AuthorizationTransaction,
+    Device,
     EndUser,
+    EventLog,
     Kami,
     get_now,
 )
@@ -57,6 +60,9 @@ class ConsumeRequest(BaseModel):
     biz_id: str = PydanticField(min_length=1, max_length=128)
     remark: Optional[str] = None
     metadata: Optional[dict] = None
+    uuid: Optional[str] = None
+    device_uuid: Optional[str] = None
+    fingerprint: Optional[str] = None
 
 
 def create_user_access_token(user: EndUser) -> str:
@@ -126,6 +132,83 @@ def _int_config(config: dict, key: str, default: Optional[int] = None) -> Option
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _client_ip_from_request(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip()
+    return request.client.host if request.client else ""
+
+
+def _point_consume_device_identity(payload: ConsumeRequest) -> tuple[Optional[str], Optional[str]]:
+    metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
+    uuid = (
+        payload.uuid
+        or payload.device_uuid
+        or metadata.get("uuid")
+        or metadata.get("device_uuid")
+    )
+    fingerprint = payload.fingerprint or metadata.get("fingerprint")
+    uuid = str(uuid).strip() if uuid else None
+    fingerprint = str(fingerprint).strip() if fingerprint else None
+    return uuid, fingerprint
+
+
+def _record_point_consume_device(
+    session: Session,
+    app_id: str,
+    user: EndUser,
+    payload: ConsumeRequest,
+    request: Request,
+) -> None:
+    uuid, fingerprint = _point_consume_device_identity(payload)
+    if not fingerprint:
+        return
+
+    device_uuid = uuid or fingerprint
+    client_ip = _client_ip_from_request(request)
+    device = session.exec(
+        select(Device).where(
+            Device.app_id == app_id,
+            Device.fingerprint == fingerprint,
+        )
+    ).first()
+    if device:
+        device.uuid = device_uuid
+        device.last_ip = client_ip
+    else:
+        device = Device(
+            app_id=app_id,
+            uuid=device_uuid,
+            fingerprint=fingerprint,
+            last_ip=client_ip,
+            risk_level=0,
+        )
+    session.add(device)
+    session.add(
+        EventLog(
+            app_id=app_id,
+            kami_code=None,
+            event_type="points_consume",
+            ip_address=client_ip,
+            device_uuid=device_uuid,
+            user_agent=request.headers.get("user-agent", ""),
+            status=1,
+            message="points consume",
+            payload=json.dumps(
+                {
+                    "user_id": user.id,
+                    "username": user.username,
+                    "biz_id": payload.biz_id,
+                    "amount": payload.amount,
+                    "fingerprint": fingerprint,
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    session.commit()
 
 
 @router.post("/register", summary="End-user register")
@@ -252,6 +335,7 @@ async def redeem_points(
 @router.post("/points/consume", summary="Consume points")
 async def consume_user_points(
     payload: ConsumeRequest,
+    request: Request,
     current_user: EndUser = Depends(get_current_end_user),
     session: Session = Depends(get_session),
 ):
@@ -286,6 +370,7 @@ async def consume_user_points(
         )
     except PointServiceError as error:
         _handle_point_error(error)
+    _record_point_consume_device(session, app_id, current_user, payload, request)
     return {"success": True, "message": "consume success", "data": result}
 
 

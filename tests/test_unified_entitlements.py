@@ -5,9 +5,11 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, Session, create_engine, select
 
 import routes_admin
-from authorization_service import grant_time, grant_times, get_or_create_authorization_account
+import routes_user
+from authorization_service import grant_points, grant_time, grant_times, get_or_create_authorization_account
 from main import app as fastapi_app
 from models import (
+    ApiInterface,
     App,
     AuthorizationAccount,
     AuthorizationOwnerMode,
@@ -22,6 +24,7 @@ from models import (
     MachineBindMode,
     PointTransaction,
     UserBindMode,
+    UserPointAccount,
     UserPointLot,
     get_now_naive,
 )
@@ -48,6 +51,14 @@ def make_app(app_id="app_demo", name="Demo"):
 
 def override_admin_user():
     return {"sub": "admin", "is_admin": True}
+
+
+def override_session_factory(engine):
+    def override_session():
+        with Session(engine) as session:
+            yield session
+
+    return override_session
 
 
 def test_points_redeem_credits_unified_user_app_account_and_stacks_by_app():
@@ -189,6 +200,150 @@ def test_times_and_time_grants_stack_on_unified_account():
 
         assert first_expiry is not None
         assert account.time_expires_at == first_expiry + timedelta(days=5)
+
+
+def test_legacy_point_and_times_balances_are_visible_in_user_authorization():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        user = EndUser(app_id="app_demo", username="legacy", password_hash="hash")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        session.add(
+            UserPointAccount(
+                user_id=user.id,
+                balance=90,
+                total_recharged=120,
+                total_consumed=30,
+            )
+        )
+        session.add(
+            UserPointLot(
+                user_id=user.id,
+                source_transaction_id="legacy-tx",
+                app_id="app_demo",
+                kami_code="LEGACYPOINTS",
+                points_total=120,
+                points_remaining=90,
+            )
+        )
+        session.add(
+            Kami(
+                app_id="app_demo",
+                kami_code="LEGACYTIMES",
+                kami_type=KamiType.times,
+                status=KamiStatus.active,
+                times_total=10,
+                times_remaining=7,
+                redeemed_by_user_id=user.id,
+                authorization_owner=AuthorizationOwnerMode.user,
+            )
+        )
+        session.commit()
+
+        summary = get_points_balance_summary(session, user.id, "app_demo")
+        assert summary["balance"] == 90
+        account = session.exec(
+            select(AuthorizationAccount).where(
+                AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
+                AuthorizationAccount.user_id == user.id,
+                AuthorizationAccount.app_id == "app_demo",
+            )
+        ).first()
+        assert account is not None
+        assert account.points_balance == 90
+
+        consume_result = consume_points(
+            session=session,
+            user_id=user.id,
+            app_id="app_demo",
+            amount=40,
+            biz_id="legacy-consume",
+        )
+        assert consume_result["balance_after"] == 50
+
+    try:
+        response = client.get("/api/v1/admin/end-users", params={"app_id": "app_demo"})
+        assert response.status_code == 200
+        item = response.json()["data"]["items"][0]
+        assert item["username"] == "legacy"
+        assert item["points_remaining"] == 50
+        assert item["times_remaining"] == 7
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_user_points_consume_with_device_identity_creates_admin_device_row():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        session.add(
+            ApiInterface(
+                name="Consume points",
+                interface_key="points.consume",
+                method="POST",
+                path="/api/v1/user/points/consume",
+                is_builtin=True,
+                status=1,
+            )
+        )
+        user = EndUser(app_id="app_demo", username="point-device", password_hash="hash")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        account = get_or_create_authorization_account(
+            session=session,
+            app_id="app_demo",
+            owner_type=AuthorizationOwnerType.user.value,
+            user_id=user.id,
+            username=user.username,
+        )
+        grant_points(session, account, 100, source_kami_code="POINT100")
+        token = routes_user.create_user_access_token(user)
+
+    try:
+        response = client.post(
+            "/api/v1/user/points/consume",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "User-Agent": "test-client",
+                "X-Forwarded-For": "10.0.0.8",
+            },
+            json={
+                "app_id": "app_demo",
+                "amount": 20,
+                "biz_id": "device-consume-1",
+                "uuid": "device-point-1",
+                "fingerprint": "fingerprint-point-1",
+            },
+        )
+        assert response.status_code == 200
+
+        devices_response = client.get("/api/v1/admin/devices", params={"app_id": "app_demo"})
+        assert devices_response.status_code == 200
+        item = devices_response.json()["data"]["items"][0]
+        assert item["uuid"] == "device-point-1"
+        assert item["fingerprint"] == "fingerprint-point-1"
+        assert item["username"] == "point-device"
+        assert item["binding_relation"] == "用户授权"
+        assert item["last_ip"] == "10.0.0.8"
+        assert item["ip_count"] == 1
+    finally:
+        fastapi_app.dependency_overrides.clear()
 
 
 def test_admin_update_app_supports_renaming_without_changing_id():

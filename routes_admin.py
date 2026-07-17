@@ -71,7 +71,12 @@ from config import settings
 from jose import jwt, JWTError
 import hashlib
 import os
-from point_service import PointServiceError, adjust_points, refund_points
+from point_service import (
+    PointServiceError,
+    adjust_points,
+    backfill_legacy_points_to_authorization_account,
+    refund_points,
+)
 from authorization_service import (
     get_or_create_authorization_account,
     grant_points,
@@ -190,6 +195,61 @@ def _authorization_summary_payload(account_or_accounts) -> dict:
 
 def _authorization_points_balance(account_or_accounts) -> int:
     return sum(account.points_balance for account in _as_authorization_accounts(account_or_accounts))
+
+
+def _backfill_legacy_points_for_users(
+    session: Session,
+    users: list[EndUser],
+    app_id: Optional[str],
+) -> None:
+    for user in users:
+        target_app_id = app_id or user.app_id
+        if user.id is None or not target_app_id:
+            continue
+        backfill_legacy_points_to_authorization_account(
+            session=session,
+            user_id=user.id,
+            app_id=target_app_id,
+            username=user.username,
+        )
+
+
+def _legacy_times_remaining_by_user(
+    session: Session,
+    user_ids: list[int],
+    app_id: Optional[str],
+    authorization_accounts: list[AuthorizationAccount],
+) -> dict[int, int]:
+    if not user_ids:
+        return {}
+    account_ids = [account.id for account in authorization_accounts if account.id is not None]
+    authorized_sources = set()
+    if account_ids:
+        lots = session.exec(
+            select(AuthorizationLot).where(
+                AuthorizationLot.account_id.in_(account_ids),
+                AuthorizationLot.benefit_type == AuthorizationBenefitType.times,
+            )
+        ).all()
+        authorized_sources = {lot.source_kami_code for lot in lots if lot.source_kami_code}
+
+    statement = select(Kami).where(
+        Kami.redeemed_by_user_id.in_(user_ids),
+        Kami.kami_type == KamiType.times,
+        Kami.status == KamiStatus.active,
+        Kami.times_remaining > 0,
+    )
+    if app_id:
+        statement = statement.where(Kami.app_id == app_id)
+    kamis = session.exec(statement).all()
+    result: dict[int, int] = {}
+    for kami in kamis:
+        if kami.kami_code in authorized_sources or kami.redeemed_by_user_id is None:
+            continue
+        result[kami.redeemed_by_user_id] = (
+            result.get(kami.redeemed_by_user_id, 0) + (kami.times_remaining or 0)
+        )
+    return result
 
 
 def check_app_permission(session: Session, app_id: str, username: str, is_admin: bool) -> bool:
@@ -3196,9 +3256,14 @@ def _admin_device_payload(
     kamis_by_code: dict,
     users_by_id: dict,
     ip_count: int,
+    event_user_by_uuid: Optional[dict] = None,
 ) -> dict:
     kami = kamis_by_code.get(binding.kami_code) if binding else None
+    event_user_by_uuid = event_user_by_uuid or {}
     user = users_by_id.get(kami.redeemed_by_user_id) if kami and kami.redeemed_by_user_id else None
+    event_user = event_user_by_uuid.get(device.uuid)
+    username = user.username if user else event_user.get("username") if event_user else None
+    user_id = user.id if user else event_user.get("user_id") if event_user else None
     risk = get_device_risk_payload(device.risk_level, ip_count)
     machine_bind_mode = get_machine_bind_mode_value(kami.machine_bind_mode) if kami else None
     return {
@@ -3207,9 +3272,9 @@ def _admin_device_payload(
         "fingerprint": device.fingerprint,
         "last_ip": device.last_ip,
         "ip_count": ip_count,
-        "username": user.username if user else None,
-        "user_id": user.id if user else None,
-        "binding_relation": get_binding_relation_text(kami),
+        "username": username,
+        "user_id": user_id,
+        "binding_relation": "用户授权" if username and not kami else get_binding_relation_text(kami),
         "machine_bind_mode": machine_bind_mode,
         "machine_bind_mode_text": get_machine_bind_mode_text(machine_bind_mode),
         **risk,
@@ -3285,16 +3350,27 @@ async def list_devices(
         users_by_id = {user.id: user for user in users}
 
     ip_sets_by_uuid = {device.uuid: set() for device in devices}
+    event_user_by_uuid = {}
     if device_uuids:
         logs = session.exec(
             select(EventLog).where(
                 EventLog.app_id == app_id,
                 EventLog.device_uuid.in_(device_uuids),
-            )
+            ).order_by(EventLog.created_at.desc())
         ).all()
         for log in logs:
             if log.device_uuid in ip_sets_by_uuid and log.ip_address:
                 ip_sets_by_uuid[log.device_uuid].add(log.ip_address)
+            if log.device_uuid and log.device_uuid not in event_user_by_uuid and log.payload:
+                try:
+                    payload = json.loads(log.payload)
+                except json.JSONDecodeError:
+                    payload = {}
+                if payload.get("user_id") or payload.get("username"):
+                    event_user_by_uuid[log.device_uuid] = {
+                        "user_id": payload.get("user_id"),
+                        "username": payload.get("username"),
+                    }
     for device in devices:
         if device.last_ip:
             ip_sets_by_uuid.setdefault(device.uuid, set()).add(device.last_ip)
@@ -3312,6 +3388,7 @@ async def list_devices(
                     kamis_by_code,
                     users_by_id,
                     len(ip_sets_by_uuid.get(device.uuid, set())),
+                    event_user_by_uuid,
                 )
                 for device in devices
             ]
@@ -3822,11 +3899,9 @@ async def get_end_user_stats(
         select(func.count(EndUser.id)).where(*base_conditions, EndUser.status == 0)
     ).one()
 
-    user_ids = [
-        user.id
-        for user in session.exec(select(EndUser).where(*base_conditions)).all()
-        if user.id is not None
-    ]
+    filtered_users = session.exec(select(EndUser).where(*base_conditions)).all()
+    _backfill_legacy_points_for_users(session, filtered_users, app_id)
+    user_ids = [user.id for user in filtered_users if user.id is not None]
     authorization_conditions = [
         AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
     ]
@@ -3837,8 +3912,21 @@ async def get_end_user_stats(
     authorization_accounts = session.exec(
         select(AuthorizationAccount).where(*authorization_conditions)
     ).all() if (not app_id or user_ids) else []
+    legacy_times_by_user = _legacy_times_remaining_by_user(
+        session, user_ids, app_id, authorization_accounts
+    )
     with_balance = len([account for account in authorization_accounts if account.points_balance > 0])
     total_balance = sum(account.points_balance for account in authorization_accounts)
+    authorized_user_ids = {
+        account.user_id
+        for account in authorization_accounts
+        if account.user_id is not None and (
+            account.is_lifetime
+            or account.time_expires_at
+            or account.times_balance > 0
+            or account.points_balance > 0
+        )
+    }
     with_authorization = len([
         account
         for account in authorization_accounts
@@ -3846,8 +3934,14 @@ async def get_end_user_stats(
         or account.time_expires_at
         or account.times_balance > 0
         or account.points_balance > 0
+    ]) + len([
+        user_id for user_id, amount in legacy_times_by_user.items()
+        if amount > 0 and user_id not in authorized_user_ids
     ])
-    total_authorized_times = sum(account.times_balance for account in authorization_accounts)
+    total_authorized_times = (
+        sum(account.times_balance for account in authorization_accounts)
+        + sum(legacy_times_by_user.values())
+    )
     total_authorized_points = sum(account.points_balance for account in authorization_accounts)
     permanent_time_authorizations = len([account for account in authorization_accounts if account.is_lifetime])
 
@@ -3903,8 +3997,10 @@ async def list_end_users(
         .limit(page_size)
     ).all()
     total = len(session.exec(count_statement).all())
+    _backfill_legacy_points_for_users(session, users, app_id)
     user_ids = [user.id for user in users]
     authorization_map = {}
+    authorization_accounts = []
     if user_ids:
         auth_statement = select(AuthorizationAccount).where(
             AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
@@ -3915,6 +4011,33 @@ async def list_end_users(
         authorization_accounts = session.exec(auth_statement).all()
         for account in authorization_accounts:
             authorization_map.setdefault(account.user_id, []).append(account)
+    legacy_times_by_user = _legacy_times_remaining_by_user(
+        session,
+        [user_id for user_id in user_ids if user_id is not None],
+        app_id,
+        authorization_accounts,
+    )
+
+    def build_end_user_item(user: EndUser) -> dict:
+        authorization_summary = _authorization_summary_payload(authorization_map.get(user.id))
+        authorization_summary["times_remaining"] += legacy_times_by_user.get(user.id, 0)
+        points_balance = _authorization_points_balance(authorization_map.get(user.id))
+        return {
+            "id": user.id,
+            "app_id": user.app_id or app_id,
+            "username": user.username,
+            "email": user.email,
+            "phone": user.phone,
+            "status": user.status,
+            **authorization_summary,
+            "balance": points_balance,
+            "total_recharged": points_balance,
+            "total_consumed": 0,
+            "created_at": to_api_beijing_iso(user.created_at, naive="civil"),
+            "last_login": to_api_beijing_iso(user.last_login, naive="civil")
+            if user.last_login
+            else None,
+        }
 
     return {
         "success": True,
@@ -3922,25 +4045,7 @@ async def list_end_users(
             "total": total,
             "page": page,
             "page_size": page_size,
-            "items": [
-                {
-                    "id": user.id,
-                    "app_id": user.app_id or app_id,
-                    "username": user.username,
-                    "email": user.email,
-                    "phone": user.phone,
-                    "status": user.status,
-                    **_authorization_summary_payload(authorization_map.get(user.id)),
-                    "balance": _authorization_points_balance(authorization_map.get(user.id)),
-                    "total_recharged": _authorization_points_balance(authorization_map.get(user.id)),
-                    "total_consumed": 0,
-                    "created_at": to_api_beijing_iso(user.created_at, naive="civil"),
-                    "last_login": to_api_beijing_iso(user.last_login, naive="civil")
-                    if user.last_login
-                    else None,
-                }
-                for user in users
-            ]
+            "items": [build_end_user_item(user) for user in users],
         }
     }
 

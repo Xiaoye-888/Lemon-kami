@@ -260,6 +260,7 @@ def grant_points(
     source_kami_code: Optional[str] = None,
     expires_at: Optional[datetime] = None,
     operator: Optional[str] = None,
+    metadata: Optional[dict] = None,
 ) -> dict:
     if amount <= 0:
         raise ValueError("amount must be greater than 0")
@@ -283,6 +284,7 @@ def grant_points(
         account.points_balance,
         source_kami_code=source_kami_code,
         operator=operator,
+        metadata=metadata,
     )
     session.add(account)
     session.commit()

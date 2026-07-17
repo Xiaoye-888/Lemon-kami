@@ -9,6 +9,7 @@ from models import (
     AuthorizationBenefitType,
     AuthorizationOwnerType,
     AuthorizationTransaction,
+    AuthorizationTransactionType,
     EndUser,
     Kami,
     KamiStatus,
@@ -151,13 +152,90 @@ def get_or_create_account(session: Session, user_id: int, lock: bool = False) ->
     return account
 
 
+def _legacy_backfill_exists(session: Session, account_id: int) -> bool:
+    transactions = session.exec(
+        select(AuthorizationTransaction).where(
+            AuthorizationTransaction.account_id == account_id,
+            AuthorizationTransaction.benefit_type == AuthorizationBenefitType.points,
+            AuthorizationTransaction.transaction_type == AuthorizationTransactionType.grant,
+        )
+    ).all()
+    for transaction in transactions:
+        if _metadata_from_json(transaction.metadata_json).get("legacy_point_backfill"):
+            return True
+    return False
+
+
+def _legacy_points_for_app(session: Session, user_id: int, app_id: str) -> tuple[int, str]:
+    now = get_now_naive()
+    lots = session.exec(
+        select(UserPointLot).where(
+            UserPointLot.user_id == user_id,
+            UserPointLot.app_id == app_id,
+            UserPointLot.points_remaining > 0,
+        )
+    ).all()
+    active_lot_balance = sum(
+        lot.points_remaining
+        for lot in lots
+        if lot.expires_at is None or lot.expires_at > now
+    )
+    if active_lot_balance > 0:
+        return active_lot_balance, "user_point_lots"
+
+    user = session.get(EndUser, user_id)
+    legacy_account = session.exec(
+        select(UserPointAccount).where(UserPointAccount.user_id == user_id)
+    ).first()
+    if user and user.app_id == app_id and legacy_account and legacy_account.balance > 0:
+        return legacy_account.balance, "user_point_account"
+    return 0, "none"
+
+
+def backfill_legacy_points_to_authorization_account(
+    session: Session,
+    user_id: int,
+    app_id: Optional[str],
+    username: Optional[str] = None,
+):
+    if not app_id:
+        return None
+    account = get_or_create_authorization_account(
+        session=session,
+        app_id=app_id,
+        owner_type=AuthorizationOwnerType.user.value,
+        user_id=user_id,
+        username=username,
+    )
+    if account.id and _legacy_backfill_exists(session, account.id):
+        return account
+
+    legacy_balance, source = _legacy_points_for_app(session, user_id, app_id)
+    if legacy_balance <= 0:
+        return account
+
+    result = grant_points(
+        session=session,
+        account=account,
+        amount=legacy_balance,
+        operator="legacy_backfill",
+        metadata={
+            "legacy_point_backfill": True,
+            "legacy_source": source,
+            "user_id": user_id,
+            "app_id": app_id,
+        },
+    )
+    session.refresh(account)
+    return account
+
+
 def get_points_balance_summary(session: Session, user_id: int, app_id: Optional[str] = None) -> dict:
     if app_id:
-        auth_account = get_or_create_authorization_account(
+        auth_account = backfill_legacy_points_to_authorization_account(
             session=session,
-            app_id=app_id,
-            owner_type=AuthorizationOwnerType.user.value,
             user_id=user_id,
+            app_id=app_id,
         )
         transactions = session.exec(
             select(AuthorizationTransaction).where(
@@ -284,11 +362,10 @@ def consume_points(
 
     if app_id:
         user = session.get(EndUser, user_id)
-        account = get_or_create_authorization_account(
+        account = backfill_legacy_points_to_authorization_account(
             session=session,
-            app_id=app_id,
-            owner_type=AuthorizationOwnerType.user.value,
             user_id=user_id,
+            app_id=app_id,
             username=user.username if user else None,
         )
         try:
