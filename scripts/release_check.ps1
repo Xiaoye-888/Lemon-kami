@@ -56,15 +56,84 @@ function Assert-Contains($Path, $Expected) {
     }
 }
 
+function Assert-NotContains($Path, $Unexpected) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Missing required file: $Path"
+    }
+    $content = Get-Content -LiteralPath $Path -Raw
+    if ($content -match [regex]::Escape($Unexpected)) {
+        throw "$Path contains forbidden local path fragment: $Unexpected"
+    }
+}
+
 function Invoke-ReleaseBoundaryStaticChecks {
     $rootDockerIgnore = Join-Path $root ".dockerignore"
     $adminDockerIgnore = Join-Path $root "admin\.dockerignore"
+    $workflowPath = Join-Path $root ".github\workflows\ci-cd.yml"
+    $prodComposePath = Join-Path $root "docker-compose.prod.yml"
+    $remoteDeployPath = Join-Path $root "scripts\remote_deploy.sh"
+    $envExamplePath = Join-Path $root ".env.example"
 
     foreach ($pattern in @(".env", "*.db", "logs", "backups", ".venv", ".engramory-memory", "admin")) {
         Assert-Contains $rootDockerIgnore $pattern
     }
     foreach ($pattern in @(".env", "node_modules", "dist")) {
         Assert-Contains $adminDockerIgnore $pattern
+    }
+
+    foreach ($path in @($workflowPath, $prodComposePath, $remoteDeployPath)) {
+        foreach ($fragment in @("D:\", "D:/", "Poject")) {
+            Assert-NotContains $path $fragment
+        }
+    }
+    foreach ($path in @($workflowPath, $remoteDeployPath)) {
+        Assert-NotContains $path "rm -rf"
+    }
+
+    foreach ($pattern in @(
+        "secrets.SERVER_HOST",
+        "secrets.SERVER_USER",
+        "secrets.SERVER_SSH_KEY",
+        "secrets.DEPLOY_APP_DIR",
+        "secrets.DEPLOY_DIR",
+        "Validate deployment secrets",
+        "must be an absolute Linux path when set.",
+        "must not be /.",
+        "must not contain whitespace.",
+        'docker build -t "${BACKEND_IMAGE}:${GITHUB_SHA}" .',
+        'docker build -t "${FRONTEND_IMAGE}:${GITHUB_SHA}" ./admin'
+    )) {
+        Assert-Contains $workflowPath $pattern
+    }
+
+    foreach ($pattern in @(
+        'image: lemon-kami-fastapi:${APP_IMAGE_TAG:-latest}',
+        'image: lemon-kami-frontend:${APP_IMAGE_TAG:-latest}',
+        'DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}',
+        'CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS is required}'
+    )) {
+        Assert-Contains $prodComposePath $pattern
+    }
+
+    foreach ($pattern in @(
+        'APP_DIR="${APP_DIR:-/opt/lemon-kami}"',
+        'DEPLOY_DIR="${DEPLOY_DIR:-/tmp/lemon-kami-deploy}"',
+        'validate_absolute_dir "APP_DIR" "${APP_DIR}"',
+        'validate_absolute_dir "DEPLOY_DIR" "${DEPLOY_DIR}"',
+        'must not contain whitespace.',
+        'docker compose -f docker-compose.prod.yml config >/dev/null'
+    )) {
+        Assert-Contains $remoteDeployPath $pattern
+    }
+
+    foreach ($pattern in @(
+        "APP_IMAGE_TAG=latest",
+        "HTTP_PORT=80",
+        "ENABLE_API_DOCS=false",
+        "CORS_ALLOWED_ORIGINS=http://YOUR_SERVER_IP",
+        "BOOTSTRAP_ADMIN_PASSWORD=CHANGE_ME_INITIAL_ADMIN_PASSWORD"
+    )) {
+        Assert-Contains $envExamplePath $pattern
     }
 
     $directRequestImports = Get-ChildItem -Path (Join-Path $root "admin\src\views") -Filter "*.vue" -File |

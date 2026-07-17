@@ -1,56 +1,100 @@
-# Lemon Kami Server Deployment
+# Lemon Kami GitHub Actions Deployment
 
-This project is not PHP. It is a Python FastAPI backend plus a Vue 3 admin frontend.
+This project deploys as a Docker Compose stack:
 
-## Technology Stack
-
-- Backend: Python 3, FastAPI, Uvicorn, SQLModel, PyMySQL
-- Frontend: Vue 3, Vite, Element Plus, Pinia, Vue Router, Axios
-- Database: MySQL 8 in production; SQLite is only for local development
+- Backend: Python FastAPI and Uvicorn
+- Frontend: Vue 3, Vite, and Nginx
+- Database: MySQL 8
 - Cache: Redis 7
-- Deployment: Docker Compose, Nginx frontend reverse proxy
 
-## Database State
+The local Windows project path is not used by GitHub Actions. Actions checks out the repository on GitHub-hosted Linux runners, builds Docker images there, uploads a deployment bundle over SSH, and runs Docker Compose on the server.
 
-The local SQLite development database has been cleaned. It now keeps only:
+## Server Prerequisites
 
-- one `admin` administrator account
-- built-in API interface document definitions
+Install these on the VPS before the first deployment:
 
-All created business data has been removed: applications, card batches, cards, devices, end users, user authorizations, points records, app interface configs, and event logs.
+- Docker Engine
+- Docker Compose v2 plugin, available as `docker compose`
+- An SSH user that can run Docker commands
+- Write permission for the deployment app directory
 
-The pre-clean backup is stored under `backups/`.
+Default remote paths:
 
-## Deploy With Docker Compose
+- App directory: `/opt/lemon-kami`
+- Temporary upload directory: `/tmp/lemon-kami-deploy`
 
-1. Upload the project directory to the server.
-2. Review `.env` and replace the generated secrets if you want to rotate them.
-3. Start the stack:
+You can override both paths with GitHub Secrets. Custom deployment paths must be absolute Linux paths, must not be `/`, and must not contain whitespace.
 
-```bash
-docker compose up -d --build
-```
+## Required GitHub Secrets
 
-4. Open the admin UI:
+Set these in GitHub repository settings under **Secrets and variables > Actions**.
 
-```text
-http://SERVER_IP/
-```
+SSH and server:
 
-5. Login with the default account, then change the password immediately:
+- `SERVER_HOST`: VPS hostname or IP address
+- `SERVER_USER`: SSH username
+- `SERVER_SSH_KEY`: private key used by GitHub Actions to SSH into the server
 
-```text
-username: admin
-password: admin123
-```
+Runtime:
+
+- `MYSQL_ROOT_PASSWORD`
+- `MYSQL_PASSWORD`
+- `DATABASE_URL`
+- `SECRET_KEY`
+- `CORS_ALLOWED_ORIGINS`
+- `LOGIN_AES_KEY`
+- `BOOTSTRAP_ADMIN_PASSWORD`
+
+Do not commit real secret values to the repository. Use `.env.example` only as a template.
+
+## Optional GitHub Secrets
+
+- `SERVER_PORT`: SSH port, defaults to `22`
+- `DEPLOY_APP_DIR`: server app directory, defaults to `/opt/lemon-kami`
+- `DEPLOY_DIR`: temporary upload directory, defaults to `/tmp/lemon-kami-deploy`
+- `HTTP_PORT`: public frontend port, defaults to `80`
+- `MYSQL_DATABASE`: defaults to `lemon_kami`
+- `MYSQL_USER`: defaults to `lemon_user`
+- `REDIS_URL`: defaults to `redis://redis:6379/0`
+- `ALGORITHM`: defaults to `HS256`
+- `ACCESS_TOKEN_EXPIRE_MINUTES`: defaults to `1440`
+- `DEBUG`: defaults to `false`
+- `ENABLE_API_DOCS`: defaults to `false`
+- `TIMESTAMP_TOLERANCE`: defaults to `60`
+- `NONCE_TTL`: defaults to `60`
+- `RATE_LIMIT_MAX`: defaults to `1000`
+- `RATE_LIMIT_WINDOW`: defaults to `60`
+- `TZ`: defaults to `Asia/Shanghai`
+
+## Deployment Flow
+
+Pushing to `main` triggers `.github/workflows/ci-cd.yml`:
+
+1. Install and test backend dependencies.
+2. Install and build the admin frontend.
+3. Build backend and frontend Docker images.
+4. Save both images into `lemon-kami-images.tar.gz`.
+5. Create `runtime.env` from GitHub Secrets.
+6. Upload the image archive, compose file, runtime env, and remote deploy script over SSH.
+7. Run `scripts/remote_deploy.sh` on the server.
+
+The remote script loads the images, installs `runtime.env` as `${DEPLOY_APP_DIR}/.env`, updates `APP_IMAGE_TAG`, validates the Compose config, and starts the stack.
 
 ## Public URLs
 
 - Admin frontend: `http://SERVER_IP/`
 - API through Nginx: `http://SERVER_IP/api/...`
-- Swagger docs: `http://SERVER_IP/docs`
+- Swagger docs: `http://SERVER_IP/docs` when `ENABLE_API_DOCS=true`
 - Health check: `http://SERVER_IP/health`
 
-## Local Development
+## Manual Server Check
 
-For local SQLite development, copy `.env.local.example` to `.env` and start the backend with Uvicorn. For server deployment, use the MySQL `.env` format.
+On the server, the SSH user should pass:
+
+```bash
+docker --version
+docker compose version
+docker ps
+```
+
+If `docker ps` fails with a permission error, add the SSH user to the Docker group or use a deployment user with Docker access.

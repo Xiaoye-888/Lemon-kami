@@ -9,6 +9,13 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: lemon-kami-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   BACKEND_IMAGE: lemon-kami-fastapi
   FRONTEND_IMAGE: lemon-kami-frontend
@@ -74,6 +81,68 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate deployment secrets
+        shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR }}
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          CORS_ALLOWED_ORIGINS: ${{ secrets.CORS_ALLOWED_ORIGINS }}
+          LOGIN_AES_KEY: ${{ secrets.LOGIN_AES_KEY }}
+          BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+
+          required=(
+            SERVER_HOST
+            SERVER_USER
+            SERVER_SSH_KEY
+            MYSQL_ROOT_PASSWORD
+            MYSQL_PASSWORD
+            DATABASE_URL
+            SECRET_KEY
+            CORS_ALLOWED_ORIGINS
+            LOGIN_AES_KEY
+            BOOTSTRAP_ADMIN_PASSWORD
+          )
+
+          for key in "${required[@]}"; do
+            if [ -z "${!key:-}" ]; then
+              echo "Missing required GitHub secret: ${key}" >&2
+              exit 1
+            fi
+          done
+
+          if [ -n "${SERVER_PORT:-}" ] && ! [[ "${SERVER_PORT}" =~ ^[0-9]+$ ]]; then
+            echo "SERVER_PORT must be a number when set." >&2
+            exit 1
+          fi
+
+          for key in DEPLOY_APP_DIR DEPLOY_DIR; do
+            value="${!key:-}"
+            if [ -n "${value}" ]; then
+              if [[ "${value}" != /* ]]; then
+                echo "${key} must be an absolute Linux path when set." >&2
+                exit 1
+              fi
+              if [ "${value}" = "/" ]; then
+                echo "${key} must not be /." >&2
+                exit 1
+              fi
+              if [[ "${value}" =~ [[:space:]] ]]; then
+                echo "${key} must not contain whitespace." >&2
+                exit 1
+              fi
+            fi
+          done
 
       - name: Build Docker images
         run: |
@@ -151,36 +220,58 @@ jobs:
 
       - name: Prepare SSH
         shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
         run: |
           set -Eeuo pipefail
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/lemon_kami_deploy_key
+          printf '%s\n' "${SERVER_SSH_KEY}" > ~/.ssh/lemon_kami_deploy_key
           chmod 600 ~/.ssh/lemon_kami_deploy_key
-          SERVER_PORT="${{ secrets.SERVER_PORT }}"
           SERVER_PORT="${SERVER_PORT:-22}"
-          ssh-keyscan -p "${SERVER_PORT}" "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -p "${SERVER_PORT}" "${SERVER_HOST}" >> ~/.ssh/known_hosts
 
       - name: Upload deployment bundle
         shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
         run: |
           set -Eeuo pipefail
-          SERVER_PORT="${{ secrets.SERVER_PORT }}"
           SERVER_PORT="${SERVER_PORT:-22}"
-          REMOTE="${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}"
-          ssh -i ~/.ssh/lemon_kami_deploy_key -p "${SERVER_PORT}" "${REMOTE}" "mkdir -p /tmp/lemon-kami-deploy"
+          DEPLOY_DIR="${DEPLOY_DIR:-/tmp/lemon-kami-deploy}"
+          REMOTE="${SERVER_USER}@${SERVER_HOST}"
+          printf -v MKDIR_CMD 'mkdir -p %q' "${DEPLOY_DIR}"
+          ssh -i ~/.ssh/lemon_kami_deploy_key -p "${SERVER_PORT}" "${REMOTE}" "${MKDIR_CMD}"
           scp -i ~/.ssh/lemon_kami_deploy_key -P "${SERVER_PORT}" \
             lemon-kami-images.tar.gz \
             docker-compose.prod.yml \
             runtime.env \
             scripts/remote_deploy.sh \
-            "${REMOTE}:/tmp/lemon-kami-deploy/"
+            "${REMOTE}:${DEPLOY_DIR}/"
 
       - name: Deploy on server
         shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR }}
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
         run: |
           set -Eeuo pipefail
-          SERVER_PORT="${{ secrets.SERVER_PORT }}"
           SERVER_PORT="${SERVER_PORT:-22}"
-          REMOTE="${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}"
+          DEPLOY_APP_DIR="${DEPLOY_APP_DIR:-/opt/lemon-kami}"
+          DEPLOY_DIR="${DEPLOY_DIR:-/tmp/lemon-kami-deploy}"
+          REMOTE="${SERVER_USER}@${SERVER_HOST}"
+          printf -v DEPLOY_CMD 'chmod +x %q && APP_IMAGE_TAG=%q APP_DIR=%q DEPLOY_DIR=%q %q' \
+            "${DEPLOY_DIR}/remote_deploy.sh" \
+            "${GITHUB_SHA}" \
+            "${DEPLOY_APP_DIR}" \
+            "${DEPLOY_DIR}" \
+            "${DEPLOY_DIR}/remote_deploy.sh"
           ssh -i ~/.ssh/lemon_kami_deploy_key -p "${SERVER_PORT}" "${REMOTE}" \
-            "chmod +x /tmp/lemon-kami-deploy/remote_deploy.sh && APP_IMAGE_TAG='${GITHUB_SHA}' /tmp/lemon-kami-deploy/remote_deploy.sh"
+            "${DEPLOY_CMD}"
