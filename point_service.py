@@ -6,6 +6,9 @@ from typing import Optional
 from sqlmodel import Session, select
 
 from models import (
+    AuthorizationBenefitType,
+    AuthorizationOwnerType,
+    AuthorizationTransaction,
     EndUser,
     Kami,
     KamiStatus,
@@ -16,6 +19,11 @@ from models import (
     UserPointLot,
     get_now_naive,
     is_kami_code_expired,
+)
+from authorization_service import (
+    consume_points as consume_authorization_points,
+    get_or_create_authorization_account,
+    grant_points,
 )
 
 
@@ -143,7 +151,31 @@ def get_or_create_account(session: Session, user_id: int, lock: bool = False) ->
     return account
 
 
-def get_points_balance_summary(session: Session, user_id: int) -> dict:
+def get_points_balance_summary(session: Session, user_id: int, app_id: Optional[str] = None) -> dict:
+    if app_id:
+        auth_account = get_or_create_authorization_account(
+            session=session,
+            app_id=app_id,
+            owner_type=AuthorizationOwnerType.user.value,
+            user_id=user_id,
+        )
+        transactions = session.exec(
+            select(AuthorizationTransaction).where(
+                AuthorizationTransaction.account_id == auth_account.id,
+                AuthorizationTransaction.benefit_type == AuthorizationBenefitType.points,
+            )
+        ).all()
+        total_recharged = sum(tx.amount for tx in transactions if tx.amount > 0)
+        total_consumed = -sum(tx.amount for tx in transactions if tx.amount < 0)
+        return {
+            "balance": auth_account.points_balance,
+            "available_balance": auth_account.points_balance,
+            "ledger_balance": auth_account.points_balance,
+            "expired_unsettled": 0,
+            "total_recharged": total_recharged,
+            "total_consumed": total_consumed,
+        }
+
     account = get_or_create_account(session, user_id)
     now = get_now_naive()
     lots = session.exec(
@@ -201,13 +233,13 @@ def redeem_points_kami(session: Session, user: EndUser, kami_code: str) -> dict:
     if not kami.points_amount or kami.points_amount <= 0:
         raise PointServiceError("invalid_points_amount", "Kami has no valid points amount")
 
-    account = get_or_create_account(session, user.id, lock=True)
-    balance_before = account.balance
-    balance_after = balance_before + kami.points_amount
-
-    account.balance = balance_after
-    account.total_recharged += kami.points_amount
-    account.updated_at = now
+    account = get_or_create_authorization_account(
+        session=session,
+        app_id=kami.app_id,
+        owner_type=AuthorizationOwnerType.user.value,
+        user_id=user.id,
+        username=user.username,
+    )
 
     kami.status = KamiStatus.active
     kami.bind_uuid = f"user:{user.id}"
@@ -217,42 +249,22 @@ def redeem_points_kami(session: Session, user: EndUser, kami_code: str) -> dict:
     if not user.app_id:
         user.app_id = kami.app_id
 
-    transaction_id = _new_transaction_id()
-    tx = PointTransaction(
-        transaction_id=transaction_id,
-        user_id=user.id,
-        app_id=kami.app_id,
-        kami_code=kami.kami_code,
-        transaction_type=PointTransactionType.recharge,
+    result = grant_points(
+        session=session,
+        account=account,
         amount=kami.points_amount,
-        balance_before=balance_before,
-        balance_after=balance_after,
-        remark="kami redeem",
-        created_at=now,
+        source_kami_code=kami.kami_code,
     )
 
-    session.add(account)
     session.add(user)
     session.add(kami)
-    session.add(tx)
-    _create_lot(
-        session,
-        user_id=user.id,
-        transaction_id=transaction_id,
-        amount=kami.points_amount,
-        app_id=kami.app_id,
-        kami_code=kami.kami_code,
-        expires_at=_expires_at_for_kami(kami, now),
-        now=now,
-    )
     session.commit()
     session.refresh(account)
-    session.refresh(tx)
 
     return {
-        "transaction_id": tx.transaction_id,
+        "transaction_id": result["transaction_id"],
         "amount": kami.points_amount,
-        "balance": account.balance,
+        "balance": account.points_balance,
     }
 
 
@@ -269,6 +281,38 @@ def consume_points(
         raise PointServiceError("invalid_amount", "Amount must be greater than zero")
     if not biz_id:
         raise PointServiceError("missing_biz_id", "biz_id is required")
+
+    if app_id:
+        user = session.get(EndUser, user_id)
+        account = get_or_create_authorization_account(
+            session=session,
+            app_id=app_id,
+            owner_type=AuthorizationOwnerType.user.value,
+            user_id=user_id,
+            username=user.username if user else None,
+        )
+        try:
+            result = consume_authorization_points(
+                session=session,
+                account=account,
+                amount=amount,
+                biz_id=biz_id,
+                metadata=metadata,
+            )
+        except ValueError as error:
+            message = str(error)
+            if "different amount" in message:
+                raise PointServiceError("biz_id_conflict", message)
+            if "insufficient" in message:
+                raise PointServiceError("insufficient_balance", "Insufficient points balance")
+            raise PointServiceError("consume_failed", message)
+        return {
+            "transaction_id": result["transaction_id"],
+            "amount": amount,
+            "balance": result["points_balance"],
+            "balance_after": result["points_balance"],
+            "idempotent": result["idempotent"],
+        }
 
     existing = session.exec(
         select(PointTransaction).where(

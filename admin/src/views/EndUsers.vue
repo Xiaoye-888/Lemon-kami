@@ -56,9 +56,9 @@
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="username" label="用户名" min-width="140" />
         <el-table-column prop="email" label="邮箱" min-width="180" />
-        <el-table-column prop="time_authorization" label="时间授权" width="170" />
-        <el-table-column prop="times_remaining" label="可用次数" width="110" />
-        <el-table-column prop="points_remaining" label="可用积分" width="110" />
+        <el-table-column prop="time_authorization" label="时间余额" width="170" />
+        <el-table-column prop="times_remaining" label="次数余额" width="110" />
+        <el-table-column prop="points_remaining" label="积分余额" width="110" />
         <el-table-column prop="status" label="状态" width="90">
           <template #default="{ row }">
             <el-tag :type="row.status === 1 ? 'success' : 'danger'">
@@ -163,6 +163,9 @@
         <el-table-column label="状态" width="90">
           <template #default="{ row }">{{ getStatusText(row.status) }}</template>
         </el-table-column>
+        <el-table-column label="绑定关系" width="120">
+          <template #default="{ row }">{{ row.binding_relation || '-' }}</template>
+        </el-table-column>
         <el-table-column label="权益配置" width="130">
           <template #default="{ row }">{{ getCardQuotaText(row) }}</template>
         </el-table-column>
@@ -170,7 +173,9 @@
           <template #default="{ row }">{{ getRemainingBenefitText(row) }}</template>
         </el-table-column>
         <el-table-column label="机器码限制" width="130">
-          <template #default="{ row }">{{ getMachineBindModeText(row.machine_bind_mode, row.max_bind_devices) }}</template>
+          <template #default="{ row }">
+            {{ row.machine_bind_mode_text || getMachineBindModeText(row.machine_bind_mode, row.max_bind_devices) }}
+          </template>
         </el-table-column>
         <el-table-column label="绑定设备" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ getBoundDeviceText(row) }}</template>
@@ -270,7 +275,7 @@ const statItems = computed(() => [
   { label: '禁用用户', value: stats.value.disabled },
   { label: '有授权用户', value: stats.value.with_authorization ?? stats.value.with_balance },
   {
-    label: '次数/积分余量',
+    label: '次数/积分余额',
     value: `${stats.value.total_authorized_times ?? 0} / ${stats.value.total_authorized_points ?? stats.value.total_balance ?? 0}`
   }
 ])
@@ -446,7 +451,7 @@ const getCardQuotaText = (row) => {
 }
 
 const getRemainingBenefitText = (row) => {
-  if (row.kami_type === 'points') return `${row.points_amount || 0}积分`
+  if (row.kami_type === 'points') return `${row.points_remaining ?? row.point_remaining_balance ?? row.points_amount ?? 0}积分`
   if (row.kami_type === 'times') return `${row.times_remaining ?? 0}次`
   if (row.kami_type === 'lifetime') return '永久'
   return row.expire_time ? formatBeijingTime(row.expire_time) : getValidityText(row)

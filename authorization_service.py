@@ -289,3 +289,78 @@ def grant_points(
     session.refresh(account)
     return {"transaction_id": tx.transaction_id, "points_balance": account.points_balance}
 
+
+def consume_points(
+    session: Session,
+    account: AuthorizationAccount,
+    amount: int,
+    biz_id: str,
+    metadata: Optional[dict] = None,
+) -> dict:
+    if amount <= 0:
+        raise ValueError("amount must be greater than 0")
+    if not biz_id:
+        raise ValueError("biz_id is required")
+    existing = session.exec(
+        select(AuthorizationTransaction).where(
+            AuthorizationTransaction.account_id == account.id,
+            AuthorizationTransaction.transaction_type == AuthorizationTransactionType.consume,
+            AuthorizationTransaction.benefit_type == AuthorizationBenefitType.points,
+            AuthorizationTransaction.biz_id == biz_id,
+        )
+    ).first()
+    if existing:
+        if existing.amount != -amount:
+            raise ValueError("biz_id was used with a different amount")
+        return {
+            "transaction_id": existing.transaction_id,
+            "points_balance": existing.balance_after,
+            "idempotent": True,
+        }
+    if account.points_balance < amount:
+        raise ValueError("insufficient points balance")
+
+    now = _now()
+    remaining_to_consume = amount
+    lots = session.exec(
+        select(AuthorizationLot)
+        .where(
+            AuthorizationLot.account_id == account.id,
+            AuthorizationLot.benefit_type == AuthorizationBenefitType.points,
+            AuthorizationLot.amount_remaining > 0,
+        )
+        .order_by(AuthorizationLot.expires_at.is_(None), AuthorizationLot.expires_at, AuthorizationLot.id)
+    ).all()
+    for lot in lots:
+        if lot.expires_at is not None and lot.expires_at <= now:
+            continue
+        if remaining_to_consume <= 0:
+            break
+        take = min(lot.amount_remaining, remaining_to_consume)
+        lot.amount_remaining -= take
+        lot.updated_at = now
+        remaining_to_consume -= take
+        session.add(lot)
+    if remaining_to_consume > 0:
+        raise ValueError("insufficient points lots")
+
+    account.points_balance -= amount
+    account.updated_at = now
+    tx = _record_transaction(
+        session,
+        account,
+        AuthorizationTransactionType.consume,
+        AuthorizationBenefitType.points,
+        -amount,
+        account.points_balance,
+        biz_id=biz_id,
+        metadata=metadata,
+    )
+    session.add(account)
+    session.commit()
+    session.refresh(account)
+    return {
+        "transaction_id": tx.transaction_id,
+        "points_balance": account.points_balance,
+        "idempotent": False,
+    }

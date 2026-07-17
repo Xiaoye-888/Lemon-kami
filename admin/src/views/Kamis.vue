@@ -120,9 +120,12 @@
             <el-tag :type="getStatusType(row.status)" round>{{ getStatusText(row.status) }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="绑定关系" width="120">
+          <template #default="{ row }">{{ row.binding_relation || '-' }}</template>
+        </el-table-column>
         <el-table-column label="机器码绑定" width="150">
           <template #default="{ row }">
-            {{ getMachineBindModeText(row.machine_bind_mode, row.max_bind_devices) }}
+            {{ row.machine_bind_mode_text || getMachineBindModeText(row.machine_bind_mode, row.max_bind_devices) }}
             <span v-if="row.device_bind_count">({{ row.device_bind_count }})</span>
           </template>
         </el-table-column>
@@ -635,7 +638,7 @@ const getCardQuotaText = (row) => {
 }
 
 const getRemainingBenefitText = (row) => {
-  if (row.kami_type === 'points') return `${row.point_remaining_balance ?? row.points_amount ?? 0}积分`
+  if (row.kami_type === 'points') return `${row.points_remaining ?? row.point_remaining_balance ?? row.points_amount ?? 0}积分`
   if (row.kami_type === 'times') return `${row.times_remaining ?? 0}次`
   if (row.kami_type === 'lifetime') return '永久'
   return row.expire_time ? formatBeijingTime(row.expire_time) : '-'

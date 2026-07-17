@@ -36,11 +36,21 @@
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="uuid" label="设备UUID" min-width="200" show-overflow-tooltip />
         <el-table-column prop="fingerprint" label="指纹" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="username" label="用户名" width="140">
+          <template #default="{ row }">{{ row.username || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="binding_relation" label="绑定关系" width="120">
+          <template #default="{ row }">{{ row.binding_relation || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="machine_bind_mode_text" label="设备策略" width="130">
+          <template #default="{ row }">{{ row.machine_bind_mode_text || '-' }}</template>
+        </el-table-column>
         <el-table-column prop="last_ip" label="IP地址" width="150" />
+        <el-table-column prop="ip_count" label="IP数量" width="100" />
         <el-table-column prop="risk_level" label="风险等级" width="120">
           <template #default="{ row }">
             <el-tag :type="getRiskType(row.risk_level)">
-              {{ getRiskText(row.risk_level) }}
+              {{ getRiskText(row) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -130,8 +140,8 @@ const loadDevices = async () => {
   loading.value = true
   try {
     const res = await getDevices(queryParams)
-    devices.value = res.data.items
-    total.value = res.data.items.length
+    devices.value = res.data.items || []
+    total.value = res.data.total ?? devices.value.length
   } catch (error) {
     console.error('加载失败:', error)
     ElMessage.error('加载设备列表失败')
@@ -166,7 +176,9 @@ const updateRisk = async (row, level) => {
   }
 }
 
-const getRiskText = (level) => {
+const getRiskText = (row) => {
+  if (row?.risk_level_text) return row.risk_level_text
+  const level = row?.risk_level
   const map = { 0: '正常', 1: '警告', 2: '黑名单' }
   return map[level] || '未知'
 }

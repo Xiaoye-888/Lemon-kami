@@ -508,6 +508,14 @@
               <el-tag :type="getKamiStatusType(row)" round>{{ getKamiStatusText(row) }}</el-tag>
             </template>
           </el-table-column>
+          <el-table-column label="绑定关系" width="120">
+            <template #default="{ row }">{{ row.binding_relation || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="设备策略" width="130">
+            <template #default="{ row }">
+              {{ row.machine_bind_mode_text || getMachineBindModeText(row.machine_bind_mode, row.max_bind_devices) }}
+            </template>
+          </el-table-column>
           <el-table-column label="创建时间" width="180">
             <template #default="{ row }">{{ row.created_at ? formatBeijingTime(row.created_at) : '-' }}</template>
           </el-table-column>
@@ -563,7 +571,7 @@
             </el-table-column>
             <el-table-column label="机器码限制" width="170">
               <template #default="{ row }">
-                {{ getMachineBindModeText(row.machine_bind_mode, row.max_bind_devices) }}
+                {{ row.machine_bind_mode_text || getMachineBindModeText(row.machine_bind_mode, row.max_bind_devices) }}
               </template>
             </el-table-column>
             <el-table-column label="绑定设备" min-width="160" show-overflow-tooltip>
@@ -1744,7 +1752,7 @@ const getKamiUserText = (row) => (
   '-'
 )
 
-const getPointsRemaining = (row) => row?.point_remaining_balance ?? row?.points_amount ?? 0
+const getPointsRemaining = (row) => row?.points_remaining ?? row?.point_remaining_balance ?? row?.points_amount ?? 0
 const getPointsRedeemed = (row) => Math.max((row?.points_amount || 0) - getPointsRemaining(row), 0)
 const getTimesConsumed = (row) => Math.max((row?.times_total || 0) - (row?.times_remaining ?? 0), 0)
 const isKamiExpired = (row) => row?.is_code_expired || row?.display_status === 'expired'

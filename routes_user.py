@@ -10,7 +10,17 @@ from config import settings
 from database import get_session
 from datetime_utils import to_api_beijing_iso
 from interface_service import require_app_interface_enabled
-from models import App, EndUser, Kami, PointTransaction, UserPointAccount, UserPointLot, get_now
+from models import (
+    App,
+    AuthorizationAccount,
+    AuthorizationBenefitType,
+    AuthorizationLot,
+    AuthorizationOwnerType,
+    AuthorizationTransaction,
+    EndUser,
+    Kami,
+    get_now,
+)
 from point_service import (
     PointServiceError,
     consume_points,
@@ -207,8 +217,7 @@ async def get_points_balance(
     session: Session = Depends(get_session),
 ):
     require_app_interface_enabled(session, current_user.app_id, "points.balance")
-    account = get_or_create_account(session, current_user.id)
-    summary = get_points_balance_summary(session, current_user.id)
+    summary = get_points_balance_summary(session, current_user.id, current_user.app_id)
     session.commit()
     return {
         "success": True,
@@ -218,8 +227,8 @@ async def get_points_balance(
             "available_balance": summary["available_balance"],
             "ledger_balance": summary["ledger_balance"],
             "expired_unsettled": summary["expired_unsettled"],
-            "total_recharged": account.total_recharged,
-            "total_consumed": account.total_consumed,
+            "total_recharged": summary["total_recharged"],
+            "total_consumed": summary["total_consumed"],
         },
     }
 
@@ -230,10 +239,8 @@ async def redeem_points(
     current_user: EndUser = Depends(get_current_end_user),
     session: Session = Depends(get_session),
 ):
-    target_app_id = current_user.app_id
-    if not target_app_id:
-        kami = session.exec(select(Kami).where(Kami.kami_code == payload.kami_code)).first()
-        target_app_id = kami.app_id if kami else None
+    kami = session.exec(select(Kami).where(Kami.kami_code == payload.kami_code)).first()
+    target_app_id = kami.app_id if kami else current_user.app_id
     require_app_interface_enabled(session, target_app_id, "points.redeem")
     try:
         result = redeem_points_kami(session, current_user, payload.kami_code)
@@ -288,20 +295,32 @@ async def list_user_point_lots(
     current_user: EndUser = Depends(get_current_end_user),
     session: Session = Depends(get_session),
 ):
-    statement = select(UserPointLot).where(UserPointLot.user_id == current_user.id)
-    if only_available:
-        statement = statement.where(UserPointLot.points_remaining > 0)
-    lots = session.exec(statement.order_by(UserPointLot.id.desc())).all()
+    account = session.exec(
+        select(AuthorizationAccount).where(
+            AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
+            AuthorizationAccount.user_id == current_user.id,
+            AuthorizationAccount.app_id == current_user.app_id,
+        )
+    ).first()
+    lots = []
+    if account:
+        statement = select(AuthorizationLot).where(
+            AuthorizationLot.account_id == account.id,
+            AuthorizationLot.benefit_type == AuthorizationBenefitType.points,
+        )
+        if only_available:
+            statement = statement.where(AuthorizationLot.amount_remaining > 0)
+        lots = session.exec(statement.order_by(AuthorizationLot.id.desc())).all()
 
     return {
         "success": True,
         "data": [
             {
-                "source_transaction_id": item.source_transaction_id,
-                "app_id": item.app_id,
-                "kami_code": item.kami_code,
-                "points_total": item.points_total,
-                "points_remaining": item.points_remaining,
+                "source_transaction_id": None,
+                "app_id": current_user.app_id,
+                "kami_code": item.source_kami_code,
+                "points_total": item.amount_total,
+                "points_remaining": item.amount_remaining,
                 "expires_at": to_api_beijing_iso(item.expires_at, naive="civil") if item.expires_at else None,
                 "created_at": to_api_beijing_iso(item.created_at, naive="civil"),
             }
@@ -318,13 +337,26 @@ async def list_user_point_transactions(
     session: Session = Depends(get_session),
 ):
     require_app_interface_enabled(session, current_user.app_id, "points.transactions")
-    base = select(PointTransaction).where(PointTransaction.user_id == current_user.id)
-    all_items = session.exec(base).all()
-    items = session.exec(
-        base.order_by(PointTransaction.id.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    ).all()
+    account = session.exec(
+        select(AuthorizationAccount).where(
+            AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
+            AuthorizationAccount.user_id == current_user.id,
+            AuthorizationAccount.app_id == current_user.app_id,
+        )
+    ).first()
+    all_items = []
+    items = []
+    if account:
+        base = select(AuthorizationTransaction).where(
+            AuthorizationTransaction.account_id == account.id,
+            AuthorizationTransaction.benefit_type == AuthorizationBenefitType.points,
+        )
+        all_items = session.exec(base).all()
+        items = session.exec(
+            base.order_by(AuthorizationTransaction.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
 
     return {
         "success": True,
@@ -337,11 +369,11 @@ async def list_user_point_transactions(
                     "transaction_id": item.transaction_id,
                     "transaction_type": item.transaction_type.value,
                     "amount": item.amount,
-                    "balance_before": item.balance_before,
+                    "balance_before": item.balance_after - item.amount,
                     "balance_after": item.balance_after,
                     "biz_id": item.biz_id,
-                    "kami_code": item.kami_code,
-                    "remark": item.remark,
+                    "kami_code": item.source_kami_code,
+                    "remark": None,
                     "metadata": item.metadata_json,
                     "created_at": to_api_beijing_iso(item.created_at, naive="civil"),
                 }

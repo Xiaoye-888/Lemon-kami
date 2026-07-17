@@ -26,7 +26,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="330" fixed="right">
+        <el-table-column label="操作" width="380" fixed="right">
           <template #default="{ row }">
             <div class="actions">
               <el-button
@@ -39,6 +39,7 @@
               <el-button size="small" type="primary" @click="goAppInterfaces(row)">
                 接口列表
               </el-button>
+              <el-button size="small" @click="showEditDialog(row)">改名</el-button>
               <el-button size="small" type="info" @click="viewDetail(row)">详情</el-button>
               <el-button size="small" type="danger" @click="handleDelete(row)">删除</el-button>
             </div>
@@ -56,6 +57,18 @@
       <template #footer>
         <el-button @click="createDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="creating" @click="handleCreate">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="editDialogVisible" title="修改应用名称" width="500px">
+      <el-form :model="editForm" label-width="100px">
+        <el-form-item label="应用名称" required>
+          <el-input v-model="editForm.name" placeholder="请输入应用名称" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="updating" @click="handleUpdateName">保存</el-button>
       </template>
     </el-dialog>
 
@@ -81,18 +94,25 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import { createApp, deleteApp, getApps, updateAppStatus } from '../api/admin'
+import { createApp, deleteApp, getApps, updateApp, updateAppStatus } from '../api/admin'
 import { formatBeijingTime } from '../utils/datetime'
 
 const router = useRouter()
 const loading = ref(false)
 const creating = ref(false)
+const updating = ref(false)
 const apps = ref([])
 const createDialogVisible = ref(false)
+const editDialogVisible = ref(false)
 const detailDialogVisible = ref(false)
 const currentApp = ref(null)
 
 const createForm = reactive({
+  name: ''
+})
+
+const editForm = reactive({
+  app_id: '',
   name: ''
 })
 
@@ -130,6 +150,33 @@ const handleCreate = async () => {
     console.error('创建失败:', error)
   } finally {
     creating.value = false
+  }
+}
+
+const showEditDialog = (row) => {
+  editForm.app_id = row.app_id
+  editForm.name = row.name || ''
+  editDialogVisible.value = true
+}
+
+const handleUpdateName = async () => {
+  const name = editForm.name.trim()
+  if (!name) {
+    ElMessage.warning('请输入应用名称')
+    return
+  }
+
+  updating.value = true
+  try {
+    await updateApp(editForm.app_id, { name })
+    ElMessage.success('应用名称已更新')
+    editDialogVisible.value = false
+    await loadApps()
+  } catch (error) {
+    console.error('修改应用名称失败:', error)
+    ElMessage.error('修改应用名称失败')
+  } finally {
+    updating.value = false
   }
 }
 

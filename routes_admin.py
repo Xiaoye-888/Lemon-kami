@@ -138,8 +138,17 @@ def _cleanup_used_times_kamis(session: Session, app_id: str):
         session.commit()
 
 
-def _authorization_summary_payload(account: Optional[AuthorizationAccount]) -> dict:
-    if not account:
+def _as_authorization_accounts(account_or_accounts) -> list[AuthorizationAccount]:
+    if not account_or_accounts:
+        return []
+    if isinstance(account_or_accounts, list):
+        return account_or_accounts
+    return [account_or_accounts]
+
+
+def _authorization_summary_payload(account_or_accounts) -> dict:
+    accounts = _as_authorization_accounts(account_or_accounts)
+    if not accounts:
         return {
             "authorization_account_id": None,
             "time_authorization": "-",
@@ -147,6 +156,23 @@ def _authorization_summary_payload(account: Optional[AuthorizationAccount]) -> d
             "times_remaining": 0,
             "points_remaining": 0,
         }
+    if len(accounts) > 1:
+        is_lifetime = any(account.is_lifetime for account in accounts)
+        expiries = [account.time_expires_at for account in accounts if account.time_expires_at]
+        if is_lifetime:
+            time_authorization = "永久"
+        elif expiries:
+            time_authorization = to_api_beijing_iso(max(expiries), naive="civil")
+        else:
+            time_authorization = "-"
+        return {
+            "authorization_account_id": None,
+            "time_authorization": time_authorization,
+            "is_lifetime": is_lifetime,
+            "times_remaining": sum(account.times_balance for account in accounts),
+            "points_remaining": sum(account.points_balance for account in accounts),
+        }
+    account = accounts[0]
     if account.is_lifetime:
         time_authorization = "永久"
     elif account.time_expires_at:
@@ -160,6 +186,10 @@ def _authorization_summary_payload(account: Optional[AuthorizationAccount]) -> d
         "times_remaining": account.times_balance,
         "points_remaining": account.points_balance,
     }
+
+
+def _authorization_points_balance(account_or_accounts) -> int:
+    return sum(account.points_balance for account in _as_authorization_accounts(account_or_accounts))
 
 
 def check_app_permission(session: Session, app_id: str, username: str, is_admin: bool) -> bool:
@@ -956,11 +986,15 @@ async def list_apps(
 @router.put("/apps/{app_id}", summary="更新应用状态")
 async def update_app_status(
     app_id: str,
-    status: int,
+    status: Optional[int] = Query(None),
+    name: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
     """启用或禁用应用（非 admin 只能操作自己的应用）"""
+    if status is None and name is None:
+        raise HTTPException(status_code=400, detail="No update fields provided")
+
     statement = select(App).where(App.app_id == app_id)
     app = session.exec(statement).first()
 
@@ -973,11 +1007,44 @@ async def update_app_status(
     if not check_app_permission(session, app_id, username, is_admin):
         raise HTTPException(status_code=403, detail="无权操作此应用")
 
-    app.status = status
+    changed_fields = []
+    if status is not None:
+        if status not in (0, 1):
+            raise HTTPException(status_code=400, detail="Invalid status")
+        app.status = status
+        changed_fields.append("status")
+    if name is not None:
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise HTTPException(status_code=400, detail="App name cannot be empty")
+        app.name = normalized_name
+        changed_fields.append("name")
+
     session.add(app)
     session.commit()
+    session.refresh(app)
 
-    return {"success": True, "message": "应用状态已更新"}
+    log_admin_action(
+        session=session,
+        username=username,
+        event_type="app_update",
+        app_id=app.app_id,
+        payload={"fields": changed_fields, "name": app.name, "status": app.status},
+        message=f"用户 {username} 更新了应用 {app.app_id}",
+    )
+
+    return {
+        "success": True,
+        "message": "应用已更新",
+        "data": {
+            "id": app.id,
+            "app_id": app.app_id,
+            "name": app.name,
+            "created_by": app.created_by,
+            "created_at": to_api_beijing_iso(app.created_at, naive="civil") if app.created_at else None,
+            "status": app.status,
+        },
+    }
 
 
 @router.post("/interfaces", summary="新增接口")
@@ -1381,6 +1448,33 @@ def get_user_bind_mode_value(mode) -> str:
     return mode.value if hasattr(mode, "value") else str(mode)
 
 
+def get_machine_bind_mode_text(mode) -> str:
+    value = get_machine_bind_mode_value(mode)
+    return {
+        MachineBindMode.no_limit.value: "不限制",
+        MachineBindMode.one_card_one_device.value: "一卡一机",
+        MachineBindMode.one_card_multi_device.value: "一卡多机",
+    }.get(value, value)
+
+
+def get_binding_relation_text(kami: Optional[Any]) -> str:
+    if kami and getattr(kami, "redeemed_by_user_id", None):
+        return "用户授权"
+    if kami and get_authorization_owner_value(kami.authorization_owner) == AuthorizationOwnerMode.user.value:
+        return "用户授权"
+    return "设备授权"
+
+
+def get_device_risk_payload(manual_risk_level: int, ip_count: int) -> dict:
+    if manual_risk_level >= 2:
+        return {"risk_level": 2, "risk_level_text": "黑名单"}
+    if ip_count > 5:
+        return {"risk_level": 2, "risk_level_text": "高风险"}
+    if ip_count >= 3 or manual_risk_level == 1:
+        return {"risk_level": 1, "risk_level_text": "警告"}
+    return {"risk_level": 0, "risk_level_text": "正常"}
+
+
 def _code_validity_text(days: Optional[int]) -> str:
     return f"生成后 {days} 天" if days else "不限期"
 
@@ -1516,8 +1610,10 @@ def _kami_spec_payload(spec: KamiSpec, stats: Optional[dict] = None) -> dict:
         "time_unit": spec.time_unit,
         "times_total": spec.times_total,
         "machine_bind_mode": get_machine_bind_mode_value(spec.machine_bind_mode),
+        "machine_bind_mode_text": get_machine_bind_mode_text(spec.machine_bind_mode),
         "max_bind_devices": spec.max_bind_devices,
         "authorization_owner": get_authorization_owner_value(spec.authorization_owner),
+        "binding_relation": get_binding_relation_text(spec),
         "user_bind_mode": get_user_bind_mode_value(spec.user_bind_mode),
         "status": spec.status,
         "sort_order": spec.sort_order,
@@ -1563,8 +1659,10 @@ def _kami_batch_payload(batch: KamiBatch) -> dict:
         "code_valid_days": batch.code_valid_days,
         "code_validity_text": _code_validity_text(batch.code_valid_days),
         "machine_bind_mode": get_machine_bind_mode_value(batch.machine_bind_mode),
+        "machine_bind_mode_text": get_machine_bind_mode_text(batch.machine_bind_mode),
         "max_bind_devices": batch.max_bind_devices,
         "authorization_owner": get_authorization_owner_value(batch.authorization_owner),
+        "binding_relation": get_binding_relation_text(batch),
         "user_bind_mode": get_user_bind_mode_value(batch.user_bind_mode),
         "status": batch.status,
         "remark": batch.remark,
@@ -2530,7 +2628,11 @@ async def list_kamis(
         users = session.exec(select(EndUser).where(EndUser.id.in_(user_ids))).all()
         users_by_id = {user.id: user for user in users}
         accounts = session.exec(
-            select(UserPointAccount).where(UserPointAccount.user_id.in_(user_ids))
+            select(AuthorizationAccount).where(
+                AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
+                AuthorizationAccount.app_id == app_id,
+                AuthorizationAccount.user_id.in_(user_ids),
+            )
         ).all()
         accounts_by_user_id = {account.user_id: account for account in accounts}
 
@@ -2621,8 +2723,10 @@ async def list_kamis(
                     if last_consume_at_by_code.get(kami.kami_code)
                     else None,
                     "machine_bind_mode": get_machine_bind_mode_value(kami.machine_bind_mode),
+                    "machine_bind_mode_text": get_machine_bind_mode_text(kami.machine_bind_mode),
                     "max_bind_devices": kami.max_bind_devices,
                     "authorization_owner": get_authorization_owner_value(kami.authorization_owner),
+                    "binding_relation": get_binding_relation_text(kami),
                     "user_bind_mode": get_user_bind_mode_value(kami.user_bind_mode),
                     "device_bind_count": binding_count_by_code.get(kami.kami_code, 0)
                     or (1 if kami.bind_uuid else 0),
@@ -2641,12 +2745,17 @@ async def list_kamis(
                         else None
                     ),
                     "point_balance": (
-                        accounts_by_user_id[kami.redeemed_by_user_id].balance
+                        accounts_by_user_id[kami.redeemed_by_user_id].points_balance
                         if kami.redeemed_by_user_id in accounts_by_user_id
                         else None
                     ),
                     "point_remaining_balance": (
-                        accounts_by_user_id[kami.redeemed_by_user_id].balance
+                        accounts_by_user_id[kami.redeemed_by_user_id].points_balance
+                        if kami.redeemed_by_user_id in accounts_by_user_id
+                        else None
+                    ),
+                    "points_remaining": (
+                        accounts_by_user_id[kami.redeemed_by_user_id].points_balance
                         if kami.redeemed_by_user_id in accounts_by_user_id
                         else None
                     ),
@@ -3081,6 +3190,32 @@ async def list_event_logs(
 
 # ==================== 设备管理接口 ====================
 
+def _admin_device_payload(
+    device: Device,
+    binding: Optional[KamiDeviceBinding],
+    kamis_by_code: dict,
+    users_by_id: dict,
+    ip_count: int,
+) -> dict:
+    kami = kamis_by_code.get(binding.kami_code) if binding else None
+    user = users_by_id.get(kami.redeemed_by_user_id) if kami and kami.redeemed_by_user_id else None
+    risk = get_device_risk_payload(device.risk_level, ip_count)
+    machine_bind_mode = get_machine_bind_mode_value(kami.machine_bind_mode) if kami else None
+    return {
+        "id": device.id,
+        "uuid": device.uuid,
+        "fingerprint": device.fingerprint,
+        "last_ip": device.last_ip,
+        "ip_count": ip_count,
+        "username": user.username if user else None,
+        "user_id": user.id if user else None,
+        "binding_relation": get_binding_relation_text(kami),
+        "machine_bind_mode": machine_bind_mode,
+        "machine_bind_mode_text": get_machine_bind_mode_text(machine_bind_mode),
+        **risk,
+    }
+
+
 @router.get("/devices", summary="获取设备列表")
 async def list_devices(
     app_id: str,
@@ -3105,24 +3240,79 @@ async def list_devices(
         statement = statement.where(Device.risk_level == risk_level)
 
     # 分页
+    total = len(session.exec(statement).all())
     offset = (page - 1) * page_size
     statement = statement.offset(offset).limit(page_size)
 
     devices = session.exec(statement).all()
 
+    device_keys = {(device.uuid, device.fingerprint) for device in devices}
+    device_uuids = [device.uuid for device in devices]
+    fingerprints = [device.fingerprint for device in devices]
+
+    bindings = []
+    if device_uuids or fingerprints:
+        binding_conditions = []
+        if device_uuids:
+            binding_conditions.append(KamiDeviceBinding.device_uuid.in_(device_uuids))
+        if fingerprints:
+            binding_conditions.append(KamiDeviceBinding.fingerprint.in_(fingerprints))
+        bindings = session.exec(
+            select(KamiDeviceBinding).where(
+                KamiDeviceBinding.app_id == app_id,
+                or_(*binding_conditions),
+            )
+        ).all()
+
+    binding_by_key = {}
+    kami_codes = []
+    for binding in bindings:
+        key = (binding.device_uuid, binding.fingerprint)
+        if key in device_keys and key not in binding_by_key:
+            binding_by_key[key] = binding
+            kami_codes.append(binding.kami_code)
+
+    kamis_by_code = {}
+    user_ids = []
+    if kami_codes:
+        kamis = session.exec(select(Kami).where(Kami.kami_code.in_(kami_codes))).all()
+        kamis_by_code = {kami.kami_code: kami for kami in kamis}
+        user_ids = [kami.redeemed_by_user_id for kami in kamis if kami.redeemed_by_user_id]
+
+    users_by_id = {}
+    if user_ids:
+        users = session.exec(select(EndUser).where(EndUser.id.in_(user_ids))).all()
+        users_by_id = {user.id: user for user in users}
+
+    ip_sets_by_uuid = {device.uuid: set() for device in devices}
+    if device_uuids:
+        logs = session.exec(
+            select(EventLog).where(
+                EventLog.app_id == app_id,
+                EventLog.device_uuid.in_(device_uuids),
+            )
+        ).all()
+        for log in logs:
+            if log.device_uuid in ip_sets_by_uuid and log.ip_address:
+                ip_sets_by_uuid[log.device_uuid].add(log.ip_address)
+    for device in devices:
+        if device.last_ip:
+            ip_sets_by_uuid.setdefault(device.uuid, set()).add(device.last_ip)
+
     return {
         "success": True,
         "data": {
+            "total": total,
             "page": page,
             "page_size": page_size,
             "items": [
-                {
-                    "id": device.id,
-                    "uuid": device.uuid,
-                    "fingerprint": device.fingerprint,
-                    "last_ip": device.last_ip,
-                    "risk_level": device.risk_level
-                }
+                _admin_device_payload(
+                    device,
+                    binding_by_key.get((device.uuid, device.fingerprint)),
+                    kamis_by_code,
+                    users_by_id,
+                    len(ip_sets_by_uuid.get(device.uuid, set())),
+                )
                 for device in devices
             ]
         }
@@ -3637,16 +3827,6 @@ async def get_end_user_stats(
         for user in session.exec(select(EndUser).where(*base_conditions)).all()
         if user.id is not None
     ]
-    if app_id and not user_ids:
-        accounts = []
-    elif app_id:
-        accounts = session.exec(
-            select(UserPointAccount).where(UserPointAccount.user_id.in_(user_ids))
-        ).all()
-    else:
-        accounts = session.exec(select(UserPointAccount)).all()
-    with_balance = len([account for account in accounts if account.balance > 0])
-    total_balance = sum(account.balance for account in accounts)
     authorization_conditions = [
         AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
     ]
@@ -3657,6 +3837,8 @@ async def get_end_user_stats(
     authorization_accounts = session.exec(
         select(AuthorizationAccount).where(*authorization_conditions)
     ).all() if (not app_id or user_ids) else []
+    with_balance = len([account for account in authorization_accounts if account.points_balance > 0])
+    total_balance = sum(account.points_balance for account in authorization_accounts)
     with_authorization = len([
         account
         for account in authorization_accounts
@@ -3722,13 +3904,8 @@ async def list_end_users(
     ).all()
     total = len(session.exec(count_statement).all())
     user_ids = [user.id for user in users]
-    account_map = {}
     authorization_map = {}
     if user_ids:
-        accounts = session.exec(
-            select(UserPointAccount).where(UserPointAccount.user_id.in_(user_ids))
-        ).all()
-        account_map = {account.user_id: account for account in accounts}
         auth_statement = select(AuthorizationAccount).where(
             AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
             AuthorizationAccount.user_id.in_(user_ids),
@@ -3736,7 +3913,8 @@ async def list_end_users(
         if app_id:
             auth_statement = auth_statement.where(AuthorizationAccount.app_id == app_id)
         authorization_accounts = session.exec(auth_statement).all()
-        authorization_map = {account.user_id: account for account in authorization_accounts}
+        for account in authorization_accounts:
+            authorization_map.setdefault(account.user_id, []).append(account)
 
     return {
         "success": True,
@@ -3753,9 +3931,9 @@ async def list_end_users(
                     "phone": user.phone,
                     "status": user.status,
                     **_authorization_summary_payload(authorization_map.get(user.id)),
-                    "balance": account_map[user.id].balance if user.id in account_map else 0,
-                    "total_recharged": account_map[user.id].total_recharged if user.id in account_map else 0,
-                    "total_consumed": account_map[user.id].total_consumed if user.id in account_map else 0,
+                    "balance": _authorization_points_balance(authorization_map.get(user.id)),
+                    "total_recharged": _authorization_points_balance(authorization_map.get(user.id)),
+                    "total_consumed": 0,
                     "created_at": to_api_beijing_iso(user.created_at, naive="civil"),
                     "last_login": to_api_beijing_iso(user.last_login, naive="civil")
                     if user.last_login
@@ -3794,6 +3972,7 @@ async def list_end_user_kamis(
         authorization_lots = session.exec(
             select(AuthorizationLot).where(AuthorizationLot.account_id.in_(account_ids))
         ).all()
+    accounts_by_app_id = {account.app_id: account for account in authorization_accounts}
     lots_by_code = {}
     for lot in authorization_lots:
         if lot.source_kami_code:
@@ -3862,9 +4041,21 @@ async def list_end_user_kamis(
                     "bind_uuid": kami.bind_uuid,
                     "bind_ip": kami.bind_ip,
                     "machine_bind_mode": get_machine_bind_mode_value(kami.machine_bind_mode),
+                    "machine_bind_mode_text": get_machine_bind_mode_text(kami.machine_bind_mode),
                     "max_bind_devices": kami.max_bind_devices,
                     "authorization_owner": get_authorization_owner_value(kami.authorization_owner),
+                    "binding_relation": get_binding_relation_text(kami),
                     "user_bind_mode": get_user_bind_mode_value(kami.user_bind_mode),
+                    "point_remaining_balance": (
+                        accounts_by_app_id[kami.app_id].points_balance
+                        if kami.app_id in accounts_by_app_id
+                        else None
+                    ),
+                    "points_remaining": (
+                        accounts_by_app_id[kami.app_id].points_balance
+                        if kami.app_id in accounts_by_app_id
+                        else None
+                    ),
                     "device_bind_count": binding_count_by_code.get(kami.kami_code, 0)
                     or (1 if kami.bind_uuid else 0),
                     "created_at": to_api_beijing_iso(kami.created_at, naive="civil") if kami.created_at else None,
@@ -3920,7 +4111,8 @@ async def export_end_users(
         if app_id:
             auth_statement = auth_statement.where(AuthorizationAccount.app_id == app_id)
         authorization_accounts = session.exec(auth_statement).all()
-        authorization_map = {account.user_id: account for account in authorization_accounts}
+        for account in authorization_accounts:
+            authorization_map.setdefault(account.user_id, []).append(account)
 
     rows = []
     for user in users:

@@ -52,6 +52,15 @@ export function updateAppStatus(appId, status) {
   })
 }
 
+// 更新应用信息
+export function updateApp(appId, params) {
+  return request({
+    url: `/admin/apps/${appId}`,
+    method: 'put',
+    params
+  })
+}
+
 // 删除应用
 export function deleteApp(appId) {
   return request({
