@@ -63,18 +63,34 @@ logger.addHandler(file_handler)
 # 获取应用日志记录器
 app_logger = logging.getLogger("lemon_kami")
 
+
+def get_cors_allowed_origins() -> list[str]:
+    """Return configured CORS origins, allowing wildcard only for local debug."""
+    raw_origins = settings.CORS_ALLOWED_ORIGINS.strip()
+    if raw_origins:
+        origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+        if not settings.DEBUG:
+            origins = [origin for origin in origins if origin != "*"]
+        return origins
+    if settings.DEBUG:
+        return ["*"]
+    return []
+
 # 创建 FastAPI 应用
 app = FastAPI(
     title="Lemon Kami API",
     description="小柠檬网络验证 - 多租户卡密分发与验证平台",
     version="1.0.0",
+    docs_url="/docs" if settings.ENABLE_API_DOCS else None,
+    redoc_url="/redoc" if settings.ENABLE_API_DOCS else None,
+    openapi_url="/openapi.json" if settings.ENABLE_API_DOCS else None,
     debug=settings.DEBUG  # 控制是否显示调试信息
 )
 
 # 配置 CORS（跨域资源共享）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生产环境应限制具体域名
+    allow_origins=get_cors_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -137,11 +153,13 @@ async def startup_event():
 @app.get("/", tags=["Root"])
 async def root():
     """根路径"""
-    return {
+    payload = {
         "message": "Welcome to Lemon Kami API",
-        "docs": "/docs",
-        "redoc": "/redoc"
+        "public_docs": "/docs/api#basic-info",
     }
+    if settings.ENABLE_API_DOCS:
+        payload.update({"docs": "/docs", "redoc": "/redoc"})
+    return payload
 
 
 @app.get("/health", tags=["Health"])

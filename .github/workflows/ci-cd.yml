@@ -48,9 +48,11 @@ jobs:
           routes_admin.py
           routes_user.py
           models.py
+          auth_utils.py
           authorization_service.py
           database.py
           interface_catalog.py
+          interface_docs_service.py
           routes_docs.py
           sdk.py
           check_apps.py

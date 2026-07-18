@@ -23,9 +23,9 @@ def get_now():
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field as PydanticField
-from passlib.context import CryptContext
 from sqlalchemy import or_
 from sqlmodel import Session, select
+from auth_utils import hash_password, verify_password
 from database import get_session
 from redis_client import get_redis
 from models import (
@@ -69,7 +69,6 @@ from datetime_utils import to_api_beijing_iso
 from crypto import RSACrypto
 from config import settings
 from jose import jwt, JWTError
-import hashlib
 import os
 from point_service import (
     PointServiceError,
@@ -83,36 +82,15 @@ from authorization_service import (
     grant_time,
     grant_times,
 )
-from interface_catalog import BUILTIN_API_INTERFACES
+from interface_docs_service import (
+    dump_json as _dump_json,
+    ensure_builtin_interfaces as _ensure_builtin_interfaces,
+    interface_payload as _interface_payload,
+    load_json as _load_json,
+)
 
 
 logger = logging.getLogger(__name__)
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
-def hash_password(password: str) -> str:
-    """Hash a password for newly created or reset admin users."""
-    return pwd_context.hash(password)
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify bcrypt hashes and legacy salt$sha256 hashes."""
-    if not hashed_password:
-        return False
-
-    if hashed_password.startswith(("$2a$", "$2b$", "$2y$")):
-        try:
-            return pwd_context.verify(plain_password, hashed_password)
-        except Exception:
-            logger.exception("Failed to verify bcrypt admin password hash")
-            return False
-
-    try:
-        salt, stored_hash = hashed_password.split('$', 1)
-        password_hash = hashlib.sha256((plain_password + salt).encode('utf-8')).hexdigest()
-        return password_hash == stored_hash
-    except Exception:
-        return False
 
 
 def _cleanup_used_times_kamis(session: Session, app_id: str):
@@ -499,106 +477,6 @@ def _csv_response(filename: str, fieldnames: List[str], rows: List[dict]) -> Res
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
-
-
-def _dump_json(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    return json.dumps(value, ensure_ascii=False)
-
-
-def _load_json(value: Optional[str]) -> Any:
-    if not value:
-        return None
-    try:
-        return json.loads(value)
-    except json.JSONDecodeError:
-        return {"raw": value}
-
-
-def _interface_payload(item: ApiInterface) -> dict:
-    success_example = _load_json(item.success_example_json)
-    response_example = _load_json(item.response_example_json)
-    return {
-        "id": item.id,
-        "name": item.name,
-        "interface_key": item.interface_key,
-        "method": item.method,
-        "path": item.path,
-        "category": item.category,
-        "description": item.description,
-        "auth_mode": item.auth_mode,
-        "content_type": item.content_type,
-        "status": item.status,
-        "request_headers": _load_json(item.request_headers_json) or [],
-        "request_params": _load_json(item.request_params_json),
-        "response_params": _load_json(item.response_params_json) or [],
-        "success_example": success_example if success_example is not None else response_example,
-        "error_example": _load_json(item.error_example_json),
-        "response_example": response_example if response_example is not None else success_example,
-        "doc_markdown": item.doc_markdown,
-        "remark": item.remark,
-        "sort_order": item.sort_order,
-        "is_builtin": item.is_builtin,
-        "created_at": to_api_beijing_iso(item.created_at, naive="civil"),
-        "updated_at": to_api_beijing_iso(item.updated_at, naive="civil"),
-    }
-
-
-def _apply_interface_spec(item: ApiInterface, spec: dict, now: datetime) -> None:
-    item.name = spec["name"]
-    item.interface_key = spec["interface_key"]
-    item.method = spec.get("method", "POST").upper()
-    item.path = spec["path"]
-    item.category = spec.get("category") or "core"
-    item.description = spec.get("description")
-    item.auth_mode = spec.get("auth_mode") or "bearer"
-    item.content_type = spec.get("content_type") or "application/json"
-    item.status = spec.get("status", 1)
-    item.request_headers_json = _dump_json(spec.get("request_headers", []))
-    item.request_params_json = _dump_json(spec.get("request_params", []))
-    item.response_params_json = _dump_json(spec.get("response_params", []))
-    item.success_example_json = _dump_json(spec.get("success_example"))
-    item.error_example_json = _dump_json(spec.get("error_example"))
-    item.response_example_json = _dump_json(spec.get("success_example"))
-    item.doc_markdown = spec.get("doc_markdown")
-    item.remark = spec.get("remark")
-    item.sort_order = spec.get("sort_order", 0)
-    item.is_builtin = True
-    item.updated_at = now
-
-
-def _ensure_builtin_interfaces(session: Session) -> None:
-    keys = [item["interface_key"] for item in BUILTIN_API_INTERFACES]
-    existing_items = session.exec(
-        select(ApiInterface).where(ApiInterface.interface_key.in_(keys))
-    ).all()
-    existing_by_key = {item.interface_key: item for item in existing_items}
-    now = get_now().replace(tzinfo=None)
-    changed = False
-
-    for spec in BUILTIN_API_INTERFACES:
-        item = existing_by_key.get(spec["interface_key"])
-        if item is None:
-            item = ApiInterface(
-                name=spec["name"],
-                interface_key=spec["interface_key"],
-                method=spec.get("method", "POST").upper(),
-                path=spec["path"],
-                category=spec.get("category") or "core",
-                created_at=now,
-                updated_at=now,
-            )
-            _apply_interface_spec(item, spec, now)
-            session.add(item)
-            changed = True
-        elif item.is_builtin:
-            _apply_interface_spec(item, spec, now)
-            session.add(item)
-            changed = True
-
-    if changed:
-        session.commit()
 
 
 def _app_interface_payload(

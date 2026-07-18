@@ -7,6 +7,7 @@ from jose import JWTError, jwt
 from pydantic import BaseModel, Field as PydanticField
 from sqlmodel import Session, select
 
+from auth_utils import hash_password, verify_password
 from config import settings
 from database import get_session
 from datetime_utils import to_api_beijing_iso
@@ -31,7 +32,6 @@ from point_service import (
     get_points_balance_summary,
     redeem_points_kami,
 )
-from routes_admin import hash_password, verify_password
 
 
 router = APIRouter(prefix="/api/v1/user", tags=["End User Points"])

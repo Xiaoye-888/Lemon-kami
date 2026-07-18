@@ -1,4 +1,5 @@
 from sqlmodel import create_engine, Session
+from auth_utils import hash_password
 from config import settings
 import time
 import sys
@@ -701,7 +702,6 @@ def init_db():
     """初始化数据库表"""
     import sys
     from models import SQLModel, AdminUser
-    from passlib.context import CryptContext
     from sqlalchemy import text
 
     if engine.dialect.name == "sqlite":
@@ -964,13 +964,6 @@ def _init_default_admin():
     """初始化默认 admin 用户（如果不存在）"""
     from models import AdminUser
     from sqlmodel import select
-    from passlib.context import CryptContext
-
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    
-    def hash_password(password: str) -> str:
-        """密码哈希（使用 SHA256 + salt）"""
-        return pwd_context.hash(password)
     
     with Session(engine) as session:
         # 检查是否已有 admin 用户

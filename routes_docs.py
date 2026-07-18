@@ -5,8 +5,8 @@ from fastapi.responses import RedirectResponse
 from sqlmodel import Session, or_, select
 
 from database import get_session
+from interface_docs_service import ensure_builtin_interfaces, interface_payload
 from models import ApiInterface
-from routes_admin import _ensure_builtin_interfaces, _interface_payload
 
 
 router = APIRouter(prefix="/api/v1/docs", tags=["Public API Docs"])
@@ -30,7 +30,7 @@ async def list_public_interface_docs(
     if _browser_prefers_html(request.headers.get("accept", "")):
         return RedirectResponse(url="/docs/api#basic-info")
 
-    _ensure_builtin_interfaces(session)
+    ensure_builtin_interfaces(session)
     statement = select(ApiInterface).where(ApiInterface.status == 1)
     count_statement = select(ApiInterface).where(ApiInterface.status == 1)
     conditions = []
@@ -61,6 +61,6 @@ async def list_public_interface_docs(
             "total": total,
             "page": page,
             "page_size": page_size,
-            "items": [_interface_payload(item) for item in interfaces],
+            "items": [interface_payload(item) for item in interfaces],
         },
     }

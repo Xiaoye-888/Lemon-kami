@@ -74,6 +74,13 @@ function Invoke-ReleaseBoundaryStaticChecks {
     $remoteDeployPath = Join-Path $root "scripts\remote_deploy.sh"
     $envExamplePath = Join-Path $root ".env.example"
     $adminNginxPath = Join-Path $root "admin\nginx.conf"
+    $mainPath = Join-Path $root "main.py"
+    $routesUserPath = Join-Path $root "routes_user.py"
+    $routesDocsPath = Join-Path $root "routes_docs.py"
+
+    if (Test-Path -LiteralPath (Join-Path $root "init.sql")) {
+        throw "legacy init.sql should not be kept as a runtime schema source; use database.init_db()"
+    }
 
     foreach ($pattern in @(".env", "*.db", "logs", "backups", ".venv", ".engramory-memory", "admin")) {
         Assert-Contains $rootDockerIgnore $pattern
@@ -153,6 +160,20 @@ function Invoke-ReleaseBoundaryStaticChecks {
         Assert-Contains $adminNginxPath $pattern
     }
 
+    foreach ($pattern in @(
+        "def get_cors_allowed_origins()",
+        "docs_url=`"/docs`" if settings.ENABLE_API_DOCS else None",
+        "redoc_url=`"/redoc`" if settings.ENABLE_API_DOCS else None",
+        "openapi_url=`"/openapi.json`" if settings.ENABLE_API_DOCS else None",
+        "allow_origins=get_cors_allowed_origins()",
+        "`"public_docs`": `"/docs/api#basic-info`""
+    )) {
+        Assert-Contains $mainPath $pattern
+    }
+    Assert-NotContains $mainPath 'allow_origins=["*"]'
+    Assert-NotContains $routesUserPath "from routes_admin import"
+    Assert-NotContains $routesDocsPath "from routes_admin import"
+
     $directRequestImports = Get-ChildItem -Path (Join-Path $root "admin\src\views") -Filter "*.vue" -File |
         Select-String -Pattern "\.\./utils/request|@/utils/request" |
         ForEach-Object { "$($_.Path):$($_.LineNumber)" }
@@ -217,7 +238,7 @@ if (-not $env:REDIS_URL) {
 
 try {
     Write-Step "Python compile"
-    Invoke-Checked "& `"$python`" -m py_compile main.py routes_sdk.py routes_admin.py routes_user.py models.py authorization_service.py database.py interface_catalog.py routes_docs.py sdk.py check_apps.py sdk\python_sdk\lemon_kami.py"
+    Invoke-Checked "& `"$python`" -m py_compile main.py routes_sdk.py routes_admin.py routes_user.py models.py auth_utils.py authorization_service.py database.py interface_catalog.py interface_docs_service.py routes_docs.py sdk.py check_apps.py sdk\python_sdk\lemon_kami.py"
 
     Write-Step "Login AES compatibility"
     @'
