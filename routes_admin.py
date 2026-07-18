@@ -316,6 +316,10 @@ class EndUserPasswordResetRequest(BaseModel):
     password: str = PydanticField(..., min_length=6, max_length=128)
 
 
+class EndUserDeleteRequest(BaseModel):
+    user_ids: List[int] = PydanticField(..., min_length=1, description="要硬删除的普通用户 ID")
+
+
 class AuthorizationGrantRequest(BaseModel):
     app_id: str = PydanticField(..., max_length=64)
     user_id: int
@@ -1443,7 +1447,7 @@ def _point_source_summary_by_code(session: Session, kami_codes: list[str]) -> di
 
 def _point_source_payload(kami: Kami, source_summaries: dict[str, dict[str, int]]) -> dict:
     total = kami.points_amount or 0
-    if kami.kami_type != KamiType.points:
+    if _enum_value(kami.kami_type) != KamiType.points.value:
         return {
             "points_remaining": None,
             "points_redeemed": None,
@@ -1457,7 +1461,7 @@ def _point_source_payload(kami: Kami, source_summaries: dict[str, dict[str, int]
         source_total = source.get("total", 0)
         remaining = source.get("remaining", 0)
         redeemed = max(source_total - remaining, 0)
-    elif kami.status == KamiStatus.unused:
+    elif _enum_value(kami.status) == KamiStatus.unused.value:
         source_total = total
         remaining = total
         redeemed = 0
@@ -1540,7 +1544,7 @@ def _kami_code_validity_payload(kami: Kami, now: datetime) -> dict:
         else None,
         "code_validity_text": _code_validity_text(kami.code_valid_days),
         "is_code_expired": expired,
-        "display_status": "expired" if expired else kami.status.value,
+        "display_status": "expired" if expired else _enum_value(kami.status),
     }
 
 
@@ -1566,16 +1570,18 @@ def _kami_spec_stats(session: Session, spec_id: int) -> dict:
         [kami.kami_code for kami in kamis],
     )
     for kami in kamis:
-        if kami.status == KamiStatus.unused:
+        status_value = _enum_value(kami.status)
+        kami_type_value = _enum_value(kami.kami_type)
+        if status_value == KamiStatus.unused.value:
             if is_kami_code_expired(kami, now):
                 stats["expired_count"] += 1
             else:
                 stats["unused_count"] += 1
-        elif kami.status == KamiStatus.active:
+        elif status_value == KamiStatus.active.value:
             stats["active_count"] += 1
-        elif kami.status == KamiStatus.frozen:
+        elif status_value == KamiStatus.frozen.value:
             stats["frozen_count"] += 1
-        if kami.kami_type == KamiType.points:
+        if kami_type_value == KamiType.points.value:
             stats["points_remaining_total"] += (
                 _point_source_payload(kami, point_source_by_code)["points_remaining"] or 0
             )
@@ -1607,16 +1613,18 @@ def _kami_batch_stats(session: Session, batch: KamiBatch) -> dict:
         [kami.kami_code for kami in kamis],
     )
     for kami in kamis:
-        if kami.status == KamiStatus.unused:
+        status_value = _enum_value(kami.status)
+        kami_type_value = _enum_value(kami.kami_type)
+        if status_value == KamiStatus.unused.value:
             if is_kami_code_expired(kami, now):
                 stats["expired_count"] += 1
             else:
                 stats["unused_count"] += 1
-        elif kami.status == KamiStatus.active:
+        elif status_value == KamiStatus.active.value:
             stats["active_count"] += 1
-        elif kami.status == KamiStatus.frozen:
+        elif status_value == KamiStatus.frozen.value:
             stats["frozen_count"] += 1
-        if kami.kami_type == KamiType.points:
+        if kami_type_value == KamiType.points.value:
             stats["points_remaining_total"] += (
                 _point_source_payload(kami, point_source_by_code)["points_remaining"] or 0
             )
@@ -1633,7 +1641,7 @@ def _kami_spec_payload(spec: KamiSpec, stats: Optional[dict] = None) -> dict:
         "spec_key": spec.spec_key,
         "spec_name": spec.spec_name,
         "spec_group": _enum_value(spec.spec_group),
-        "kami_type": spec.kami_type.value,
+        "kami_type": _enum_value(spec.kami_type),
         "points_amount": spec.points_amount,
         "points_valid_days": spec.points_valid_days,
         "time_value": spec.time_value,
@@ -1677,7 +1685,7 @@ def _kami_batch_payload(batch: KamiBatch) -> dict:
         "spec_id": batch.spec_id,
         "batch_no": batch.batch_no,
         "app_id": batch.app_id,
-        "kami_type": batch.kami_type.value,
+        "kami_type": _enum_value(batch.kami_type),
         "points_amount": batch.points_amount,
         "points_valid_days": batch.points_valid_days,
         "time_value": batch.time_value,
@@ -2144,8 +2152,8 @@ async def list_kami_spec_kamis(
                     "spec_id": kami.spec_id,
                     "app_id": kami.app_id,
                     "kami_code": kami.kami_code,
-                    "kami_type": kami.kami_type.value,
-                    "status": kami.status.value,
+                    "kami_type": _enum_value(kami.kami_type),
+                    "status": _enum_value(kami.status),
                     "batch_no": kami.batch_no,
                     "points_amount": kami.points_amount,
                     "points_valid_days": kami.points_valid_days,
@@ -2457,7 +2465,7 @@ async def batch_create_kamis(
         session.commit()
         session.refresh(batch)
 
-    kami_type = batch.kami_type.value
+    kami_type = _enum_value(batch.kami_type)
     times = batch.times_total
     points_amount = batch.points_amount
     points_valid_days = batch.points_valid_days
@@ -2739,8 +2747,8 @@ async def list_kamis(
                     "id": kami.id,
                     "spec_id": kami.spec_id,
                     "kami_code": kami.kami_code,
-                    "kami_type": kami.kami_type.value,
-                    "status": kami.status.value,
+                    "kami_type": _enum_value(kami.kami_type),
+                    "status": _enum_value(kami.status),
                     "bind_uuid": kami.bind_uuid,
                     "activate_time": to_api_beijing_iso(kami.activate_time, naive="civil"),
                     "expire_time": to_api_beijing_iso(kami.expire_time, naive="civil"),
@@ -2889,7 +2897,7 @@ async def list_kami_batches(
                 "spec_id": kami.spec_id,
                 "spec_name": None,
                 "spec_group": None,
-                "kami_type": kami.kami_type.value,
+                "kami_type": _enum_value(kami.kami_type),
                 "points_amount": kami.points_amount,
                 "points_valid_days": kami.points_valid_days,
                 "time_value": kami.time_value,
@@ -2926,11 +2934,12 @@ async def list_kami_batches(
         )
         if not item["created_at"] and kami.created_at:
             item["created_at"] = to_api_beijing_iso(kami.created_at, naive="civil")
-        if kami.status == KamiStatus.unused:
+        status_value = _enum_value(kami.status)
+        if status_value == KamiStatus.unused.value:
             item["unused_count"] += 1
-        elif kami.status == KamiStatus.active:
+        elif status_value == KamiStatus.active.value:
             item["active_count"] += 1
-        elif kami.status == KamiStatus.frozen:
+        elif status_value == KamiStatus.frozen.value:
             item["frozen_count"] += 1
         if kami.redeemed_by_user_id is not None:
             item["redeemed_count"] += 1
@@ -2993,8 +3002,8 @@ async def export_kamis(
             "spec_id": kami.spec_id,
             "app_id": kami.app_id,
             "kami_code": kami.kami_code,
-            "kami_type": kami.kami_type.value,
-            "status": kami.status.value,
+            "kami_type": _enum_value(kami.kami_type),
+            "status": _enum_value(kami.status),
             "batch_no": kami.batch_no,
             "points_amount": kami.points_amount,
             "points_remaining": point_source["points_remaining"],
@@ -4115,13 +4124,131 @@ async def list_end_user_kamis(
     def lot_payload(lot: AuthorizationLot) -> dict:
         return {
             "id": lot.id,
-            "benefit_type": lot.benefit_type.value if hasattr(lot.benefit_type, "value") else lot.benefit_type,
+            "benefit_type": _enum_value(lot.benefit_type),
             "amount_total": lot.amount_total,
             "amount_remaining": lot.amount_remaining,
             "starts_at": to_api_beijing_iso(lot.starts_at, naive="civil") if lot.starts_at else None,
             "expires_at": to_api_beijing_iso(lot.expires_at, naive="civil") if lot.expires_at else None,
             "created_at": to_api_beijing_iso(lot.created_at, naive="civil") if lot.created_at else None,
         }
+
+    accounts_by_id = {
+        account.id: account
+        for account in authorization_accounts
+        if account.id is not None
+    }
+
+    def build_kami_detail_item(kami: Kami) -> dict:
+        return {
+            "id": kami.id,
+            "app_id": kami.app_id,
+            "kami_code": kami.kami_code,
+            "kami_type": _enum_value(kami.kami_type),
+            "status": _enum_value(kami.status),
+            "batch_no": kami.batch_no,
+            "points_amount": kami.points_amount,
+            "points_valid_days": kami.points_valid_days,
+            "time_value": kami.time_value,
+            "time_unit": kami.time_unit,
+            "times_total": kami.times_total,
+            "times_remaining": kami.times_remaining,
+            "bind_uuid": kami.bind_uuid,
+            "bind_ip": kami.bind_ip,
+            "machine_bind_mode": get_machine_bind_mode_value(kami.machine_bind_mode),
+            "machine_bind_mode_text": get_machine_bind_mode_text(kami.machine_bind_mode),
+            "max_bind_devices": kami.max_bind_devices,
+            "authorization_owner": get_authorization_owner_value(kami.authorization_owner),
+            "binding_relation": get_binding_relation_text(kami),
+            "user_bind_mode": get_user_bind_mode_value(kami.user_bind_mode),
+            "point_balance": (
+                accounts_by_app_id[kami.app_id].points_balance
+                if kami.app_id in accounts_by_app_id
+                else None
+            ),
+            "account_points_balance": (
+                accounts_by_app_id[kami.app_id].points_balance
+                if kami.app_id in accounts_by_app_id
+                else None
+            ),
+            **_point_source_display_payload(kami, point_source_by_code),
+            "device_bind_count": _device_bind_count_for_kami(
+                kami,
+                binding_count_by_code.get(kami.kami_code, 0),
+            ),
+            "created_at": to_api_beijing_iso(kami.created_at, naive="civil") if kami.created_at else None,
+            "activate_time": to_api_beijing_iso(kami.activate_time, naive="civil") if kami.activate_time else None,
+            "expire_time": to_api_beijing_iso(kami.expire_time, naive="civil") if kami.expire_time else None,
+            "redeemed_at": to_api_beijing_iso(kami.redeemed_at, naive="civil") if kami.redeemed_at else None,
+            "last_verify_at": to_api_beijing_iso(kami.last_verify_at, naive="civil") if kami.last_verify_at else None,
+            "last_consume_at": to_api_beijing_iso(
+                last_consume_at_by_code.get(kami.kami_code),
+                naive="civil",
+            )
+            if last_consume_at_by_code.get(kami.kami_code)
+            else None,
+            "remark": kami.remark,
+            "authorization_lots": [
+                lot_payload(lot)
+                for lot in lots_by_code.get(kami.kami_code, [])
+            ],
+        }
+
+    def build_manual_lot_detail_item(lot: AuthorizationLot) -> dict:
+        account = accounts_by_id.get(lot.account_id)
+        benefit_type = _enum_value(lot.benefit_type)
+        is_points = benefit_type == AuthorizationBenefitType.points.value
+        is_times = benefit_type == AuthorizationBenefitType.times.value
+        is_time = benefit_type == AuthorizationBenefitType.time.value
+        expires_at = lot.expires_at or (account.time_expires_at if account else None)
+        is_lifetime = bool(account and account.is_lifetime and is_time)
+        kami_type = KamiType.lifetime.value if is_lifetime else (KamiType.day.value if is_time else benefit_type)
+
+        return {
+            "id": f"authorization-lot-{lot.id}",
+            "app_id": account.app_id if account else app_id,
+            "kami_code": "-",
+            "kami_type": kami_type,
+            "status": "active" if not account or account.status == 1 else "frozen",
+            "batch_no": "后台授权",
+            "points_amount": lot.amount_total if is_points else None,
+            "points_valid_days": None,
+            "time_value": lot.amount_total if is_time and lot.amount_total else None,
+            "time_unit": "day" if is_time and lot.amount_total else None,
+            "times_total": lot.amount_total if is_times else None,
+            "times_remaining": lot.amount_remaining if is_times else None,
+            "bind_uuid": None,
+            "bind_ip": None,
+            "machine_bind_mode": MachineBindMode.no_limit.value,
+            "machine_bind_mode_text": get_machine_bind_mode_text(MachineBindMode.no_limit),
+            "max_bind_devices": 0,
+            "authorization_owner": AuthorizationOwnerMode.user.value,
+            "binding_relation": "用户授权",
+            "user_bind_mode": UserBindMode.required.value,
+            "point_balance": account.points_balance if account else None,
+            "account_points_balance": account.points_balance if account else None,
+            "point_remaining_balance": lot.amount_remaining if is_points else None,
+            "points_remaining": lot.amount_remaining if is_points else None,
+            "points_redeemed": max((lot.amount_total or 0) - (lot.amount_remaining or 0), 0) if is_points else None,
+            "point_source_total": lot.amount_total if is_points else None,
+            "point_source_remaining": lot.amount_remaining if is_points else None,
+            "point_source_redeemed": max((lot.amount_total or 0) - (lot.amount_remaining or 0), 0) if is_points else None,
+            "device_bind_count": 0,
+            "created_at": to_api_beijing_iso(lot.created_at, naive="civil") if lot.created_at else None,
+            "activate_time": None,
+            "expire_time": to_api_beijing_iso(expires_at, naive="civil") if expires_at else None,
+            "redeemed_at": to_api_beijing_iso(lot.created_at, naive="civil") if lot.created_at else None,
+            "last_verify_at": None,
+            "last_consume_at": None,
+            "remark": None,
+            "authorization_lots": [lot_payload(lot)],
+        }
+
+    items = [build_kami_detail_item(kami) for kami in kamis]
+    items.extend(
+        build_manual_lot_detail_item(lot)
+        for lot in authorization_lots
+        if not lot.source_kami_code
+    )
 
     return {
         "success": True,
@@ -4132,63 +4259,221 @@ async def list_end_user_kamis(
                 "email": user.email,
                 "app_id": user.app_id,
             },
-            "items": [
-                {
-                    "id": kami.id,
-                    "app_id": kami.app_id,
-                    "kami_code": kami.kami_code,
-                    "kami_type": kami.kami_type.value,
-                    "status": kami.status.value,
-                    "batch_no": kami.batch_no,
-                    "points_amount": kami.points_amount,
-                    "points_valid_days": kami.points_valid_days,
-                    "time_value": kami.time_value,
-                    "time_unit": kami.time_unit,
-                    "times_total": kami.times_total,
-                    "times_remaining": kami.times_remaining,
-                    "bind_uuid": kami.bind_uuid,
-                    "bind_ip": kami.bind_ip,
-                    "machine_bind_mode": get_machine_bind_mode_value(kami.machine_bind_mode),
-                    "machine_bind_mode_text": get_machine_bind_mode_text(kami.machine_bind_mode),
-                    "max_bind_devices": kami.max_bind_devices,
-                    "authorization_owner": get_authorization_owner_value(kami.authorization_owner),
-                    "binding_relation": get_binding_relation_text(kami),
-                    "user_bind_mode": get_user_bind_mode_value(kami.user_bind_mode),
-                    "point_balance": (
-                        accounts_by_app_id[kami.app_id].points_balance
-                        if kami.app_id in accounts_by_app_id
-                        else None
-                    ),
-                    "account_points_balance": (
-                        accounts_by_app_id[kami.app_id].points_balance
-                        if kami.app_id in accounts_by_app_id
-                        else None
-                    ),
-                    **_point_source_display_payload(kami, point_source_by_code),
-                    "device_bind_count": _device_bind_count_for_kami(
-                        kami,
-                        binding_count_by_code.get(kami.kami_code, 0),
-                    ),
-                    "created_at": to_api_beijing_iso(kami.created_at, naive="civil") if kami.created_at else None,
-                    "activate_time": to_api_beijing_iso(kami.activate_time, naive="civil") if kami.activate_time else None,
-                    "expire_time": to_api_beijing_iso(kami.expire_time, naive="civil") if kami.expire_time else None,
-                    "redeemed_at": to_api_beijing_iso(kami.redeemed_at, naive="civil") if kami.redeemed_at else None,
-                    "last_verify_at": to_api_beijing_iso(kami.last_verify_at, naive="civil") if kami.last_verify_at else None,
-                    "last_consume_at": to_api_beijing_iso(
-                        last_consume_at_by_code.get(kami.kami_code),
-                        naive="civil",
-                    )
-                    if last_consume_at_by_code.get(kami.kami_code)
-                    else None,
-                    "remark": kami.remark,
-                    "authorization_lots": [
-                        lot_payload(lot)
-                        for lot in lots_by_code.get(kami.kami_code, [])
-                    ],
-                }
-                for kami in kamis
-            ],
+            "items": items,
         },
+    }
+
+
+@router.post("/end-users/delete", summary="批量硬删除普通用户")
+async def delete_end_users(
+    payload: EndUserDeleteRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """硬删除普通用户及其业务关联数据。"""
+    _require_admin(current_user)
+    user_ids = list(dict.fromkeys(user_id for user_id in payload.user_ids if user_id))
+    if not user_ids:
+        raise HTTPException(status_code=400, detail="user_ids is required")
+
+    users = session.exec(select(EndUser).where(EndUser.id.in_(user_ids))).all()
+    if not users:
+        return {
+            "success": True,
+            "message": "没有找到可删除的用户",
+            "data": {
+                "deleted_users": 0,
+                "deleted_authorization_accounts": 0,
+                "deleted_authorization_lots": 0,
+                "deleted_authorization_transactions": 0,
+                "deleted_point_accounts": 0,
+                "deleted_point_lots": 0,
+                "deleted_point_transactions": 0,
+                "deleted_kamis": 0,
+                "deleted_kami_device_bindings": 0,
+                "deleted_devices": 0,
+                "deleted_event_logs": 0,
+            },
+        }
+
+    found_user_ids = [user.id for user in users if user.id is not None]
+    usernames = [user.username for user in users if user.username]
+    user_app_ids = {user.app_id for user in users if user.app_id}
+
+    authorization_accounts = session.exec(
+        select(AuthorizationAccount).where(
+            AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
+            AuthorizationAccount.user_id.in_(found_user_ids),
+        )
+    ).all()
+    account_ids = [account.id for account in authorization_accounts if account.id is not None]
+    user_app_ids.update(account.app_id for account in authorization_accounts if account.app_id)
+
+    authorization_lots = []
+    authorization_transactions = []
+    if account_ids:
+        authorization_lots = session.exec(
+            select(AuthorizationLot).where(AuthorizationLot.account_id.in_(account_ids))
+        ).all()
+        authorization_transactions = session.exec(
+            select(AuthorizationTransaction).where(AuthorizationTransaction.account_id.in_(account_ids))
+        ).all()
+
+    point_accounts = session.exec(
+        select(UserPointAccount).where(UserPointAccount.user_id.in_(found_user_ids))
+    ).all()
+    point_lots = session.exec(
+        select(UserPointLot).where(UserPointLot.user_id.in_(found_user_ids))
+    ).all()
+    point_transactions = session.exec(
+        select(PointTransaction).where(PointTransaction.user_id.in_(found_user_ids))
+    ).all()
+
+    redeemed_kamis = session.exec(
+        select(Kami).where(Kami.redeemed_by_user_id.in_(found_user_ids))
+    ).all()
+    kami_codes = [kami.kami_code for kami in redeemed_kamis if kami.kami_code]
+    user_app_ids.update(kami.app_id for kami in redeemed_kamis if kami.app_id)
+
+    kami_bindings = []
+    kami_logs = []
+    if kami_codes:
+        kami_bindings = session.exec(
+            select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code.in_(kami_codes))
+        ).all()
+        kami_logs = session.exec(
+            select(EventLog).where(EventLog.kami_code.in_(kami_codes))
+        ).all()
+
+    payload_conditions = []
+    for user_id in found_user_ids:
+        payload_conditions.extend([
+            EventLog.payload.like(f'%"user_id": {user_id}%'),
+            EventLog.payload.like(f'%"user_id":{user_id}%'),
+        ])
+
+    def escape_like_text(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    for username in usernames:
+        safe_username = escape_like_text(json.dumps(username, ensure_ascii=False)[1:-1])
+        payload_conditions.extend([
+            EventLog.payload.like(f'%"username": "{safe_username}"%', escape="\\"),
+            EventLog.payload.like(f'%"username":"{safe_username}"%', escape="\\"),
+        ])
+    payload_logs = session.exec(
+        select(EventLog).where(or_(*payload_conditions))
+    ).all() if payload_conditions else []
+
+    logs_by_id = {
+        log.id: log
+        for log in [*kami_logs, *payload_logs]
+        if log.id is not None
+    }
+
+    device_uuids = {
+        binding.device_uuid
+        for binding in kami_bindings
+        if binding.device_uuid
+    }
+    fingerprints = {
+        binding.fingerprint
+        for binding in kami_bindings
+        if binding.fingerprint
+    }
+    for log in logs_by_id.values():
+        if log.device_uuid:
+            device_uuids.add(log.device_uuid)
+        if log.payload:
+            try:
+                parsed_payload = json.loads(log.payload)
+            except json.JSONDecodeError:
+                parsed_payload = {}
+            if isinstance(parsed_payload, dict):
+                if parsed_payload.get("device_uuid"):
+                    device_uuids.add(str(parsed_payload["device_uuid"]))
+                if parsed_payload.get("uuid"):
+                    device_uuids.add(str(parsed_payload["uuid"]))
+                if parsed_payload.get("fingerprint"):
+                    fingerprints.add(str(parsed_payload["fingerprint"]))
+
+    device_conditions = []
+    if device_uuids:
+        device_conditions.append(Device.uuid.in_(list(device_uuids)))
+    if fingerprints:
+        device_conditions.append(Device.fingerprint.in_(list(fingerprints)))
+    candidate_devices = session.exec(
+        select(Device).where(or_(*device_conditions))
+    ).all() if device_conditions else []
+
+    devices_to_delete = []
+    for device in candidate_devices:
+        if user_app_ids and device.app_id not in user_app_ids:
+            continue
+        identity_conditions = []
+        if device.uuid:
+            identity_conditions.append(KamiDeviceBinding.device_uuid == device.uuid)
+        if device.fingerprint:
+            identity_conditions.append(KamiDeviceBinding.fingerprint == device.fingerprint)
+        if not identity_conditions:
+            continue
+        remaining_binding_statement = select(KamiDeviceBinding).where(or_(*identity_conditions))
+        if kami_codes:
+            remaining_binding_statement = remaining_binding_statement.where(
+                ~KamiDeviceBinding.kami_code.in_(kami_codes)
+            )
+        if not session.exec(remaining_binding_statement).first():
+            devices_to_delete.append(device)
+
+    for log in logs_by_id.values():
+        session.delete(log)
+    for binding in kami_bindings:
+        session.delete(binding)
+    for tx in authorization_transactions:
+        session.delete(tx)
+    for lot in authorization_lots:
+        session.delete(lot)
+    for account in authorization_accounts:
+        session.delete(account)
+    for lot in point_lots:
+        session.delete(lot)
+    for tx in point_transactions:
+        session.delete(tx)
+    for account in point_accounts:
+        session.delete(account)
+    for device in devices_to_delete:
+        session.delete(device)
+    for kami in redeemed_kamis:
+        session.delete(kami)
+    for user in users:
+        session.delete(user)
+
+    deleted_counts = {
+        "deleted_users": len(users),
+        "deleted_authorization_accounts": len(authorization_accounts),
+        "deleted_authorization_lots": len(authorization_lots),
+        "deleted_authorization_transactions": len(authorization_transactions),
+        "deleted_point_accounts": len(point_accounts),
+        "deleted_point_lots": len(point_lots),
+        "deleted_point_transactions": len(point_transactions),
+        "deleted_kamis": len(redeemed_kamis),
+        "deleted_kami_device_bindings": len(kami_bindings),
+        "deleted_devices": len(devices_to_delete),
+        "deleted_event_logs": len(logs_by_id),
+    }
+    session.commit()
+
+    log_admin_action(
+        session=session,
+        username=current_user.get("sub"),
+        event_type="end_user_hard_delete",
+        payload=deleted_counts,
+        message=f"用户 {current_user.get('sub')} 硬删除了 {len(users)} 个普通用户及关联数据",
+    )
+    return {
+        "success": True,
+        "message": "用户及关联数据已删除",
+        "data": deleted_counts,
     }
 
 
@@ -4524,7 +4809,7 @@ async def export_point_transactions(
             "username": user_map[item.user_id].username if item.user_id in user_map else None,
             "app_id": item.app_id,
             "kami_code": item.kami_code,
-            "transaction_type": item.transaction_type.value,
+            "transaction_type": _enum_value(item.transaction_type),
             "amount": item.amount,
             "balance_before": item.balance_before,
             "balance_after": item.balance_after,
@@ -4607,7 +4892,7 @@ async def list_point_transactions(
                     "username": user_map[item.user_id].username if item.user_id in user_map else None,
                     "app_id": item.app_id,
                     "kami_code": item.kami_code,
-                    "transaction_type": item.transaction_type.value,
+                    "transaction_type": _enum_value(item.transaction_type),
                     "amount": item.amount,
                     "balance_before": item.balance_before,
                     "balance_after": item.balance_after,

@@ -41,6 +41,14 @@ export function exportEndUsers(params) {
   })
 }
 
+export function deleteEndUsers(data) {
+  return request({
+    url: '/admin/end-users/delete',
+    method: 'post',
+    data
+  })
+}
+
 export function grantAuthorization(data) {
   return request({
     url: '/admin/authorizations/grant',

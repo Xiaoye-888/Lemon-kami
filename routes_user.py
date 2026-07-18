@@ -452,7 +452,9 @@ async def list_user_point_transactions(
             "items": [
                 {
                     "transaction_id": item.transaction_id,
-                    "transaction_type": item.transaction_type.value,
+                    "transaction_type": item.transaction_type.value
+                    if hasattr(item.transaction_type, "value")
+                    else item.transaction_type,
                     "amount": item.amount,
                     "balance_before": item.balance_after - item.amount,
                     "balance_after": item.balance_after,

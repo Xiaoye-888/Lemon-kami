@@ -12,8 +12,10 @@ from models import (
     ApiInterface,
     App,
     AuthorizationAccount,
+    AuthorizationLot,
     AuthorizationOwnerMode,
     AuthorizationOwnerType,
+    AuthorizationTransaction,
     Device,
     EndUser,
     EventLog,
@@ -23,6 +25,7 @@ from models import (
     KamiType,
     MachineBindMode,
     PointTransaction,
+    PointTransactionType,
     UserBindMode,
     UserPointAccount,
     UserPointLot,
@@ -447,6 +450,219 @@ def test_admin_kamis_show_source_point_lot_remaining_instead_of_user_balance():
         assert point50["points_redeemed"] == 0
         assert point50["point_balance"] == 130
         assert point50["device_bind_count"] == 0
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_end_user_kamis_includes_manual_grants_without_source_kami():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        user = EndUser(app_id="app_demo", username="manual-grant", password_hash="hash")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+        account = get_or_create_authorization_account(
+            session=session,
+            app_id="app_demo",
+            owner_type=AuthorizationOwnerType.user.value,
+            user_id=user.id,
+            username=user.username,
+        )
+        grant_points(session, account, 100)
+        consume_points(
+            session=session,
+            user_id=user.id,
+            app_id="app_demo",
+            amount=30,
+            biz_id="manual-grant-consume",
+        )
+        user_id = user.id
+
+    try:
+        response = client.get(
+            f"/api/v1/admin/end-users/{user_id}/kamis",
+            params={"app_id": "app_demo"},
+        )
+        assert response.status_code == 200
+        items = response.json()["data"]["items"]
+        assert len(items) == 1
+        item = items[0]
+        assert item["kami_code"] == "-"
+        assert item["kami_type"] == "points"
+        assert item["status"] == "active"
+        assert item["binding_relation"] == "用户授权"
+        assert item["points_amount"] == 100
+        assert item["point_source_remaining"] == 70
+        assert item["authorization_lots"][0]["amount_total"] == 100
+        assert item["authorization_lots"][0]["amount_remaining"] == 70
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_delete_end_users_hard_deletes_related_records():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        user = EndUser(app_id="app_demo", username="delete-me", password_hash="hash")
+        other_user = EndUser(app_id="app_demo", username="keep-me", password_hash="hash")
+        session.add_all([user, other_user])
+        session.commit()
+        session.refresh(user)
+        session.refresh(other_user)
+
+        account = get_or_create_authorization_account(
+            session=session,
+            app_id="app_demo",
+            owner_type=AuthorizationOwnerType.user.value,
+            user_id=user.id,
+            username=user.username,
+        )
+        grant_points(session, account, 100, source_kami_code="DELETEPOINT")
+        grant_times(session, account, 5, source_kami_code="DELETETIMES")
+        session.refresh(account)
+        account_id = account.id
+
+        session.add_all(
+            [
+                UserPointAccount(
+                    user_id=user.id,
+                    balance=40,
+                    total_recharged=100,
+                    total_consumed=60,
+                ),
+                UserPointLot(
+                    user_id=user.id,
+                    source_transaction_id="legacy-source",
+                    app_id="app_demo",
+                    kami_code="DELETEPOINT",
+                    points_total=100,
+                    points_remaining=40,
+                ),
+                PointTransaction(
+                    transaction_id="legacy-tx",
+                    user_id=user.id,
+                    app_id="app_demo",
+                    kami_code="DELETEPOINT",
+                    transaction_type=PointTransactionType.recharge,
+                    amount=100,
+                    balance_before=0,
+                    balance_after=100,
+                    biz_id="legacy-recharge",
+                ),
+                Kami(
+                    app_id="app_demo",
+                    kami_code="DELETEPOINT",
+                    kami_type=KamiType.points,
+                    status=KamiStatus.active,
+                    points_amount=100,
+                    redeemed_by_user_id=user.id,
+                    authorization_owner=AuthorizationOwnerMode.user,
+                ),
+                Kami(
+                    app_id="app_demo",
+                    kami_code="KEEPPOINT",
+                    kami_type=KamiType.points,
+                    status=KamiStatus.active,
+                    points_amount=50,
+                    redeemed_by_user_id=other_user.id,
+                    authorization_owner=AuthorizationOwnerMode.user,
+                ),
+                KamiDeviceBinding(
+                    app_id="app_demo",
+                    kami_code="DELETEPOINT",
+                    device_uuid="device-delete",
+                    fingerprint="fingerprint-delete",
+                    bind_ip="203.0.113.8",
+                ),
+                Device(
+                    app_id="app_demo",
+                    uuid="device-delete",
+                    fingerprint="fingerprint-delete",
+                    last_ip="203.0.113.8",
+                ),
+                EventLog(
+                    app_id="app_demo",
+                    kami_code="DELETEPOINT",
+                    event_type="consume",
+                    ip_address="203.0.113.8",
+                    device_uuid="device-delete",
+                    payload='{"user_id": %d, "username": "%s", "fingerprint": "fingerprint-delete"}'
+                    % (user.id, user.username),
+                    status=1,
+                ),
+                EventLog(
+                    app_id="app_demo",
+                    event_type="points_consume",
+                    ip_address="203.0.113.9",
+                    device_uuid="device-delete",
+                    payload='{"user_id": %d, "username": "%s"}' % (user.id, user.username),
+                    status=1,
+                ),
+                EventLog(
+                    app_id="app_demo",
+                    kami_code="KEEPPOINT",
+                    event_type="verify",
+                    status=1,
+                ),
+            ]
+        )
+        session.commit()
+        user_id = user.id
+        other_user_id = other_user.id
+        username = user.username
+
+    try:
+        response = client.post("/api/v1/admin/end-users/delete", json={"user_ids": [user_id]})
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["deleted_users"] == 1
+        assert data["deleted_kamis"] == 1
+
+        with Session(engine) as session:
+            assert session.get(EndUser, user_id) is None
+            assert session.get(EndUser, other_user_id) is not None
+            assert session.exec(
+                select(AuthorizationAccount).where(AuthorizationAccount.user_id == user_id)
+            ).all() == []
+            assert session.exec(
+                select(AuthorizationLot).where(AuthorizationLot.account_id == account_id)
+            ).all() == []
+            assert session.exec(
+                select(AuthorizationTransaction).where(AuthorizationTransaction.account_id == account_id)
+            ).all() == []
+            assert session.exec(select(UserPointAccount).where(UserPointAccount.user_id == user_id)).all() == []
+            assert session.exec(select(UserPointLot).where(UserPointLot.user_id == user_id)).all() == []
+            assert session.exec(select(PointTransaction).where(PointTransaction.user_id == user_id)).all() == []
+            assert session.exec(select(Kami).where(Kami.kami_code == "DELETEPOINT")).first() is None
+            assert session.exec(select(Kami).where(Kami.kami_code == "KEEPPOINT")).first() is not None
+            assert session.exec(
+                select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code == "DELETEPOINT")
+            ).all() == []
+            assert session.exec(
+                select(EventLog).where(EventLog.kami_code == "DELETEPOINT")
+            ).all() == []
+            assert session.exec(
+                select(Device).where(Device.uuid == "device-delete")
+            ).all() == []
+            remaining_payloads = [
+                log.payload or ""
+                for log in session.exec(select(EventLog)).all()
+            ]
+            assert not any(username in payload for payload in remaining_payloads)
     finally:
         fastapi_app.dependency_overrides.clear()
 

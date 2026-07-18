@@ -15,6 +15,15 @@
           <span>用户授权</span>
           <div class="header-actions">
             <el-button @click="handleExportUsers">导出用户</el-button>
+            <el-button
+              type="danger"
+              plain
+              :disabled="selectedUsers.length === 0"
+              :loading="deletingUsers"
+              @click="handleDeleteSelectedUsers"
+            >
+              删除用户
+            </el-button>
             <el-button type="primary" @click="loadData">刷新</el-button>
           </div>
         </div>
@@ -52,7 +61,14 @@
         </el-form-item>
       </el-form>
 
-      <el-table :data="users" v-loading="loading" border stripe>
+      <el-table
+        :data="users"
+        v-loading="loading"
+        border
+        stripe
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="48" />
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="username" label="用户名" min-width="140" />
         <el-table-column prop="email" label="邮箱" min-width="180" />
@@ -68,6 +84,9 @@
         </el-table-column>
         <el-table-column prop="created_at" label="注册时间" width="180">
           <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column prop="last_login" label="最近登录" width="180">
+          <template #default="{ row }">{{ formatOptionalTime(row.last_login) }}</template>
         </el-table-column>
         <el-table-column label="操作" width="330" fixed="right">
           <template #default="{ row }">
@@ -201,6 +220,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
+  deleteEndUsers,
   exportEndUsers,
   getEndUserKamis,
   getEndUsers,
@@ -221,11 +241,13 @@ import {
 const loading = ref(false)
 const resettingPassword = ref(false)
 const grantingAuthorization = ref(false)
+const deletingUsers = ref(false)
 const userKamisLoading = ref(false)
 const resetPasswordVisible = ref(false)
 const grantAuthVisible = ref(false)
 const userKamisVisible = ref(false)
 const users = ref([])
+const selectedUsers = ref([])
 const userKamis = ref([])
 const apps = ref([])
 const currentUser = ref(null)
@@ -312,6 +334,7 @@ const loadUsers = async () => {
     const params = normalizeParams(queryParams)
     const res = await getEndUsers(params)
     users.value = res.data.items
+    selectedUsers.value = []
     total.value = res.data.total
   } finally {
     loading.value = false
@@ -340,6 +363,40 @@ const handleExportUsers = async () => {
   delete params.page_size
   const response = await exportEndUsers(params)
   downloadBlob(response, `end_users_${queryParams.app_id || 'all'}.csv`)
+}
+
+const handleSelectionChange = (selection) => {
+  selectedUsers.value = selection
+}
+
+const handleDeleteSelectedUsers = async () => {
+  if (!selectedUsers.value.length) {
+    ElMessage.warning('请先选择要删除的用户')
+    return
+  }
+  const count = selectedUsers.value.length
+  try {
+    await ElMessageBox.confirm(
+      `确定永久删除选中的 ${count} 个用户吗？该操作会同步删除授权、积分、已兑换卡密、设备和日志数据，且无法恢复。`,
+      '永久删除用户',
+      {
+        type: 'warning',
+        confirmButtonText: '永久删除',
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger'
+      }
+    )
+    deletingUsers.value = true
+    await deleteEndUsers({
+      user_ids: selectedUsers.value.map((item) => item.id)
+    })
+    ElMessage.success('用户及关联数据已删除')
+    await loadData()
+  } catch (error) {
+    if (error !== 'cancel') console.error(error)
+  } finally {
+    deletingUsers.value = false
+  }
 }
 
 const showResetPasswordDialog = (row) => {
