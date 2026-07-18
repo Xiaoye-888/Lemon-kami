@@ -175,6 +175,79 @@ def _authorization_points_balance(account_or_accounts) -> int:
     return sum(account.points_balance for account in _as_authorization_accounts(account_or_accounts))
 
 
+def _owner_keys_for_end_user(user: EndUser) -> list[str]:
+    keys = []
+    if user.id is not None:
+        keys.append(f"user:{user.id}")
+    if user.username:
+        keys.append(f"username:{user.username}")
+    return keys
+
+
+def _authorization_account_identity_conditions(users: list[EndUser]) -> list[Any]:
+    user_ids = [user.id for user in users if user.id is not None]
+    usernames = [user.username for user in users if user.username]
+    owner_keys = []
+    for user in users:
+        owner_keys.extend(_owner_keys_for_end_user(user))
+
+    conditions = []
+    if user_ids:
+        conditions.append(AuthorizationAccount.user_id.in_(user_ids))
+    if usernames:
+        conditions.append(AuthorizationAccount.username.in_(usernames))
+    if owner_keys:
+        conditions.append(AuthorizationAccount.owner_key.in_(owner_keys))
+    return conditions
+
+
+def _select_user_authorization_accounts(
+    session: Session,
+    users: list[EndUser],
+    app_id: Optional[str] = None,
+) -> list[AuthorizationAccount]:
+    identity_conditions = _authorization_account_identity_conditions(users)
+    if not identity_conditions:
+        return []
+
+    statement = select(AuthorizationAccount).where(
+        AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
+        or_(*identity_conditions),
+    )
+    if app_id:
+        statement = statement.where(AuthorizationAccount.app_id == app_id)
+    return session.exec(statement).all()
+
+
+def _account_matches_end_user(account: AuthorizationAccount, user: EndUser) -> bool:
+    if user.id is not None and account.user_id == user.id:
+        return True
+    if user.username and account.username == user.username:
+        return True
+    return account.owner_key in _owner_keys_for_end_user(user)
+
+
+def _authorization_accounts_by_user_id(
+    users: list[EndUser],
+    accounts: list[AuthorizationAccount],
+) -> dict[int, list[AuthorizationAccount]]:
+    result: dict[int, list[AuthorizationAccount]] = {}
+    for user in users:
+        if user.id is None:
+            continue
+        for account in accounts:
+            if _account_matches_end_user(account, user):
+                result.setdefault(user.id, []).append(account)
+    return result
+
+
+def _user_bound_kami_identity_values(users: list[EndUser]) -> list[str]:
+    values = []
+    for user in users:
+        values.extend(_owner_keys_for_end_user(user))
+    return values
+
+
 def _backfill_legacy_points_for_users(
     session: Session,
     users: list[EndUser],
@@ -3913,16 +3986,7 @@ async def get_end_user_stats(
     filtered_users = session.exec(select(EndUser).where(*base_conditions)).all()
     _backfill_legacy_points_for_users(session, filtered_users, app_id)
     user_ids = [user.id for user in filtered_users if user.id is not None]
-    authorization_conditions = [
-        AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
-    ]
-    if app_id:
-        authorization_conditions.append(AuthorizationAccount.app_id == app_id)
-        if user_ids:
-            authorization_conditions.append(AuthorizationAccount.user_id.in_(user_ids))
-    authorization_accounts = session.exec(
-        select(AuthorizationAccount).where(*authorization_conditions)
-    ).all() if (not app_id or user_ids) else []
+    authorization_accounts = _select_user_authorization_accounts(session, filtered_users, app_id)
     legacy_times_by_user = _legacy_times_remaining_by_user(
         session, user_ids, app_id, authorization_accounts
     )
@@ -4013,15 +4077,8 @@ async def list_end_users(
     authorization_map = {}
     authorization_accounts = []
     if user_ids:
-        auth_statement = select(AuthorizationAccount).where(
-            AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
-            AuthorizationAccount.user_id.in_(user_ids),
-        )
-        if app_id:
-            auth_statement = auth_statement.where(AuthorizationAccount.app_id == app_id)
-        authorization_accounts = session.exec(auth_statement).all()
-        for account in authorization_accounts:
-            authorization_map.setdefault(account.user_id, []).append(account)
+        authorization_accounts = _select_user_authorization_accounts(session, users, app_id)
+        authorization_map = _authorization_accounts_by_user_id(users, authorization_accounts)
     legacy_times_by_user = _legacy_times_remaining_by_user(
         session,
         [user_id for user_id in user_ids if user_id is not None],
@@ -4074,13 +4131,7 @@ async def list_end_user_kamis(
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
 
-    account_statement = select(AuthorizationAccount).where(
-        AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
-        AuthorizationAccount.user_id == user_id,
-    )
-    if app_id:
-        account_statement = account_statement.where(AuthorizationAccount.app_id == app_id)
-    authorization_accounts = session.exec(account_statement).all()
+    authorization_accounts = _select_user_authorization_accounts(session, [user], app_id)
     account_ids = [account.id for account in authorization_accounts if account.id is not None]
 
     authorization_lots = []
@@ -4088,13 +4139,18 @@ async def list_end_user_kamis(
         authorization_lots = session.exec(
             select(AuthorizationLot).where(AuthorizationLot.account_id.in_(account_ids))
         ).all()
-    accounts_by_app_id = {account.app_id: account for account in authorization_accounts}
+    accounts_by_app_id = {}
+    for account in authorization_accounts:
+        accounts_by_app_id.setdefault(account.app_id, []).append(account)
     lots_by_code = {}
     for lot in authorization_lots:
         if lot.source_kami_code:
             lots_by_code.setdefault(lot.source_kami_code, []).append(lot)
 
     kami_conditions = [Kami.redeemed_by_user_id == user_id]
+    user_bound_values = _user_bound_kami_identity_values([user])
+    if user_bound_values:
+        kami_conditions.append(Kami.bind_uuid.in_(user_bound_values))
     if lots_by_code:
         kami_conditions.append(Kami.kami_code.in_(list(lots_by_code.keys())))
     statement = select(Kami).where(or_(*kami_conditions))
@@ -4161,12 +4217,12 @@ async def list_end_user_kamis(
             "binding_relation": get_binding_relation_text(kami),
             "user_bind_mode": get_user_bind_mode_value(kami.user_bind_mode),
             "point_balance": (
-                accounts_by_app_id[kami.app_id].points_balance
+                _authorization_points_balance(accounts_by_app_id.get(kami.app_id))
                 if kami.app_id in accounts_by_app_id
                 else None
             ),
             "account_points_balance": (
-                accounts_by_app_id[kami.app_id].points_balance
+                _authorization_points_balance(accounts_by_app_id.get(kami.app_id))
                 if kami.app_id in accounts_by_app_id
                 else None
             ),
@@ -4300,12 +4356,7 @@ async def delete_end_users(
     usernames = [user.username for user in users if user.username]
     user_app_ids = {user.app_id for user in users if user.app_id}
 
-    authorization_accounts = session.exec(
-        select(AuthorizationAccount).where(
-            AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
-            AuthorizationAccount.user_id.in_(found_user_ids),
-        )
-    ).all()
+    authorization_accounts = _select_user_authorization_accounts(session, users)
     account_ids = [account.id for account in authorization_accounts if account.id is not None]
     user_app_ids.update(account.app_id for account in authorization_accounts if account.app_id)
 
@@ -4329,8 +4380,19 @@ async def delete_end_users(
         select(PointTransaction).where(PointTransaction.user_id.in_(found_user_ids))
     ).all()
 
+    source_kami_codes = [
+        lot.source_kami_code
+        for lot in authorization_lots
+        if lot.source_kami_code
+    ]
+    kami_identity_conditions = [Kami.redeemed_by_user_id.in_(found_user_ids)]
+    user_bound_values = _user_bound_kami_identity_values(users)
+    if user_bound_values:
+        kami_identity_conditions.append(Kami.bind_uuid.in_(user_bound_values))
+    if source_kami_codes:
+        kami_identity_conditions.append(Kami.kami_code.in_(source_kami_codes))
     redeemed_kamis = session.exec(
-        select(Kami).where(Kami.redeemed_by_user_id.in_(found_user_ids))
+        select(Kami).where(or_(*kami_identity_conditions))
     ).all()
     kami_codes = [kami.kami_code for kami in redeemed_kamis if kami.kami_code]
     user_app_ids.update(kami.app_id for kami in redeemed_kamis if kami.app_id)

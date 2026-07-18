@@ -12,10 +12,12 @@ from models import (
     ApiInterface,
     App,
     AuthorizationAccount,
+    AuthorizationBenefitType,
     AuthorizationLot,
     AuthorizationOwnerMode,
     AuthorizationOwnerType,
     AuthorizationTransaction,
+    AuthorizationTransactionType,
     Device,
     EndUser,
     EventLog,
@@ -507,6 +509,59 @@ def test_admin_end_user_kamis_includes_manual_grants_without_source_kami():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_admin_end_user_kamis_includes_legacy_owner_key_accounts_without_user_id():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        user = EndUser(app_id="app_demo", username="legacy-owner", password_hash="hash")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+        account = AuthorizationAccount(
+            app_id="app_demo",
+            owner_type=AuthorizationOwnerType.user,
+            owner_key=f"user:{user.id}",
+            username=user.username,
+            points_balance=25,
+        )
+        session.add(account)
+        session.commit()
+        session.refresh(account)
+        session.add(
+            AuthorizationLot(
+                account_id=account.id,
+                benefit_type=AuthorizationBenefitType.points,
+                amount_total=25,
+                amount_remaining=25,
+            )
+        )
+        session.commit()
+        user_id = user.id
+
+    try:
+        response = client.get(
+            f"/api/v1/admin/end-users/{user_id}/kamis",
+            params={"app_id": "app_demo"},
+        )
+        assert response.status_code == 200
+        items = response.json()["data"]["items"]
+        assert len(items) == 1
+        item = items[0]
+        assert item["kami_code"] == "-"
+        assert item["batch_no"] == "后台授权"
+        assert item["points_amount"] == 25
+        assert item["point_source_remaining"] == 25
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_admin_delete_end_users_hard_deletes_related_records():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
@@ -663,6 +718,93 @@ def test_admin_delete_end_users_hard_deletes_related_records():
                 for log in session.exec(select(EventLog)).all()
             ]
             assert not any(username in payload for payload in remaining_payloads)
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_delete_end_users_removes_legacy_owner_key_accounts_without_user_id():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        user = EndUser(app_id="app_demo", username="delete-legacy", password_hash="hash")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+        account = AuthorizationAccount(
+            app_id="app_demo",
+            owner_type=AuthorizationOwnerType.user,
+            owner_key=f"username:{user.username}",
+            username=user.username,
+            points_balance=70,
+        )
+        session.add(account)
+        session.commit()
+        session.refresh(account)
+        account_id = account.id
+
+        session.add_all(
+            [
+                AuthorizationLot(
+                    account_id=account.id,
+                    benefit_type=AuthorizationBenefitType.points,
+                    amount_total=70,
+                    amount_remaining=70,
+                ),
+                AuthorizationTransaction(
+                    transaction_id="legacy-owner-tx",
+                    account_id=account.id,
+                    transaction_type=AuthorizationTransactionType.grant,
+                    benefit_type=AuthorizationBenefitType.points,
+                    amount=70,
+                    balance_after=70,
+                ),
+                Kami(
+                    app_id="app_demo",
+                    kami_code="USERLEGACY",
+                    kami_type=KamiType.points,
+                    status=KamiStatus.active,
+                    points_amount=70,
+                    bind_uuid=f"user:{user.id}",
+                    authorization_owner=AuthorizationOwnerMode.user,
+                ),
+                EventLog(
+                    app_id="app_demo",
+                    kami_code="USERLEGACY",
+                    event_type="verify",
+                    payload='{"username": "delete-legacy"}',
+                    status=1,
+                ),
+            ]
+        )
+        session.commit()
+        user_id = user.id
+
+    try:
+        response = client.post("/api/v1/admin/end-users/delete", json={"user_ids": [user_id]})
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["deleted_users"] == 1
+        assert data["deleted_authorization_accounts"] == 1
+        assert data["deleted_kamis"] == 1
+
+        with Session(engine) as session:
+            assert session.get(EndUser, user_id) is None
+            assert session.get(AuthorizationAccount, account_id) is None
+            assert session.exec(
+                select(AuthorizationLot).where(AuthorizationLot.account_id == account_id)
+            ).all() == []
+            assert session.exec(
+                select(AuthorizationTransaction).where(AuthorizationTransaction.account_id == account_id)
+            ).all() == []
+            assert session.exec(select(Kami).where(Kami.kami_code == "USERLEGACY")).all() == []
+            assert session.exec(select(EventLog).where(EventLog.kami_code == "USERLEGACY")).all() == []
     finally:
         fastapi_app.dependency_overrides.clear()
 
