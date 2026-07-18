@@ -558,8 +558,8 @@
             <el-table-column label="最近核销时间" width="180">
               <template #default="{ row }">{{ formatOptionalTime(row.last_consume_at) }}</template>
             </el-table-column>
-            <el-table-column label="最近验证时间" width="180">
-              <template #default="{ row }">{{ formatOptionalTime(row.last_verify_at) }}</template>
+            <el-table-column label="兑换时间" width="180">
+              <template #default="{ row }">{{ formatOptionalTime(row.redeemed_at) }}</template>
             </el-table-column>
           </template>
           <template v-else>
@@ -577,8 +577,8 @@
             <el-table-column label="绑定设备" min-width="160" show-overflow-tooltip>
               <template #default="{ row }">{{ getBoundDeviceText(row) }}</template>
             </el-table-column>
-            <el-table-column label="最近验证时间" width="180">
-              <template #default="{ row }">{{ formatOptionalTime(row.last_verify_at) }}</template>
+            <el-table-column label="兑换时间" width="180">
+              <template #default="{ row }">{{ formatOptionalTime(row.redeemed_at) }}</template>
             </el-table-column>
           </template>
           <el-table-column label="备注" min-width="160">
@@ -1752,14 +1752,15 @@ const getKamiUserText = (row) => (
   '-'
 )
 
-const getPointsRemaining = (row) => row?.points_remaining ?? row?.point_remaining_balance ?? row?.points_amount ?? 0
-const getPointsRedeemed = (row) => Math.max((row?.points_amount || 0) - getPointsRemaining(row), 0)
+const getPointsRemaining = (row) => row?.point_source_remaining ?? row?.points_remaining ?? row?.point_remaining_balance ?? row?.points_amount ?? 0
+const getPointsRedeemed = (row) => row?.point_source_redeemed ?? row?.points_redeemed ?? Math.max((row?.points_amount || 0) - getPointsRemaining(row), 0)
 const getTimesConsumed = (row) => Math.max((row?.times_total || 0) - (row?.times_remaining ?? 0), 0)
 const isKamiExpired = (row) => row?.is_code_expired || row?.display_status === 'expired'
 const getKamiStatusText = (row) => (isKamiExpired(row) ? '已过期' : getStatusText(row?.status))
 const getKamiStatusType = (row) => (isKamiExpired(row) ? 'warning' : getStatusType(row?.status))
 
 const getBoundDeviceText = (row) => {
+  if (row?.authorization_owner === 'user' || row?.binding_relation === '用户授权') return '-'
   if (row?.bind_uuid) return row.bind_uuid
   if (row?.device_bind_count) return `${row.device_bind_count} 台设备`
   return '-'

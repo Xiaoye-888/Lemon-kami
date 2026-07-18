@@ -138,14 +138,11 @@
         <el-table-column label="卡密额度" width="140">
           <template #default="{ row }">{{ getCardQuotaText(row) }}</template>
         </el-table-column>
-        <el-table-column label="剩余权益" width="130">
-          <template #default="{ row }">{{ getRemainingBenefitText(row) }}</template>
-        </el-table-column>
         <el-table-column label="绑定设备" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ getBoundDeviceText(row) }}</template>
         </el-table-column>
-        <el-table-column label="最近验证时间" width="180">
-          <template #default="{ row }">{{ formatOptionalTime(row.last_verify_at) }}</template>
+        <el-table-column label="兑换时间" width="180">
+          <template #default="{ row }">{{ formatOptionalTime(row.redeemed_at) }}</template>
         </el-table-column>
         <el-table-column label="备注" min-width="160">
           <template #default="{ row }">{{ row.remark || '-' }}</template>
@@ -637,14 +634,8 @@ const getCardQuotaText = (row) => {
   return getValidityText(row)
 }
 
-const getRemainingBenefitText = (row) => {
-  if (row.kami_type === 'points') return `${row.points_remaining ?? row.point_remaining_balance ?? row.points_amount ?? 0}积分`
-  if (row.kami_type === 'times') return `${row.times_remaining ?? 0}次`
-  if (row.kami_type === 'lifetime') return '永久'
-  return row.expire_time ? formatBeijingTime(row.expire_time) : '-'
-}
-
 const getBoundDeviceText = (row) => {
+  if (row?.authorization_owner === 'user' || row?.binding_relation === '用户授权') return '-'
   if (row?.bind_uuid) return row.bind_uuid
   if (row?.device_bind_count) return `${row.device_bind_count} 台设备`
   return '-'

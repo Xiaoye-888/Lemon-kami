@@ -39,7 +39,7 @@
               <el-button size="small" type="primary" @click="goAppInterfaces(row)">
                 接口列表
               </el-button>
-              <el-button size="small" @click="showEditDialog(row)">改名</el-button>
+              <el-button size="small" type="warning" @click="showEditDialog(row)">改名</el-button>
               <el-button size="small" type="info" @click="viewDetail(row)">详情</el-button>
               <el-button size="small" type="danger" @click="handleDelete(row)">删除</el-button>
             </div>

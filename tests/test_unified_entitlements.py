@@ -346,6 +346,113 @@ def test_user_points_consume_with_device_identity_creates_admin_device_row():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_admin_kamis_show_source_point_lot_remaining_instead_of_user_balance():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        user = EndUser(app_id="app_demo", username="source-points", password_hash="hash")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        session.add_all(
+            [
+                Kami(
+                    app_id="app_demo",
+                    kami_code="POINT100",
+                    kami_type=KamiType.points,
+                    status=KamiStatus.unused,
+                    points_amount=100,
+                    authorization_owner=AuthorizationOwnerMode.user,
+                    user_bind_mode=UserBindMode.required,
+                ),
+                Kami(
+                    app_id="app_demo",
+                    kami_code="POINT50",
+                    kami_type=KamiType.points,
+                    status=KamiStatus.unused,
+                    points_amount=50,
+                    authorization_owner=AuthorizationOwnerMode.user,
+                    user_bind_mode=UserBindMode.required,
+                ),
+            ]
+        )
+        session.commit()
+
+        redeem_points_kami(session, user, "POINT100")
+        redeem_points_kami(session, user, "POINT50")
+        consume_result = consume_points(
+            session=session,
+            user_id=user.id,
+            app_id="app_demo",
+            amount=20,
+            biz_id="source-lot-consume",
+        )
+        assert consume_result["balance_after"] == 130
+
+    try:
+        response = client.get(
+            "/api/v1/admin/kamis",
+            params={"app_id": "app_demo", "kami_type": "points", "page_size": 10},
+        )
+        assert response.status_code == 200
+        items = {item["kami_code"]: item for item in response.json()["data"]["items"]}
+
+        point100 = items["POINT100"]
+        assert point100["points_amount"] == 100
+        assert point100["points_remaining"] == 80
+        assert point100["points_redeemed"] == 20
+        assert point100["point_balance"] == 130
+        assert point100["device_bind_count"] == 0
+        assert point100["redeemed_at"] is not None
+
+        point50 = items["POINT50"]
+        assert point50["points_amount"] == 50
+        assert point50["points_remaining"] == 50
+        assert point50["points_redeemed"] == 0
+        assert point50["point_balance"] == 130
+        assert point50["device_bind_count"] == 0
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_dashboard_api_call_count_excludes_admin_operations():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        session.add_all(
+            [
+                EventLog(app_id="app_demo", event_type="verify", status=1),
+                EventLog(app_id="app_demo", event_type="points_consume", status=1),
+                EventLog(app_id="app_demo", event_type="consume", status=0),
+                EventLog(app_id=None, event_type="admin_login", status=1),
+                EventLog(app_id="app_demo", event_type="admin_update_app", status=1),
+            ]
+        )
+        session.commit()
+
+    try:
+        response = client.get("/api/v1/admin/dashboard")
+        assert response.status_code == 200
+        integration = response.json()["data"]["integration_health"]
+        assert integration["api_calls_today"] == 3
+        assert "verify_success_rate" not in integration
+        assert "abnormal_calls_today" not in integration
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_admin_update_app_supports_renaming_without_changing_id():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

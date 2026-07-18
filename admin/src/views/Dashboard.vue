@@ -109,10 +109,6 @@ const dashboard = ref({
 const nowText = ref('')
 
 const numberText = (value) => Number(value || 0).toLocaleString('zh-CN')
-const percentText = (value) => {
-  if (value === null || value === undefined) return '-'
-  return `${Number(value || 0).toLocaleString('zh-CN', { maximumFractionDigits: 1 })}%`
-}
 const latestCallText = (value) => {
   if (!value) return '暂无'
   const date = new Date(value)
@@ -156,22 +152,16 @@ const integrationHealthRows = computed(() => [
     tone: Number(integrationHealth.value.active_apps_today || 0) > 0 ? 'is-normal' : 'is-warning'
   },
   {
-    key: 'verify_success_rate',
-    label: '验证成功率',
-    value: percentText(integrationHealth.value.verify_success_rate),
-    tone: Number(integrationHealth.value.verify_success_rate || 0) >= 90 ? 'is-normal' : 'is-warning'
+    key: 'api_calls_today',
+    label: '调用次数',
+    value: numberText(integrationHealth.value.api_calls_today),
+    tone: Number(integrationHealth.value.api_calls_today || 0) > 0 ? 'is-normal' : 'is-warning'
   },
   {
     key: 'latest_sdk_call_at',
     label: '最近调用',
     value: latestCallText(integrationHealth.value.latest_sdk_call_at),
     tone: integrationHealth.value.latest_sdk_call_at ? 'is-normal' : 'is-warning'
-  },
-  {
-    key: 'abnormal_calls_today',
-    label: '异常调用',
-    value: numberText(integrationHealth.value.abnormal_calls_today),
-    tone: Number(integrationHealth.value.abnormal_calls_today || 0) > 0 ? 'is-danger' : 'is-normal'
   }
 ])
 

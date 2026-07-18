@@ -451,13 +451,14 @@ const getCardQuotaText = (row) => {
 }
 
 const getRemainingBenefitText = (row) => {
-  if (row.kami_type === 'points') return `${row.points_remaining ?? row.point_remaining_balance ?? row.points_amount ?? 0}积分`
+  if (row.kami_type === 'points') return `${row.point_source_remaining ?? row.points_remaining ?? row.point_remaining_balance ?? row.points_amount ?? 0}积分`
   if (row.kami_type === 'times') return `${row.times_remaining ?? 0}次`
   if (row.kami_type === 'lifetime') return '永久'
   return row.expire_time ? formatBeijingTime(row.expire_time) : getValidityText(row)
 }
 
 const getBoundDeviceText = (row) => {
+  if (row?.authorization_owner === 'user' || row?.binding_relation === '用户授权') return '-'
   if (row?.bind_uuid) return row.bind_uuid
   if (row?.device_bind_count) return `${row.device_bind_count} 台设备`
   return '-'

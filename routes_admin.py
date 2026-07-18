@@ -827,8 +827,15 @@ async def get_dashboard(
     app_name_map = {app.app_id: app.name for app in apps}
 
     today_start = get_now().replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
-    sdk_event_types = ["verify", "activate", "consume", "app_config", "unbind", "report"]
-    verify_event_types = ["verify", "activate"]
+    sdk_event_types = [
+        "verify",
+        "activate",
+        "consume",
+        "points_consume",
+        "app_config",
+        "unbind",
+        "report",
+    ]
 
     recent_statement = select(EventLog)
     recent_conditions = scoped_conditions(EventLog)
@@ -852,21 +859,10 @@ async def get_dashboard(
             AuthorizationTransaction.created_at >= today_start,
         )
     )
-    verify_total_today = count_rows(
+    api_calls_today = count_rows(
         EventLog,
-        EventLog.event_type.in_(verify_event_types),
+        EventLog.event_type.in_(sdk_event_types),
         EventLog.created_at >= today_start,
-    )
-    verify_success_today = count_rows(
-        EventLog,
-        EventLog.event_type.in_(verify_event_types),
-        EventLog.status == 1,
-        EventLog.created_at >= today_start,
-    )
-    verify_success_rate = (
-        round(verify_success_today * 100 / verify_total_today, 1)
-        if verify_total_today
-        else None
     )
     active_apps_statement = (
         select(EventLog.app_id)
@@ -889,13 +885,6 @@ async def get_dashboard(
     latest_sdk_log = session.exec(
         latest_sdk_statement.order_by(EventLog.created_at.desc()).limit(1)
     ).first()
-    abnormal_calls_today = count_rows(
-        EventLog,
-        EventLog.event_type.in_(sdk_event_types),
-        EventLog.status == 0,
-        EventLog.created_at >= today_start,
-    )
-
     return {
         "success": True,
         "data": {
@@ -928,16 +917,13 @@ async def get_dashboard(
             },
             "integration_health": {
                 "active_apps_today": active_apps_today,
-                "verify_success_rate": verify_success_rate,
-                "verify_success_total": verify_success_today,
-                "verify_total": verify_total_today,
+                "api_calls_today": api_calls_today,
                 "latest_sdk_call_at": (
                     to_api_beijing_iso(latest_sdk_log.created_at, naive="civil")
                     if latest_sdk_log
                     else None
                 ),
                 "latest_sdk_call_type": latest_sdk_log.event_type if latest_sdk_log else None,
-                "abnormal_calls_today": abnormal_calls_today,
             },
             "recent_events": [
                 {
@@ -1525,6 +1511,100 @@ def get_binding_relation_text(kami: Optional[Any]) -> str:
     return "设备授权"
 
 
+def _is_user_authorized_kami(kami: Kami) -> bool:
+    return get_authorization_owner_value(kami.authorization_owner) == AuthorizationOwnerMode.user.value
+
+
+def _device_bind_count_for_kami(kami: Kami, binding_count: int = 0) -> int:
+    if _is_user_authorized_kami(kami):
+        return 0
+    return binding_count or (1 if kami.bind_uuid else 0)
+
+
+def _point_source_summary_by_code(session: Session, kami_codes: list[str]) -> dict[str, dict[str, int]]:
+    if not kami_codes:
+        return {}
+    summaries = {
+        code: {"total": 0, "remaining": 0, "has_source": 0}
+        for code in kami_codes
+    }
+    lots = session.exec(
+        select(AuthorizationLot).where(
+            AuthorizationLot.source_kami_code.in_(kami_codes),
+            AuthorizationLot.benefit_type == AuthorizationBenefitType.points,
+        )
+    ).all()
+    for lot in lots:
+        if not lot.source_kami_code:
+            continue
+        summary = summaries.setdefault(
+            lot.source_kami_code,
+            {"total": 0, "remaining": 0, "has_source": 0},
+        )
+        summary["total"] += lot.amount_total or 0
+        summary["remaining"] += lot.amount_remaining or 0
+        summary["has_source"] = 1
+
+    legacy_lots = session.exec(
+        select(UserPointLot).where(UserPointLot.kami_code.in_(kami_codes))
+    ).all()
+    for lot in legacy_lots:
+        if not lot.kami_code:
+            continue
+        summary = summaries.setdefault(
+            lot.kami_code,
+            {"total": 0, "remaining": 0, "has_source": 0},
+        )
+        if summary["has_source"]:
+            continue
+        summary["total"] += lot.points_total or 0
+        summary["remaining"] += lot.points_remaining or 0
+        summary["has_source"] = 1
+    return summaries
+
+
+def _point_source_payload(kami: Kami, source_summaries: dict[str, dict[str, int]]) -> dict:
+    total = kami.points_amount or 0
+    if kami.kami_type != KamiType.points:
+        return {
+            "points_remaining": None,
+            "points_redeemed": None,
+            "point_source_total": None,
+            "point_source_remaining": None,
+            "point_source_redeemed": None,
+        }
+
+    source = source_summaries.get(kami.kami_code)
+    if source and source.get("has_source"):
+        source_total = source.get("total", 0)
+        remaining = source.get("remaining", 0)
+        redeemed = max(source_total - remaining, 0)
+    elif kami.status == KamiStatus.unused:
+        source_total = total
+        remaining = total
+        redeemed = 0
+    else:
+        source_total = total
+        remaining = 0
+        redeemed = total
+
+    return {
+        "points_remaining": remaining,
+        "points_redeemed": redeemed,
+        "point_source_total": source_total,
+        "point_source_remaining": remaining,
+        "point_source_redeemed": redeemed,
+    }
+
+
+def _point_source_display_payload(kami: Kami, source_summaries: dict[str, dict[str, int]]) -> dict:
+    payload = _point_source_payload(kami, source_summaries)
+    return {
+        "point_remaining_balance": payload["points_remaining"],
+        **payload,
+    }
+
+
 def get_device_risk_payload(manual_risk_level: int, ip_count: int) -> dict:
     if manual_risk_level >= 2:
         return {"risk_level": 2, "risk_level_text": "黑名单"}
@@ -1603,18 +1683,24 @@ def _kami_spec_stats(session: Session, spec_id: int) -> dict:
         "code_valid_days_values": [batch.code_valid_days for batch in batches],
         "code_validity_text": _code_validity_summary([batch.code_valid_days for batch in batches]),
     }
+    point_source_by_code = _point_source_summary_by_code(
+        session,
+        [kami.kami_code for kami in kamis],
+    )
     for kami in kamis:
         if kami.status == KamiStatus.unused:
             if is_kami_code_expired(kami, now):
                 stats["expired_count"] += 1
             else:
                 stats["unused_count"] += 1
-            if kami.kami_type == KamiType.points and not is_kami_code_expired(kami, now):
-                stats["points_remaining_total"] += kami.points_amount or 0
         elif kami.status == KamiStatus.active:
             stats["active_count"] += 1
         elif kami.status == KamiStatus.frozen:
             stats["frozen_count"] += 1
+        if kami.kami_type == KamiType.points:
+            stats["points_remaining_total"] += (
+                _point_source_payload(kami, point_source_by_code)["points_remaining"] or 0
+            )
         if kami.redeemed_by_user_id is not None:
             stats["redeemed_count"] += 1
         stats["times_remaining_total"] += kami.times_remaining or 0
@@ -1638,18 +1724,24 @@ def _kami_batch_stats(session: Session, batch: KamiBatch) -> dict:
         "code_valid_days_values": [batch.code_valid_days],
         "code_validity_text": _code_validity_text(batch.code_valid_days),
     }
+    point_source_by_code = _point_source_summary_by_code(
+        session,
+        [kami.kami_code for kami in kamis],
+    )
     for kami in kamis:
         if kami.status == KamiStatus.unused:
             if is_kami_code_expired(kami, now):
                 stats["expired_count"] += 1
             else:
                 stats["unused_count"] += 1
-            if kami.kami_type == KamiType.points and not is_kami_code_expired(kami, now):
-                stats["points_remaining_total"] += kami.points_amount or 0
         elif kami.status == KamiStatus.active:
             stats["active_count"] += 1
         elif kami.status == KamiStatus.frozen:
             stats["frozen_count"] += 1
+        if kami.kami_type == KamiType.points:
+            stats["points_remaining_total"] += (
+                _point_source_payload(kami, point_source_by_code)["points_remaining"] or 0
+            )
         if kami.redeemed_by_user_id is not None:
             stats["redeemed_count"] += 1
         stats["times_remaining_total"] += kami.times_remaining or 0
@@ -2156,6 +2248,15 @@ async def list_kami_spec_kamis(
     all_items = session.exec(statement.order_by(Kami.id.desc())).all()
     start = (page - 1) * page_size
     page_items = all_items[start:start + page_size]
+    page_codes = [kami.kami_code for kami in page_items]
+    binding_count_by_code = {code: 0 for code in page_codes}
+    point_source_by_code = _point_source_summary_by_code(session, page_codes)
+    if page_codes:
+        bindings = session.exec(
+            select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code.in_(page_codes))
+        ).all()
+        for binding in bindings:
+            binding_count_by_code[binding.kami_code] = binding_count_by_code.get(binding.kami_code, 0) + 1
     return {
         "success": True,
         "data": {
@@ -2178,6 +2279,13 @@ async def list_kami_spec_kamis(
                     "max_bind_devices": kami.max_bind_devices,
                     "authorization_owner": get_authorization_owner_value(kami.authorization_owner),
                     "user_bind_mode": get_user_bind_mode_value(kami.user_bind_mode),
+                    "binding_relation": get_binding_relation_text(kami),
+                    **_point_source_display_payload(kami, point_source_by_code),
+                    "device_bind_count": _device_bind_count_for_kami(
+                        kami,
+                        binding_count_by_code.get(kami.kami_code, 0),
+                    ),
+                    "redeemed_at": to_api_beijing_iso(kami.redeemed_at, naive="civil") if kami.redeemed_at else None,
                     "created_at": to_api_beijing_iso(kami.created_at, naive="civil") if kami.created_at else None,
                     "last_verify_at": to_api_beijing_iso(kami.last_verify_at, naive="civil") if kami.last_verify_at else None,
                     **_kami_code_validity_payload(kami, now),
@@ -2698,6 +2806,7 @@ async def list_kamis(
 
     kami_codes = [kami.kami_code for kami in kamis]
     binding_count_by_code = {code: 0 for code in kami_codes}
+    point_source_by_code = _point_source_summary_by_code(session, kami_codes)
     if kami_codes:
         bindings = session.exec(
             select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code.in_(kami_codes))
@@ -2788,8 +2897,10 @@ async def list_kamis(
                     "authorization_owner": get_authorization_owner_value(kami.authorization_owner),
                     "binding_relation": get_binding_relation_text(kami),
                     "user_bind_mode": get_user_bind_mode_value(kami.user_bind_mode),
-                    "device_bind_count": binding_count_by_code.get(kami.kami_code, 0)
-                    or (1 if kami.bind_uuid else 0),
+                    "device_bind_count": _device_bind_count_for_kami(
+                        kami,
+                        binding_count_by_code.get(kami.kami_code, 0),
+                    ),
                     "created_at": to_api_beijing_iso(kami.created_at, naive="civil")
                     if kami.created_at
                     else None,
@@ -2809,16 +2920,12 @@ async def list_kamis(
                         if kami.redeemed_by_user_id in accounts_by_user_id
                         else None
                     ),
-                    "point_remaining_balance": (
+                    "account_points_balance": (
                         accounts_by_user_id[kami.redeemed_by_user_id].points_balance
                         if kami.redeemed_by_user_id in accounts_by_user_id
                         else None
                     ),
-                    "points_remaining": (
-                        accounts_by_user_id[kami.redeemed_by_user_id].points_balance
-                        if kami.redeemed_by_user_id in accounts_by_user_id
-                        else None
-                    ),
+                    **_point_source_display_payload(kami, point_source_by_code),
                     "redeemed_at": to_api_beijing_iso(kami.redeemed_at, naive="civil")
                     if kami.redeemed_at
                     else None
@@ -2856,6 +2963,7 @@ async def list_kami_batches(
     batch_kamis = session.exec(statement).all()
     kami_codes = [kami.kami_code for kami in batch_kamis]
     binding_count_by_code = {code: 0 for code in kami_codes}
+    point_source_by_code = _point_source_summary_by_code(session, kami_codes)
     if kami_codes:
         bindings = session.exec(
             select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code.in_(kami_codes))
@@ -2888,6 +2996,7 @@ async def list_kami_batches(
             "frozen_count": 0,
             "redeemed_count": 0,
             "times_remaining_total": 0,
+            "points_remaining_total": 0,
             "device_bind_count": 0,
         })
         batches[batch.batch_no] = item
@@ -2925,12 +3034,17 @@ async def list_kami_batches(
                 "frozen_count": 0,
                 "redeemed_count": 0,
                 "times_remaining_total": 0,
+                "points_remaining_total": 0,
             },
         )
         item["total_count"] += 1
         item["times_remaining_total"] += kami.times_remaining or 0
-        item["device_bind_count"] += binding_count_by_code.get(kami.kami_code, 0) or (
-            1 if kami.bind_uuid else 0
+        item["points_remaining_total"] += (
+            _point_source_payload(kami, point_source_by_code)["points_remaining"] or 0
+        )
+        item["device_bind_count"] += _device_bind_count_for_kami(
+            kami,
+            binding_count_by_code.get(kami.kami_code, 0),
         )
         if not item["created_at"] and kami.created_at:
             item["created_at"] = to_api_beijing_iso(kami.created_at, naive="civil")
@@ -2988,8 +3102,14 @@ async def export_kamis(
     elif spec_id:
         statement = statement.where(Kami.spec_id == spec_id)
 
+    kamis = session.exec(statement.order_by(Kami.id.desc())).all()
+    point_source_by_code = _point_source_summary_by_code(
+        session,
+        [kami.kami_code for kami in kamis],
+    )
     rows = []
-    for kami in session.exec(statement.order_by(Kami.id.desc())).all():
+    for kami in kamis:
+        point_source = _point_source_payload(kami, point_source_by_code)
         rows.append({
             "id": kami.id,
             "spec_id": kami.spec_id,
@@ -2999,6 +3119,8 @@ async def export_kamis(
             "status": kami.status.value,
             "batch_no": kami.batch_no,
             "points_amount": kami.points_amount,
+            "points_remaining": point_source["points_remaining"],
+            "points_redeemed": point_source["points_redeemed"],
             "points_valid_days": kami.points_valid_days,
             "time_value": kami.time_value,
             "time_unit": kami.time_unit,
@@ -3033,6 +3155,8 @@ async def export_kamis(
             "status",
             "batch_no",
             "points_amount",
+            "points_remaining",
+            "points_redeemed",
             "points_valid_days",
             "time_value",
             "time_unit",
@@ -4093,6 +4217,7 @@ async def list_end_user_kamis(
 
     kami_codes = [kami.kami_code for kami in kamis]
     binding_count_by_code = {code: 0 for code in kami_codes}
+    point_source_by_code = _point_source_summary_by_code(session, kami_codes)
     last_consume_at_by_code = {}
     if kami_codes:
         bindings = session.exec(
@@ -4151,18 +4276,21 @@ async def list_end_user_kamis(
                     "authorization_owner": get_authorization_owner_value(kami.authorization_owner),
                     "binding_relation": get_binding_relation_text(kami),
                     "user_bind_mode": get_user_bind_mode_value(kami.user_bind_mode),
-                    "point_remaining_balance": (
+                    "point_balance": (
                         accounts_by_app_id[kami.app_id].points_balance
                         if kami.app_id in accounts_by_app_id
                         else None
                     ),
-                    "points_remaining": (
+                    "account_points_balance": (
                         accounts_by_app_id[kami.app_id].points_balance
                         if kami.app_id in accounts_by_app_id
                         else None
                     ),
-                    "device_bind_count": binding_count_by_code.get(kami.kami_code, 0)
-                    or (1 if kami.bind_uuid else 0),
+                    **_point_source_display_payload(kami, point_source_by_code),
+                    "device_bind_count": _device_bind_count_for_kami(
+                        kami,
+                        binding_count_by_code.get(kami.kami_code, 0),
+                    ),
                     "created_at": to_api_beijing_iso(kami.created_at, naive="civil") if kami.created_at else None,
                     "activate_time": to_api_beijing_iso(kami.activate_time, naive="civil") if kami.activate_time else None,
                     "expire_time": to_api_beijing_iso(kami.expire_time, naive="civil") if kami.expire_time else None,
