@@ -24,6 +24,22 @@ def _transaction_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
 
+def _owner_key(
+    owner: AuthorizationOwnerType,
+    user_id: Optional[int] = None,
+    username: Optional[str] = None,
+    device_uuid: Optional[str] = None,
+    fingerprint: Optional[str] = None,
+) -> str:
+    if owner == AuthorizationOwnerType.user:
+        if user_id is not None:
+            return f"user:{user_id}"
+        return f"username:{username or ''}"
+    if device_uuid:
+        return f"device:{device_uuid}"
+    return f"fingerprint:{fingerprint or ''}"
+
+
 def get_or_create_authorization_account(
     session: Session,
     app_id: str,
@@ -34,6 +50,13 @@ def get_or_create_authorization_account(
     fingerprint: Optional[str] = None,
 ) -> AuthorizationAccount:
     owner = AuthorizationOwnerType(owner_type)
+    owner_key = _owner_key(
+        owner,
+        user_id=user_id,
+        username=username,
+        device_uuid=device_uuid,
+        fingerprint=fingerprint,
+    )
     statement = select(AuthorizationAccount).where(
         AuthorizationAccount.app_id == app_id,
         AuthorizationAccount.owner_type == owner,
@@ -48,6 +71,8 @@ def get_or_create_authorization_account(
 
     account = session.exec(statement).first()
     if account:
+        if owner_key and not account.owner_key:
+            account.owner_key = owner_key
         if username and not account.username:
             account.username = username
         if fingerprint and not account.fingerprint:
@@ -61,6 +86,7 @@ def get_or_create_authorization_account(
     account = AuthorizationAccount(
         app_id=app_id,
         owner_type=owner,
+        owner_key=owner_key,
         user_id=user_id,
         username=username,
         device_uuid=device_uuid,

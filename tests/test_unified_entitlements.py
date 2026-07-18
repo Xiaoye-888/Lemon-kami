@@ -202,6 +202,36 @@ def test_times_and_time_grants_stack_on_unified_account():
         assert account.time_expires_at == first_expiry + timedelta(days=5)
 
 
+def test_authorization_account_sets_legacy_owner_key_for_existing_mysql_schema():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        user = EndUser(app_id="app_demo", username="owner-key-user", password_hash="hash")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+        user_account = get_or_create_authorization_account(
+            session=session,
+            app_id="app_demo",
+            owner_type=AuthorizationOwnerType.user.value,
+            user_id=user.id,
+            username=user.username,
+        )
+        device_account = get_or_create_authorization_account(
+            session=session,
+            app_id="app_demo",
+            owner_type=AuthorizationOwnerType.device.value,
+            device_uuid="device-1",
+            fingerprint="fingerprint-1",
+        )
+
+        assert user_account.owner_key == f"user:{user.id}"
+        assert device_account.owner_key == "device:device-1"
+
+
 def test_legacy_point_and_times_balances_are_visible_in_user_authorization():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

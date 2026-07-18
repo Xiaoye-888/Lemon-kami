@@ -172,6 +172,7 @@ class AuthorizationAccount(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     app_id: str = Field(max_length=64, index=True, description="App ID")
     owner_type: AuthorizationOwnerType = Field(index=True, description="Authorization owner type")
+    owner_key: str = Field(default="", max_length=255, index=True, description="Stable owner key for unique account lookup")
     user_id: Optional[int] = Field(default=None, index=True, description="End-user ID")
     username: Optional[str] = Field(default=None, max_length=64, index=True, description="End-user username")
     device_uuid: Optional[str] = Field(default=None, max_length=255, index=True, description="Device UUID")
