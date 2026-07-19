@@ -36,6 +36,9 @@
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="uuid" label="设备UUID" min-width="200" show-overflow-tooltip />
         <el-table-column prop="fingerprint" label="指纹" min-width="200" show-overflow-tooltip />
+        <el-table-column label="关联卡密" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">{{ getDeviceKamiText(row) }}</template>
+        </el-table-column>
         <el-table-column prop="username" label="用户名" width="140">
           <template #default="{ row }">{{ row.username || '-' }}</template>
         </el-table-column>
@@ -148,6 +151,13 @@ const loadDevices = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const getDeviceKamiText = (row) => {
+  const codes = Array.isArray(row?.kami_codes) ? row.kami_codes.filter(Boolean) : []
+  if (codes.length === 1) return codes[0]
+  if (codes.length > 1) return `${codes[0]} 等 ${codes.length} 个`
+  return row?.kami_code || '-'
 }
 
 const updateRisk = async (row, level) => {

@@ -6,6 +6,7 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, Session, create_engine, select
 
 import routes_admin
+import routes_sdk
 import routes_user
 from authorization_service import grant_points, grant_time, grant_times, get_or_create_authorization_account
 from main import app as fastapi_app
@@ -24,6 +25,7 @@ from models import (
     EventLog,
     Kami,
     KamiDeviceBinding,
+    KamiSpec,
     KamiStatus,
     KamiType,
     MachineBindMode,
@@ -75,6 +77,23 @@ def override_session_factory(engine):
             yield session
 
     return override_session
+
+
+class FakeRedis:
+    def __init__(self):
+        self.hashes = {}
+
+    def hgetall(self, key):
+        return self.hashes.get(key, {})
+
+    def hset(self, key, mapping):
+        self.hashes[key] = dict(mapping)
+
+    def expire(self, key, ttl):
+        return True
+
+    def delete(self, key):
+        self.hashes.pop(key, None)
 
 
 def test_points_redeem_credits_unified_user_app_account_and_stacks_by_app():
@@ -974,6 +993,266 @@ def test_admin_update_app_supports_renaming_without_changing_id():
             assert app.app_id == "app_demo"
             assert app.name == "New Name"
             assert app.app_secret == "secret-app_demo"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_sdk_verify_no_limit_device_authorization_links_card_device_and_admin_views():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_sdk.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_sdk.get_redis] = lambda: FakeRedis()
+    fastapi_app.dependency_overrides[routes_sdk.get_decrypted_data] = lambda: {
+        "kami": "FREEDEVICE",
+        "uuid": "device-free-1",
+        "fingerprint": "fingerprint-free-1",
+        "_app_info": {"app_id": "app_demo", "app_secret": "secret-app_demo"},
+    }
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        session.add(
+            ApiInterface(
+                name="SDK Verify",
+                interface_key="sdk.verify",
+                path="/api/v1/sdk/verify",
+                is_builtin=True,
+                status=1,
+            )
+        )
+        session.add(
+            Kami(
+                app_id="app_demo",
+                kami_code="FREEDEVICE",
+                kami_type=KamiType.lifetime,
+                status=KamiStatus.unused,
+                authorization_owner=AuthorizationOwnerMode.device,
+                machine_bind_mode=MachineBindMode.no_limit,
+                max_bind_devices=0,
+            )
+        )
+        session.commit()
+
+    try:
+        response = client.post("/api/v1/sdk/verify", json={})
+        assert response.status_code == 200
+
+        with Session(engine) as session:
+            kami = session.exec(select(Kami).where(Kami.kami_code == "FREEDEVICE")).one()
+            binding = session.exec(
+                select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code == "FREEDEVICE")
+            ).one()
+            device = session.exec(select(Device).where(Device.uuid == "device-free-1")).one()
+            assert kami.status == KamiStatus.active
+            assert kami.activate_time is not None
+            assert kami.redeemed_at is not None
+            assert kami.bind_uuid == "device-free-1"
+            assert binding.device_uuid == "device-free-1"
+            assert binding.fingerprint == "fingerprint-free-1"
+            assert device.fingerprint == "fingerprint-free-1"
+
+        kamis_response = client.get("/api/v1/admin/kamis", params={"app_id": "app_demo"})
+        assert kamis_response.status_code == 200
+        kami_item = kamis_response.json()["data"]["items"][0]
+        assert kami_item["kami_code"] == "FREEDEVICE"
+        assert kami_item["device_bind_count"] == 1
+        assert kami_item["bound_device_uuids"] == ["device-free-1"]
+        assert kami_item["redeemed_at"] is not None
+
+        devices_response = client.get("/api/v1/admin/devices", params={"app_id": "app_demo"})
+        assert devices_response.status_code == 200
+        device_item = devices_response.json()["data"]["items"][0]
+        assert device_item["uuid"] == "device-free-1"
+        assert device_item["kami_code"] == "FREEDEVICE"
+        assert device_item["kami_codes"] == ["FREEDEVICE"]
+        assert device_item["binding_relation"] == "设备授权"
+        assert device_item["machine_bind_mode"] == "no_limit"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_kami_views_infer_legacy_device_binding_and_redeem_time_from_kami_row():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+    activated_at = get_now_naive()
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        session.add(
+            Kami(
+                app_id="app_demo",
+                kami_code="LEGACYDEVICE",
+                kami_type=KamiType.month,
+                status=KamiStatus.active,
+                bind_uuid="legacy-device-1",
+                activate_time=activated_at,
+                redeemed_at=None,
+                bind_ip="10.0.0.8",
+                authorization_owner=AuthorizationOwnerMode.device,
+                machine_bind_mode=MachineBindMode.one_card_one_device,
+                max_bind_devices=1,
+            )
+        )
+        session.add(
+            Device(
+                app_id="app_demo",
+                uuid="legacy-device-1",
+                fingerprint="legacy-fingerprint-1",
+                last_ip="10.0.0.8",
+            )
+        )
+        session.commit()
+
+    try:
+        kamis_response = client.get("/api/v1/admin/kamis", params={"app_id": "app_demo"})
+        assert kamis_response.status_code == 200
+        kami_item = kamis_response.json()["data"]["items"][0]
+        assert kami_item["kami_code"] == "LEGACYDEVICE"
+        assert kami_item["device_bind_count"] == 1
+        assert kami_item["bound_device_uuids"] == ["legacy-device-1"]
+        assert kami_item["redeemed_at"] is not None
+
+        devices_response = client.get("/api/v1/admin/devices", params={"app_id": "app_demo"})
+        assert devices_response.status_code == 200
+        device_item = devices_response.json()["data"]["items"][0]
+        assert device_item["uuid"] == "legacy-device-1"
+        assert device_item["kami_code"] == "LEGACYDEVICE"
+        assert device_item["kami_codes"] == ["LEGACYDEVICE"]
+        assert device_item["machine_bind_mode"] == "one_card_one_device"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_kami_spec_detail_includes_device_link_and_redeem_time_fallback():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+    activated_at = get_now_naive()
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        spec = KamiSpec(
+            app_id="app_demo",
+            spec_key="monthly-device",
+            spec_name="Monthly Device",
+            kami_type=KamiType.month,
+            machine_bind_mode=MachineBindMode.one_card_one_device,
+            authorization_owner=AuthorizationOwnerMode.device,
+            user_bind_mode=UserBindMode.none,
+        )
+        session.add(spec)
+        session.commit()
+        session.refresh(spec)
+        session.add(
+            Kami(
+                app_id="app_demo",
+                spec_id=spec.id,
+                kami_code="SPECDEVICE",
+                kami_type=KamiType.month,
+                status=KamiStatus.active,
+                bind_uuid="spec-device-1",
+                activate_time=activated_at,
+                redeemed_at=None,
+                authorization_owner=AuthorizationOwnerMode.device,
+                machine_bind_mode=MachineBindMode.one_card_one_device,
+                max_bind_devices=1,
+            )
+        )
+        session.commit()
+        spec_id = spec.id
+
+    try:
+        response = client.get(f"/api/v1/admin/kami-specs/{spec_id}/kamis")
+        assert response.status_code == 200
+        item = response.json()["data"]["items"][0]
+        assert item["kami_code"] == "SPECDEVICE"
+        assert item["bind_uuid"] == "spec-device-1"
+        assert item["device_bind_count"] == 1
+        assert item["bound_device_uuids"] == ["spec-device-1"]
+        assert item["redeemed_at"] is not None
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_authorization_grant_with_source_kami_links_card_to_user():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        user = EndUser(app_id="app_demo", username="erin", password_hash="hash")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        session.add(
+            Kami(
+                app_id="app_demo",
+                kami_code="POINTUSER",
+                kami_type=KamiType.points,
+                status=KamiStatus.unused,
+                points_amount=70,
+                authorization_owner=AuthorizationOwnerMode.user,
+                user_bind_mode=UserBindMode.required,
+                machine_bind_mode=MachineBindMode.no_limit,
+                max_bind_devices=0,
+            )
+        )
+        session.commit()
+        user_id = user.id
+
+    try:
+        response = client.post(
+            "/api/v1/admin/authorizations/grant",
+            json={
+                "app_id": "app_demo",
+                "user_id": user_id,
+                "benefit_type": "points",
+                "amount": 70,
+                "source_kami_code": "POINTUSER",
+            },
+        )
+        assert response.status_code == 200
+
+        with Session(engine) as session:
+            kami = session.exec(select(Kami).where(Kami.kami_code == "POINTUSER")).one()
+            assert kami.status == KamiStatus.active
+            assert kami.redeemed_by_user_id == user_id
+            assert kami.redeemed_at is not None
+            assert kami.activate_time is not None
+            assert kami.bind_uuid == f"user:{user_id}"
+
+        kamis_response = client.get("/api/v1/admin/kamis", params={"app_id": "app_demo"})
+        assert kamis_response.status_code == 200
+        item = kamis_response.json()["data"]["items"][0]
+        assert item["kami_code"] == "POINTUSER"
+        assert item["redeemed_user"]["username"] == "erin"
+        assert item["binding_relation"] == "用户授权"
+        assert item["bound_device_uuids"] == []
+        assert item["redeemed_at"] is not None
+
+        detail_response = client.get(
+            f"/api/v1/admin/end-users/{user_id}/kamis",
+            params={"app_id": "app_demo"},
+        )
+        assert detail_response.status_code == 200
+        detail_items = detail_response.json()["data"]["items"]
+        assert detail_items[0]["kami_code"] == "POINTUSER"
+        assert detail_items[0]["authorization_lots"][0]["amount_total"] == 70
     finally:
         fastapi_app.dependency_overrides.clear()
 

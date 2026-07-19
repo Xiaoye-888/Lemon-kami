@@ -449,6 +449,30 @@ def _upsert_kami_device_binding(
     return binding
 
 
+def _ensure_kami_redeemed_at(kami: Kami, now_naive: datetime) -> None:
+    if not kami.redeemed_at:
+        kami.redeemed_at = kami.activate_time or now_naive
+
+
+def _record_kami_device_usage(
+    session: Session,
+    app_id: str,
+    kami: Kami,
+    uuid: str,
+    fingerprint: str,
+    client_ip: str,
+    now_naive: datetime,
+    *,
+    set_primary_bind_uuid: bool = False,
+) -> None:
+    _upsert_device(session, app_id, uuid, fingerprint, client_ip)
+    _upsert_kami_device_binding(
+        session, app_id, kami.kami_code, uuid, fingerprint, client_ip, now_naive
+    )
+    if set_primary_bind_uuid and not kami.bind_uuid:
+        kami.bind_uuid = _device_uuid(uuid, fingerprint)
+
+
 def _device_block_response(
     session: Session,
     app_id: str,
@@ -676,8 +700,8 @@ async def verify_kami(
             kami.expire_time = calculate_expire_time(kami.kami_type)
             kami.status = KamiStatus.active
             kami.bind_ip = client_ip or None
+        _ensure_kami_redeemed_at(kami, now_naive)
 
-        _upsert_device(session, app_id, uuid, fingerprint, client_ip)
         if machine_bind_mode == MachineBindMode.one_card_multi_device:
             existing_binding = session.exec(
                 select(KamiDeviceBinding).where(
@@ -713,11 +737,16 @@ async def verify_kami(
                     }
                     return encrypt_response(response_data, app_info.get("app_secret", ""))
 
-            _upsert_kami_device_binding(
-                session, app_id, kami_code, uuid, fingerprint, client_ip, now_naive
-            )
-            if not kami.bind_uuid:
-                kami.bind_uuid = uuid if uuid else fingerprint
+        _record_kami_device_usage(
+            session,
+            app_id,
+            kami,
+            uuid,
+            fingerprint,
+            client_ip,
+            now_naive,
+            set_primary_bind_uuid=True,
+        )
 
         if ip_lock_enabled and kami.bind_ip and client_ip and kami.bind_ip != client_ip:
             _record_event_log(session, app_id, kami_code, "verify", client_ip, uuid, user_agent,
@@ -785,11 +814,20 @@ async def verify_kami(
         kami.bind_uuid = uuid if uuid else fingerprint  # 如果没有uuid则使用指纹作为标识
         kami.bind_ip = client_ip or None
         kami.last_verify_at = now_naive
+        _ensure_kami_redeemed_at(kami, now_naive)
         app.api_call_count += 1
         session.add(kami)
         session.add(app)
 
-        _upsert_device(session, app_id, uuid, fingerprint, client_ip)
+        _record_kami_device_usage(
+            session,
+            app_id,
+            kami,
+            uuid,
+            fingerprint,
+            client_ip,
+            now_naive,
+        )
 
         # 缓存设备绑定信息到 Redis
         redis_client.hset(cache_key, mapping={
@@ -888,6 +926,16 @@ async def verify_kami(
                          status=0, message=times_error["message"])
         return encrypt_response(times_error, app_info.get("app_secret", ""))
     
+    _record_kami_device_usage(
+        session,
+        app_id,
+        kami,
+        uuid,
+        fingerprint,
+        client_ip,
+        now_naive,
+    )
+    _ensure_kami_redeemed_at(kami, now_naive)
     kami.last_verify_at = now_naive
     app.api_call_count += 1
     session.add(kami)
@@ -1027,14 +1075,19 @@ async def consume_kami(
                     "max_bind_devices": max_bind_devices,
                 }
                 return encrypt_response(response_data, app_info.get("app_secret", ""))
-        _upsert_device(session, app_id, uuid, fingerprint, client_ip)
-        _upsert_kami_device_binding(session, app_id, kami_code, uuid, fingerprint, client_ip, now_naive)
-        if not kami.bind_uuid:
-            kami.bind_uuid = uuid if uuid else fingerprint
+        _record_kami_device_usage(
+            session,
+            app_id,
+            kami,
+            uuid,
+            fingerprint,
+            client_ip,
+            now_naive,
+            set_primary_bind_uuid=True,
+        )
     elif machine_bind_mode == MachineBindMode.one_card_one_device:
         current_uuid = _device_uuid(uuid, fingerprint)
         if not kami.bind_uuid:
-            _upsert_device(session, app_id, uuid, fingerprint, client_ip)
             kami.bind_uuid = current_uuid
             kami.bind_ip = client_ip or None
             redis_client.hset(f"device_bind:{kami_code}", mapping={
@@ -1052,6 +1105,26 @@ async def consume_kami(
             if not device or device.uuid != kami.bind_uuid:
                 response_data = {"success": False, "message": "设备未注册或绑定不匹配"}
                 return encrypt_response(response_data, app_info.get("app_secret", ""))
+        _record_kami_device_usage(
+            session,
+            app_id,
+            kami,
+            uuid,
+            fingerprint,
+            client_ip,
+            now_naive,
+        )
+    else:
+        _record_kami_device_usage(
+            session,
+            app_id,
+            kami,
+            uuid,
+            fingerprint,
+            client_ip,
+            now_naive,
+            set_primary_bind_uuid=True,
+        )
 
     ip_lock_enabled = _config_bool(verify_config, "ip_lock_enabled", app.ip_lock_enabled)
     if ip_lock_enabled and kami.bind_ip and client_ip and kami.bind_ip != client_ip:
@@ -1062,6 +1135,8 @@ async def consume_kami(
         kami.activate_time = now_naive
         kami.expire_time = calculate_expire_time(kami.kami_type)
         kami.status = KamiStatus.active
+        kami.bind_ip = kami.bind_ip or client_ip or None
+    _ensure_kami_redeemed_at(kami, now_naive)
 
     times_error = _consume_times_if_needed(kami, amount=amount)
     if times_error:

@@ -635,9 +635,17 @@ const getCardQuotaText = (row) => {
   return getValidityText(row)
 }
 
+const isUserIdentityBindValue = (value) => {
+  if (!value || typeof value !== 'string') return false
+  const normalized = value.trim().toLowerCase()
+  return normalized.startsWith('user:') || normalized.startsWith('username:')
+}
+
 const getBoundDeviceText = (row) => {
-  if (row?.authorization_owner === 'user' || row?.binding_relation === '用户授权') return '-'
-  if (row?.bind_uuid) return row.bind_uuid
+  const devices = Array.isArray(row?.bound_device_uuids) ? row.bound_device_uuids.filter(Boolean) : []
+  if (devices.length === 1) return devices[0]
+  if (devices.length > 1) return `${devices.length} 台设备`
+  if (row?.bind_uuid && !isUserIdentityBindValue(row.bind_uuid)) return row.bind_uuid
   if (row?.device_bind_count) return `${row.device_bind_count} 台设备`
   return '-'
 }

@@ -1517,14 +1517,70 @@ def get_binding_relation_text(kami: Optional[Any]) -> str:
     return "设备授权"
 
 
-def _is_user_authorized_kami(kami: Kami) -> bool:
-    return get_authorization_owner_value(kami.authorization_owner) == AuthorizationOwnerMode.user.value
+def _is_user_identity_bind_uuid(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    normalized = str(value).strip().lower()
+    return normalized.startswith("user:") or normalized.startswith("username:")
 
 
 def _device_bind_count_for_kami(kami: Kami, binding_count: int = 0) -> int:
-    if _is_user_authorized_kami(kami):
+    if binding_count:
+        return binding_count
+    if not kami.bind_uuid or _is_user_identity_bind_uuid(kami.bind_uuid):
         return 0
-    return binding_count or (1 if kami.bind_uuid else 0)
+    return 1
+
+
+def _kami_device_summary_by_code(session: Session, kamis: list[Kami]) -> dict[str, dict[str, Any]]:
+    summaries = {
+        kami.kami_code: {"device_uuids": [], "first_bind_at": None}
+        for kami in kamis
+        if kami.kami_code
+    }
+    kami_codes = list(summaries.keys())
+    if kami_codes:
+        bindings = session.exec(
+            select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code.in_(kami_codes))
+        ).all()
+        for binding in bindings:
+            summary = summaries.setdefault(
+                binding.kami_code,
+                {"device_uuids": [], "first_bind_at": None},
+            )
+            if binding.device_uuid and binding.device_uuid not in summary["device_uuids"]:
+                summary["device_uuids"].append(binding.device_uuid)
+            if binding.first_bind_at and (
+                summary["first_bind_at"] is None or binding.first_bind_at < summary["first_bind_at"]
+            ):
+                summary["first_bind_at"] = binding.first_bind_at
+
+    for kami in kamis:
+        if not kami.kami_code or not kami.bind_uuid or _is_user_identity_bind_uuid(kami.bind_uuid):
+            continue
+        summary = summaries.setdefault(
+            kami.kami_code,
+            {"device_uuids": [], "first_bind_at": None},
+        )
+        if kami.bind_uuid not in summary["device_uuids"]:
+            summary["device_uuids"].append(kami.bind_uuid)
+    return summaries
+
+
+def _bound_device_uuids_for_kami(kami: Kami, summaries_by_code: dict[str, dict[str, Any]]) -> list[str]:
+    summary = summaries_by_code.get(kami.kami_code, {})
+    return list(summary.get("device_uuids") or [])
+
+
+def _kami_redeemed_at(kami: Kami, summaries_by_code: Optional[dict[str, dict[str, Any]]] = None) -> Optional[datetime]:
+    if kami.redeemed_at:
+        return kami.redeemed_at
+    if kami.activate_time:
+        return kami.activate_time
+    if summaries_by_code:
+        summary = summaries_by_code.get(kami.kami_code, {})
+        return summary.get("first_bind_at")
+    return None
 
 
 def _point_source_summary_by_code(session: Session, kami_codes: list[str]) -> dict[str, dict[str, int]]:
@@ -2259,14 +2315,8 @@ async def list_kami_spec_kamis(
     start = (page - 1) * page_size
     page_items = all_items[start:start + page_size]
     page_codes = [kami.kami_code for kami in page_items]
-    binding_count_by_code = {code: 0 for code in page_codes}
+    device_summary_by_code = _kami_device_summary_by_code(session, page_items)
     point_source_by_code = _point_source_summary_by_code(session, page_codes)
-    if page_codes:
-        bindings = session.exec(
-            select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code.in_(page_codes))
-        ).all()
-        for binding in bindings:
-            binding_count_by_code[binding.kami_code] = binding_count_by_code.get(binding.kami_code, 0) + 1
     return {
         "success": True,
         "data": {
@@ -2278,6 +2328,8 @@ async def list_kami_spec_kamis(
                     "kami_code": kami.kami_code,
                     "kami_type": _enum_value(kami.kami_type),
                     "status": _enum_value(kami.status),
+                    "bind_uuid": kami.bind_uuid,
+                    "bind_ip": kami.bind_ip,
                     "batch_no": kami.batch_no,
                     "points_amount": kami.points_amount,
                     "points_valid_days": kami.points_valid_days,
@@ -2293,9 +2345,15 @@ async def list_kami_spec_kamis(
                     **_point_source_display_payload(kami, point_source_by_code),
                     "device_bind_count": _device_bind_count_for_kami(
                         kami,
-                        binding_count_by_code.get(kami.kami_code, 0),
+                        len(_bound_device_uuids_for_kami(kami, device_summary_by_code)),
                     ),
-                    "redeemed_at": to_api_beijing_iso(kami.redeemed_at, naive="civil") if kami.redeemed_at else None,
+                    "bound_device_uuids": _bound_device_uuids_for_kami(kami, device_summary_by_code),
+                    "redeemed_at": to_api_beijing_iso(
+                        _kami_redeemed_at(kami, device_summary_by_code),
+                        naive="civil",
+                    )
+                    if _kami_redeemed_at(kami, device_summary_by_code)
+                    else None,
                     "created_at": to_api_beijing_iso(kami.created_at, naive="civil") if kami.created_at else None,
                     "last_verify_at": to_api_beijing_iso(kami.last_verify_at, naive="civil") if kami.last_verify_at else None,
                     **_kami_code_validity_payload(kami, now),
@@ -2815,14 +2873,8 @@ async def list_kamis(
         accounts_by_user_id = {account.user_id: account for account in accounts}
 
     kami_codes = [kami.kami_code for kami in kamis]
-    binding_count_by_code = {code: 0 for code in kami_codes}
+    device_summary_by_code = _kami_device_summary_by_code(session, kamis)
     point_source_by_code = _point_source_summary_by_code(session, kami_codes)
-    if kami_codes:
-        bindings = session.exec(
-            select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code.in_(kami_codes))
-        ).all()
-        for binding in bindings:
-            binding_count_by_code[binding.kami_code] = binding_count_by_code.get(binding.kami_code, 0) + 1
     last_consume_at_by_code = {}
     if kami_codes:
         consume_logs = session.exec(
@@ -2909,8 +2961,9 @@ async def list_kamis(
                     "user_bind_mode": get_user_bind_mode_value(kami.user_bind_mode),
                     "device_bind_count": _device_bind_count_for_kami(
                         kami,
-                        binding_count_by_code.get(kami.kami_code, 0),
+                        len(_bound_device_uuids_for_kami(kami, device_summary_by_code)),
                     ),
+                    "bound_device_uuids": _bound_device_uuids_for_kami(kami, device_summary_by_code),
                     "created_at": to_api_beijing_iso(kami.created_at, naive="civil")
                     if kami.created_at
                     else None,
@@ -2936,8 +2989,11 @@ async def list_kamis(
                         else None
                     ),
                     **_point_source_display_payload(kami, point_source_by_code),
-                    "redeemed_at": to_api_beijing_iso(kami.redeemed_at, naive="civil")
-                    if kami.redeemed_at
+                    "redeemed_at": to_api_beijing_iso(
+                        _kami_redeemed_at(kami, device_summary_by_code),
+                        naive="civil",
+                    )
+                    if _kami_redeemed_at(kami, device_summary_by_code)
                     else None
                 }
                 for kami in kamis
@@ -2972,14 +3028,8 @@ async def list_kami_batches(
 
     batch_kamis = session.exec(statement).all()
     kami_codes = [kami.kami_code for kami in batch_kamis]
-    binding_count_by_code = {code: 0 for code in kami_codes}
+    device_summary_by_code = _kami_device_summary_by_code(session, batch_kamis)
     point_source_by_code = _point_source_summary_by_code(session, kami_codes)
-    if kami_codes:
-        bindings = session.exec(
-            select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code.in_(kami_codes))
-        ).all()
-        for binding in bindings:
-            binding_count_by_code[binding.kami_code] = binding_count_by_code.get(binding.kami_code, 0) + 1
 
     batch_statement = select(KamiBatch).where(KamiBatch.app_id == app_id)
     if kami_type:
@@ -3054,7 +3104,7 @@ async def list_kami_batches(
         )
         item["device_bind_count"] += _device_bind_count_for_kami(
             kami,
-            binding_count_by_code.get(kami.kami_code, 0),
+            len(_bound_device_uuids_for_kami(kami, device_summary_by_code)),
         )
         if not item["created_at"] and kami.created_at:
             item["created_at"] = to_api_beijing_iso(kami.created_at, naive="civil")
@@ -3114,6 +3164,7 @@ async def export_kamis(
         statement = statement.where(Kami.spec_id == spec_id)
 
     kamis = session.exec(statement.order_by(Kami.id.desc())).all()
+    device_summary_by_code = _kami_device_summary_by_code(session, kamis)
     point_source_by_code = _point_source_summary_by_code(
         session,
         [kami.kami_code for kami in kamis],
@@ -3145,10 +3196,20 @@ async def export_kamis(
             "code_length": kami.code_length,
             "charset": kami.charset,
             "bind_ip": kami.bind_ip,
+            "bound_device_uuids": ",".join(_bound_device_uuids_for_kami(kami, device_summary_by_code)),
+            "device_bind_count": _device_bind_count_for_kami(
+                kami,
+                len(_bound_device_uuids_for_kami(kami, device_summary_by_code)),
+            ),
             "unbind_count": kami.unbind_count,
             "created_at": to_api_beijing_iso(kami.created_at, naive="civil") if kami.created_at else None,
             "redeemed_by_user_id": kami.redeemed_by_user_id,
-            "redeemed_at": to_api_beijing_iso(kami.redeemed_at, naive="civil") if kami.redeemed_at else None,
+            "redeemed_at": to_api_beijing_iso(
+                _kami_redeemed_at(kami, device_summary_by_code),
+                naive="civil",
+            )
+            if _kami_redeemed_at(kami, device_summary_by_code)
+            else None,
             "activate_time": to_api_beijing_iso(kami.activate_time, naive="civil") if kami.activate_time else None,
             "expire_time": to_api_beijing_iso(kami.expire_time, naive="civil") if kami.expire_time else None,
             "last_unbind_at": to_api_beijing_iso(kami.last_unbind_at, naive="civil") if kami.last_unbind_at else None,
@@ -3181,6 +3242,8 @@ async def export_kamis(
             "code_length",
             "charset",
             "bind_ip",
+            "bound_device_uuids",
+            "device_bind_count",
             "unbind_count",
             "created_at",
             "redeemed_by_user_id",
@@ -3392,8 +3455,11 @@ def _admin_device_payload(
     users_by_id: dict,
     ip_count: int,
     event_user_by_uuid: Optional[dict] = None,
+    related_kami_codes: Optional[list[str]] = None,
 ) -> dict:
-    kami = kamis_by_code.get(binding.kami_code) if binding else None
+    related_kami_codes = list(dict.fromkeys(related_kami_codes or ([] if not binding else [binding.kami_code])))
+    related_kamis = [kamis_by_code[code] for code in related_kami_codes if code in kamis_by_code]
+    kami = related_kamis[0] if related_kamis else (kamis_by_code.get(binding.kami_code) if binding else None)
     event_user_by_uuid = event_user_by_uuid or {}
     user = users_by_id.get(kami.redeemed_by_user_id) if kami and kami.redeemed_by_user_id else None
     event_user = event_user_by_uuid.get(device.uuid)
@@ -3401,12 +3467,20 @@ def _admin_device_payload(
     user_id = user.id if user else event_user.get("user_id") if event_user else None
     risk = get_device_risk_payload(device.risk_level, ip_count)
     machine_bind_mode = get_machine_bind_mode_value(kami.machine_bind_mode) if kami else None
+    redeemed_at = _kami_redeemed_at(kami) if kami else None
     return {
         "id": device.id,
         "uuid": device.uuid,
         "fingerprint": device.fingerprint,
         "last_ip": device.last_ip,
         "ip_count": ip_count,
+        "kami_code": related_kami_codes[0] if related_kami_codes else None,
+        "kami_codes": related_kami_codes,
+        "kami_count": len(related_kami_codes),
+        "kami_status": _enum_value(kami.status) if kami else None,
+        "redeemed_at": to_api_beijing_iso(redeemed_at, naive="civil") if redeemed_at else None,
+        "activate_time": to_api_beijing_iso(kami.activate_time, naive="civil") if kami and kami.activate_time else None,
+        "last_verify_at": to_api_beijing_iso(kami.last_verify_at, naive="civil") if kami and kami.last_verify_at else None,
         "username": username,
         "user_id": user_id,
         "binding_relation": "用户授权" if username and not kami else get_binding_relation_text(kami),
@@ -3464,18 +3538,68 @@ async def list_devices(
             )
         ).all()
 
-    binding_by_key = {}
-    kami_codes = []
+    related_codes_by_device_id = {device.id: [] for device in devices}
+    primary_binding_by_device_id = {}
+    kami_codes = set()
+    bindings_by_uuid = {}
+    bindings_by_fingerprint = {}
     for binding in bindings:
-        key = (binding.device_uuid, binding.fingerprint)
-        if key in device_keys and key not in binding_by_key:
-            binding_by_key[key] = binding
-            kami_codes.append(binding.kami_code)
+        if binding.device_uuid in device_uuids:
+            bindings_by_uuid.setdefault(binding.device_uuid, []).append(binding)
+        if binding.fingerprint in fingerprints:
+            bindings_by_fingerprint.setdefault(binding.fingerprint, []).append(binding)
+
+    def add_related_code(device: Device, kami_code: Optional[str]) -> None:
+        if not kami_code:
+            return
+        bucket = related_codes_by_device_id.setdefault(device.id, [])
+        if kami_code not in bucket:
+            bucket.append(kami_code)
+            kami_codes.add(kami_code)
+
+    for device in devices:
+        seen_binding_ids = set()
+        matching_bindings = []
+        for binding in bindings_by_uuid.get(device.uuid, []):
+            if binding.id not in seen_binding_ids:
+                matching_bindings.append(binding)
+                seen_binding_ids.add(binding.id)
+        for binding in bindings_by_fingerprint.get(device.fingerprint, []):
+            if binding.id not in seen_binding_ids:
+                matching_bindings.append(binding)
+                seen_binding_ids.add(binding.id)
+        for binding in matching_bindings:
+            primary_binding_by_device_id.setdefault(device.id, binding)
+            add_related_code(device, binding.kami_code)
+
+    legacy_bind_values = sorted({value for value in [*device_uuids, *fingerprints] if value})
+    if legacy_bind_values:
+        legacy_kamis = session.exec(
+            select(Kami).where(
+                Kami.app_id == app_id,
+                Kami.bind_uuid.in_(legacy_bind_values),
+            )
+        ).all()
+        devices_by_identity = {}
+        for device in devices:
+            for identity in {device.uuid, device.fingerprint}:
+                if identity:
+                    devices_by_identity.setdefault(identity, []).append(device)
+        for kami in legacy_kamis:
+            if not kami.bind_uuid or _is_user_identity_bind_uuid(kami.bind_uuid):
+                continue
+            for device in devices_by_identity.get(kami.bind_uuid, []):
+                add_related_code(device, kami.kami_code)
 
     kamis_by_code = {}
     user_ids = []
     if kami_codes:
-        kamis = session.exec(select(Kami).where(Kami.kami_code.in_(kami_codes))).all()
+        kamis = session.exec(
+            select(Kami).where(
+                Kami.app_id == app_id,
+                Kami.kami_code.in_(list(kami_codes)),
+            )
+        ).all()
         kamis_by_code = {kami.kami_code: kami for kami in kamis}
         user_ids = [kami.redeemed_by_user_id for kami in kamis if kami.redeemed_by_user_id]
 
@@ -3519,11 +3643,12 @@ async def list_devices(
             "items": [
                 _admin_device_payload(
                     device,
-                    binding_by_key.get((device.uuid, device.fingerprint)),
+                    primary_binding_by_device_id.get(device.id),
                     kamis_by_code,
                     users_by_id,
                     len(ip_sets_by_uuid.get(device.uuid, set())),
                     event_user_by_uuid,
+                    related_codes_by_device_id.get(device.id, []),
                 )
                 for device in devices
             ]
@@ -4210,15 +4335,10 @@ async def list_end_user_kamis(
     kamis = session.exec(statement.order_by(Kami.created_at.desc())).all()
 
     kami_codes = [kami.kami_code for kami in kamis]
-    binding_count_by_code = {code: 0 for code in kami_codes}
+    device_summary_by_code = _kami_device_summary_by_code(session, kamis)
     point_source_by_code = _point_source_summary_by_code(session, kami_codes)
     last_consume_at_by_code = {}
     if kami_codes:
-        bindings = session.exec(
-            select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code.in_(kami_codes))
-        ).all()
-        for binding in bindings:
-            binding_count_by_code[binding.kami_code] = binding_count_by_code.get(binding.kami_code, 0) + 1
         consume_logs = session.exec(
             select(EventLog)
             .where(EventLog.kami_code.in_(kami_codes), EventLog.event_type == "consume")
@@ -4280,12 +4400,18 @@ async def list_end_user_kamis(
             **_point_source_display_payload(kami, point_source_by_code),
             "device_bind_count": _device_bind_count_for_kami(
                 kami,
-                binding_count_by_code.get(kami.kami_code, 0),
+                len(_bound_device_uuids_for_kami(kami, device_summary_by_code)),
             ),
+            "bound_device_uuids": _bound_device_uuids_for_kami(kami, device_summary_by_code),
             "created_at": to_api_beijing_iso(kami.created_at, naive="civil") if kami.created_at else None,
             "activate_time": to_api_beijing_iso(kami.activate_time, naive="civil") if kami.activate_time else None,
             "expire_time": to_api_beijing_iso(kami.expire_time, naive="civil") if kami.expire_time else None,
-            "redeemed_at": to_api_beijing_iso(kami.redeemed_at, naive="civil") if kami.redeemed_at else None,
+            "redeemed_at": to_api_beijing_iso(
+                _kami_redeemed_at(kami, device_summary_by_code),
+                naive="civil",
+            )
+            if _kami_redeemed_at(kami, device_summary_by_code)
+            else None,
             "last_verify_at": to_api_beijing_iso(kami.last_verify_at, naive="civil") if kami.last_verify_at else None,
             "last_consume_at": to_api_beijing_iso(
                 last_consume_at_by_code.get(kami.kami_code),
@@ -4293,7 +4419,7 @@ async def list_end_user_kamis(
             )
             if last_consume_at_by_code.get(kami.kami_code)
             else None,
-            "remark": kami.remark,
+            "remark": getattr(kami, "remark", None),
             "authorization_lots": [
                 lot_payload(lot)
                 for lot in lots_by_code.get(kami.kami_code, [])
@@ -4720,6 +4846,26 @@ async def grant_user_authorization(
     user = session.get(EndUser, payload.user_id)
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
+    source_kami = None
+    if payload.source_kami_code:
+        source_kami = session.exec(
+            select(Kami).where(
+                Kami.app_id == payload.app_id,
+                Kami.kami_code == payload.source_kami_code,
+            )
+        ).first()
+        if not source_kami:
+            raise HTTPException(status_code=404, detail="来源卡密不存在")
+        if source_kami.status == KamiStatus.frozen:
+            raise HTTPException(status_code=400, detail="来源卡密已被冻结")
+        if source_kami.redeemed_by_user_id and source_kami.redeemed_by_user_id != user.id:
+            raise HTTPException(status_code=400, detail="来源卡密已绑定其他用户")
+        if (
+            source_kami.status == KamiStatus.active
+            and not source_kami.redeemed_by_user_id
+            and get_authorization_owner_value(source_kami.authorization_owner) != AuthorizationOwnerMode.user.value
+        ):
+            raise HTTPException(status_code=400, detail="来源卡密已作为设备授权使用")
 
     account = get_or_create_authorization_account(
         session=session,
@@ -4761,6 +4907,20 @@ async def grant_user_authorization(
             source_kami_code=payload.source_kami_code,
             operator=operator,
         )
+
+    if source_kami:
+        now = get_now().replace(tzinfo=None)
+        source_kami.status = KamiStatus.active
+        source_kami.redeemed_by_user_id = user.id
+        source_kami.redeemed_at = source_kami.redeemed_at or now
+        source_kami.activate_time = source_kami.activate_time or now
+        source_kami.authorization_owner = AuthorizationOwnerMode.user
+        if get_user_bind_mode_value(source_kami.user_bind_mode) == UserBindMode.none.value:
+            source_kami.user_bind_mode = UserBindMode.required
+        if not source_kami.bind_uuid:
+            source_kami.bind_uuid = f"user:{user.id}"
+        session.add(source_kami)
+        session.commit()
 
     session.refresh(account)
     log_admin_action(
