@@ -43,6 +43,8 @@ request.interceptors.response.use(
   },
   error => {
     if (error.response) {
+      const detail = error.response.data?.detail
+      const serverDetail = typeof detail === 'string' ? detail : detail?.message
       switch (error.response.status) {
         case 401:
           ElMessage.error('未授权，请重新登录')
@@ -56,10 +58,10 @@ request.interceptors.response.use(
           ElMessage.error('请求资源不存在')
           break
         case 500:
-          ElMessage.error('服务器错误')
+          ElMessage.error(serverDetail || '服务器错误')
           break
         default:
-          ElMessage.error(error.response.data.detail || '请求失败')
+          ElMessage.error(serverDetail || '请求失败')
       }
     } else {
       ElMessage.error('网络错误，请检查网络连接')

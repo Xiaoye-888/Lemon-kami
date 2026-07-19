@@ -1,11 +1,19 @@
-from sqlalchemy import inspect
+from sqlalchemy import event, inspect
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 import routes_admin
 from models import (
+    ApiInterface,
     App,
+    AppInterfaceConfig,
+    AuthorizationAccount,
+    AuthorizationBenefitType,
+    AuthorizationLot,
     AuthorizationOwnerMode,
+    AuthorizationOwnerType,
+    AuthorizationTransaction,
+    AuthorizationTransactionType,
     EndUser,
     EventLog,
     Kami,
@@ -26,6 +34,16 @@ def make_engine():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+
+
+def make_engine_with_foreign_keys():
+    engine = make_engine()
+
+    @event.listens_for(engine, "connect")
+    def enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+    return engine
 
 
 def make_app(app_id="app_demo"):
@@ -602,6 +620,153 @@ def test_delete_kamis_allows_active_card_and_clears_direct_relations():
             log = session.exec(select(EventLog).where(EventLog.event_type == "activate")).first()
             assert log is not None
             assert log.kami_code is None
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_delete_app_cleans_app_scoped_child_rows_before_parent_rows():
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+
+    engine = make_engine_with_foreign_keys()
+    SQLModel.metadata.create_all(engine)
+
+    def override_session():
+        with Session(engine) as session:
+            yield session
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app())
+        session.commit()
+        interface = ApiInterface(
+            name="Verify",
+            interface_key="sdk.verify",
+            method="POST",
+            path="/api/v1/sdk/verify",
+        )
+        spec = KamiSpec(
+            app_id="app_demo",
+            spec_key="points:100",
+            spec_name="100 points",
+            kami_type=KamiType.points,
+            points_amount=100,
+            machine_bind_mode=MachineBindMode.one_card_one_device,
+            max_bind_devices=1,
+            authorization_owner=AuthorizationOwnerMode.auto,
+            user_bind_mode=UserBindMode.auto,
+        )
+        session.add(interface)
+        session.add(spec)
+        session.commit()
+        session.refresh(interface)
+        session.refresh(spec)
+        batch = KamiBatch(
+            app_id="app_demo",
+            spec_id=spec.id,
+            batch_no="app-delete-batch",
+            kami_type=KamiType.points,
+            points_amount=100,
+            machine_bind_mode=MachineBindMode.one_card_one_device,
+            max_bind_devices=1,
+            authorization_owner=AuthorizationOwnerMode.auto,
+            user_bind_mode=UserBindMode.auto,
+        )
+        account = AuthorizationAccount(
+            app_id="app_demo",
+            owner_type=AuthorizationOwnerType.user,
+            owner_key="username:app-delete-user",
+            username="app-delete-user",
+            points_balance=100,
+        )
+        session.add(batch)
+        session.add(account)
+        session.add(AppInterfaceConfig(app_id="app_demo", interface_id=interface.id, enabled=True))
+        session.commit()
+        session.refresh(batch)
+        session.refresh(account)
+        session.add(
+            Kami(
+                app_id="app_demo",
+                kami_code="APPDEL001",
+                kami_type=KamiType.points,
+                status=KamiStatus.active,
+                bind_uuid="app-delete-device",
+                spec_id=spec.id,
+                batch_no=batch.batch_no,
+                points_amount=100,
+                machine_bind_mode=MachineBindMode.one_card_one_device,
+                max_bind_devices=1,
+                authorization_owner=AuthorizationOwnerMode.auto,
+                user_bind_mode=UserBindMode.auto,
+            )
+        )
+        session.commit()
+        session.add(
+            AuthorizationLot(
+                account_id=account.id,
+                source_kami_code="APPDEL001",
+                benefit_type=AuthorizationBenefitType.points,
+                amount_total=100,
+                amount_remaining=100,
+            )
+        )
+        session.add(
+            AuthorizationTransaction(
+                transaction_id="app-delete-auth-tx",
+                account_id=account.id,
+                source_kami_code="APPDEL001",
+                transaction_type=AuthorizationTransactionType.grant,
+                benefit_type=AuthorizationBenefitType.points,
+                amount=100,
+                balance_after=100,
+            )
+        )
+        session.add(
+            EventLog(
+                app_id="app_demo",
+                kami_code="APPDEL001",
+                event_type="verify",
+                status=1,
+            )
+        )
+        session.add(
+            KamiDeviceBinding(
+                app_id="app_demo",
+                kami_code="APPDEL001",
+                device_uuid="app-delete-device",
+                fingerprint="app-delete-fingerprint",
+            )
+        )
+        session.commit()
+
+    try:
+        response = client.delete("/api/v1/admin/apps/app_demo")
+        assert response.status_code == 200
+
+        with Session(engine) as session:
+            assert session.exec(select(App).where(App.app_id == "app_demo")).first() is None
+            assert session.exec(select(AppInterfaceConfig).where(AppInterfaceConfig.app_id == "app_demo")).all() == []
+            assert session.exec(select(KamiSpec).where(KamiSpec.app_id == "app_demo")).all() == []
+            assert session.exec(select(KamiBatch).where(KamiBatch.app_id == "app_demo")).all() == []
+            assert session.exec(select(AuthorizationAccount).where(AuthorizationAccount.app_id == "app_demo")).all() == []
+            assert session.exec(
+                select(AuthorizationLot).where(AuthorizationLot.source_kami_code == "APPDEL001")
+            ).all() == []
+            assert session.exec(
+                select(AuthorizationTransaction).where(AuthorizationTransaction.source_kami_code == "APPDEL001")
+            ).all() == []
+            assert session.exec(select(Kami).where(Kami.kami_code == "APPDEL001")).first() is None
+            assert session.exec(
+                select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code == "APPDEL001")
+            ).all() == []
+            stale_logs = session.exec(
+                select(EventLog).where(EventLog.kami_code == "APPDEL001")
+            ).all()
+            assert stale_logs == []
     finally:
         fastapi_app.dependency_overrides.clear()
 

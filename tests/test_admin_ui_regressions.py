@@ -37,3 +37,20 @@ def test_points_api_exports_batch_delete_end_users_request():
     assert "export function deleteEndUsers" in source
     assert "url: '/admin/end-users/delete'" in source
     assert "method: 'post'" in source
+
+
+def test_request_interceptor_shows_backend_detail_for_server_errors():
+    source = read_text("admin/src/utils/request.js")
+
+    assert "const serverDetail" in source
+    assert "ElMessage.error(serverDetail || '服务器错误')" in source
+
+
+def test_app_delete_warning_mentions_all_app_scoped_data():
+    source = read_text("admin/src/views/Apps.vue")
+
+    assert "批次" in source
+    assert "规格" in source
+    assert "授权" in source
+    assert "接口配置" in source
+    assert "日志" in source

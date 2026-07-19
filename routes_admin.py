@@ -1336,32 +1336,78 @@ async def delete_app(
     if not is_admin and app.created_by != username:
         raise HTTPException(status_code=403, detail="无权删除此应用，只有创建者可以删除")
 
-    # 统计关联数据
-    kami_count = len(session.exec(select(Kami).where(Kami.app_id == app_id)).all())
-    device_count = len(session.exec(select(Device).where(Device.app_id == app_id)).all())
-    binding_count = len(session.exec(select(KamiDeviceBinding).where(KamiDeviceBinding.app_id == app_id)).all())
-    legacy_access_count = len(session.exec(select(AppAuthorization).where(AppAuthorization.app_id == app_id)).all())
-    
-    # 清理旧版应用访问记录，兼容历史数据
+    kamis = session.exec(select(Kami).where(Kami.app_id == app_id)).all()
+    kami_codes = [kami.kami_code for kami in kamis if kami.kami_code]
+    devices = session.exec(select(Device).where(Device.app_id == app_id)).all()
+    bindings = session.exec(select(KamiDeviceBinding).where(KamiDeviceBinding.app_id == app_id)).all()
     legacy_access_rows = session.exec(select(AppAuthorization).where(AppAuthorization.app_id == app_id)).all()
+    interface_configs = session.exec(
+        select(AppInterfaceConfig).where(AppInterfaceConfig.app_id == app_id)
+    ).all()
+    batches = session.exec(select(KamiBatch).where(KamiBatch.app_id == app_id)).all()
+    specs = session.exec(select(KamiSpec).where(KamiSpec.app_id == app_id)).all()
+    authorization_accounts = session.exec(
+        select(AuthorizationAccount).where(AuthorizationAccount.app_id == app_id)
+    ).all()
+    account_ids = [account.id for account in authorization_accounts if account.id is not None]
+    authorization_lots = []
+    authorization_transactions = []
+    if account_ids:
+        authorization_lots = session.exec(
+            select(AuthorizationLot).where(AuthorizationLot.account_id.in_(account_ids))
+        ).all()
+        authorization_transactions = session.exec(
+            select(AuthorizationTransaction).where(AuthorizationTransaction.account_id.in_(account_ids))
+        ).all()
+    point_lots = session.exec(select(UserPointLot).where(UserPointLot.app_id == app_id)).all()
+    point_transactions = session.exec(
+        select(PointTransaction).where(PointTransaction.app_id == app_id)
+    ).all()
+    log_conditions = [EventLog.app_id == app_id]
+    if kami_codes:
+        log_conditions.append(EventLog.kami_code.in_(kami_codes))
+    event_logs = session.exec(select(EventLog).where(or_(*log_conditions))).all()
+
+    kami_count = len(kamis)
+    device_count = len(devices)
+    binding_count = len(bindings)
+    legacy_access_count = len(legacy_access_rows)
+
+    for log in event_logs:
+        session.delete(log)
     for row in legacy_access_rows:
         session.delete(row)
-
-    bindings = session.exec(select(KamiDeviceBinding).where(KamiDeviceBinding.app_id == app_id)).all()
+    for config in interface_configs:
+        session.delete(config)
     for binding in bindings:
         session.delete(binding)
-    
-    # 先删除关联的卡密（避免外键约束问题）
-    kamis = session.exec(select(Kami).where(Kami.app_id == app_id)).all()
+    for tx in authorization_transactions:
+        session.delete(tx)
+    for lot in authorization_lots:
+        session.delete(lot)
+    for lot in point_lots:
+        session.delete(lot)
+    for tx in point_transactions:
+        session.delete(tx)
+
+    session.flush()
+
+    for account in authorization_accounts:
+        session.delete(account)
     for kami in kamis:
         session.delete(kami)
-    
-    # 先删除关联的设备
-    devices = session.exec(select(Device).where(Device.app_id == app_id)).all()
+
+    session.flush()
+
+    for batch in batches:
+        session.delete(batch)
+    for spec in specs:
+        session.delete(spec)
     for device in devices:
         session.delete(device)
-    
-    # 最后删除应用
+
+    session.flush()
+
     session.delete(app)
     session.commit()
     
@@ -1377,6 +1423,11 @@ async def delete_app(
             "device_count": device_count,
             "binding_count": binding_count,
             "legacy_access_count": legacy_access_count,
+            "event_log_count": len(event_logs),
+            "interface_config_count": len(interface_configs),
+            "batch_count": len(batches),
+            "spec_count": len(specs),
+            "authorization_account_count": len(authorization_accounts),
         },
         message=f"用户 {username} 删除了应用 {app.name}"
     )

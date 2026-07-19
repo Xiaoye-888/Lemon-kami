@@ -203,7 +203,7 @@ const toggleStatus = async (row) => {
 const handleDelete = async (row) => {
   try {
     await ElMessageBox.confirm(
-      `确定要删除应用“${row.name}”吗？此操作会删除该应用下的卡密和设备记录。`,
+      `确定要删除应用“${row.name}”吗？此操作会删除该应用下的卡密、批次、规格、授权、接口配置、设备和日志记录。`,
       '警告',
       {
         confirmButtonText: '确定删除',
