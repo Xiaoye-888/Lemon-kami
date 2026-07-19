@@ -166,9 +166,21 @@
           <div class="client-preview__notes">{{ appConfigPreview.versionInfo }}</div>
 
           <div class="client-preview__actions">
-            <el-button type="primary" size="small">{{ appConfigPreview.buttonText }}</el-button>
+            <el-button
+              v-if="appConfigPreview.hasUpdateUrl"
+              tag="a"
+              :href="appConfigPreview.updateUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              type="primary"
+              size="small"
+            >
+              {{ appConfigPreview.buttonText }}
+            </el-button>
+            <el-button v-else type="primary" size="small" disabled>
+              {{ appConfigPreview.buttonText }}
+            </el-button>
             <el-button size="small">稍后再说</el-button>
-            <span class="client-preview__url">{{ appConfigPreview.updateUrl }}</span>
           </div>
         </div>
       </template>
@@ -327,7 +339,7 @@ const appConfigPreview = computed(() => {
     urgent: { text: '紧急公告', tag: 'danger' }
   }
   const level = noticeLevelMap[noticeLevel] || noticeLevelMap.normal
-  const updateUrl = data.update_url || data.download_url || '未配置下载地址'
+  const updateUrl = data.update_url || data.download_url || ''
 
   return {
     noticeEnabled: Boolean(data.notice_enabled),
@@ -339,7 +351,8 @@ const appConfigPreview = computed(() => {
     versionInfo: data.version_info || data.download_note || '暂无更新说明',
     forceUpdate: Boolean(data.force_update),
     buttonText: data.download_button_text || '立即下载',
-    updateUrl
+    updateUrl,
+    hasUpdateUrl: Boolean(updateUrl)
   }
 })
 
@@ -607,13 +620,6 @@ onMounted(async () => {
 
 .client-preview__actions {
   margin-top: 14px;
-}
-
-.client-preview__url {
-  min-width: 0;
-  color: #64748b;
-  font-size: 12px;
-  word-break: break-all;
 }
 
 @media (max-width: 1180px) {
