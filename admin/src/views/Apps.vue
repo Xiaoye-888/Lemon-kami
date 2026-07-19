@@ -77,7 +77,21 @@
         <el-descriptions-item label="App ID">{{ currentApp.app_id }}</el-descriptions-item>
         <el-descriptions-item label="应用名称">{{ currentApp.name }}</el-descriptions-item>
         <el-descriptions-item label="App Secret">
-          <el-text type="danger" style="user-select: all;">••••••••••••••••</el-text>
+          <div class="secret-row">
+            <el-text type="danger" class="secret-mask">****************</el-text>
+            <el-tooltip content="Copy App Secret" placement="top">
+              <el-button
+                v-if="currentApp?.app_secret"
+                size="small"
+                type="primary"
+                plain
+                circle
+                :icon="DocumentCopy"
+                aria-label="Copy App Secret"
+                @click="copyAppSecret"
+              />
+            </el-tooltip>
+          </div>
         </el-descriptions-item>
         <el-descriptions-item label="创建人">{{ currentApp.created_by || '-' }}</el-descriptions-item>
         <el-descriptions-item label="创建时间">{{ formatBeijingTime(currentApp.created_at) }}</el-descriptions-item>
@@ -93,8 +107,9 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { DocumentCopy, Plus } from '@element-plus/icons-vue'
 import { createApp, deleteApp, getApps, updateApp, updateAppStatus } from '../api/admin'
+import { copyTextToClipboard } from '../utils/clipboard'
 import { formatBeijingTime } from '../utils/datetime'
 
 const router = useRouter()
@@ -228,6 +243,21 @@ const viewDetail = (row) => {
   detailDialogVisible.value = true
 }
 
+const copyAppSecret = async () => {
+  if (!currentApp.value?.app_secret) {
+    ElMessage.warning('暂无 App Secret 可复制')
+    return
+  }
+
+  try {
+    await copyTextToClipboard(currentApp.value.app_secret)
+    ElMessage.success('复制成功')
+  } catch (error) {
+    console.error('复制 App Secret 失败:', error)
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
 const goAppInterfaces = (row) => {
   router.push({
     path: `/apps/${row.app_id}/interfaces`,
@@ -258,6 +288,17 @@ onMounted(loadApps)
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.secret-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.secret-mask {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: 0;
 }
 
 :deep(.el-table th) {
