@@ -835,6 +835,7 @@ import {
   getValidityText,
   isFixedTimeCard
 } from '../utils/kamiDisplay'
+import { copyTextToClipboard } from '../utils/clipboard'
 import { groupKamiSpecsByBenefit } from '../utils/kamiSpecGrouping'
 
 const route = useRoute()
@@ -1738,7 +1739,7 @@ const formatOptionalTime = (value) => (value ? formatBeijingTime(value) : '-')
 
 const copyToClipboard = async (text) => {
   try {
-    await navigator.clipboard.writeText(text)
+    await copyTextToClipboard(text)
     ElMessage.success('复制成功')
   } catch {
     ElMessage.error('复制失败，请手动复制')

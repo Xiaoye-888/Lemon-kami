@@ -252,6 +252,7 @@ import {
 } from '@element-plus/icons-vue'
 import { batchCreateKamis, deleteKamis, exportKamis, freezeKami, getKamiBatches, getKamiSpecs, getKamis } from '../api/kami'
 import { getApps } from '../api/admin'
+import { copyTextToClipboard } from '../utils/clipboard'
 import { formatBeijingTime } from '../utils/datetime'
 import {
   TYPE_OPTIONS,
@@ -600,7 +601,7 @@ const goCurrentSpec = () => {
 
 const copyToClipboard = async (text) => {
   try {
-    await navigator.clipboard.writeText(text)
+    await copyTextToClipboard(text)
     ElMessage.success('复制成功')
   } catch {
     ElMessage.error('复制失败，请手动复制')
