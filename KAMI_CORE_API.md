@@ -84,13 +84,15 @@ Query 参数：
 }
 ```
 
+用户授权场景推荐同时传 `user_id` 和 `username`：`user_id` 作为稳定绑定标识，用户名后续变更也不影响授权归属；`username` 用于后台展示和同步当前注册用户名。设备授权场景不需要传这两个用户字段，只传 `uuid` 和 `fingerprint` 即可。
+
 行为：
 
 - 未使用卡密首次验证时自动激活并绑定设备。
 - `machine_bind_mode=no_limit` 时不限制机器码；`one_card_one_device` 时一个卡密只能绑定一台设备；`one_card_multi_device` 时一个卡密可绑定多台设备并记录绑定明细。
 - 用户授权能力在 `sdk.verify` 独立配置中开启；开启后，每个批次按自己的 `authorization_owner` 和 `user_bind_mode` 执行用户绑定策略。
-- `user_bind_mode=auto` 时，每张卡密首次使用会自动识别：传入有效 `user_id`/`username` 则绑定到用户，未传用户则按设备授权；一旦绑定用户，后续验证和核销必须传入同一用户。
-- `user_bind_mode=required` 时，验证和核销必须传入 `user_id` 或 `username`。
+- `user_bind_mode=auto` 时，每张卡密首次使用会自动识别：同时传入有效 `user_id` 和 `username` 则优先按 `user_id` 绑定用户并记录用户名，未传用户字段则按设备授权；一旦绑定用户，后续验证和核销必须传入同一用户。
+- `user_bind_mode=required` 时，验证和核销必须至少传入 `user_id` 或 `username`；有账号体系的软件推荐两个都传。
 - 时间卡返回到期时间。
 - 永久卡 `expire_time` 为 `null`。
 - 次数卡验证只检查剩余次数，不扣减次数；业务侧完成一次消耗/核销时，需单独调用 `consume` 接口扣减。
@@ -125,10 +127,13 @@ Query 参数：
   "uuid": "device-001",
   "fingerprint": "hardware-fingerprint",
   "user_id": 123,
+  "username": "demo-user",
   "amount": 1,
   "biz_id": "order-or-request-id"
 }
 ```
+
+用户授权的次数卡在核销时也推荐同时传 `user_id` 和 `username`，确保扣减记录、授权明细和后台展示归属一致。
 
 响应重点字段：
 
