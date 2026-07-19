@@ -4495,18 +4495,25 @@ async def delete_end_users(
         session.delete(tx)
     for lot in authorization_lots:
         session.delete(lot)
-    for account in authorization_accounts:
-        session.delete(account)
     for lot in point_lots:
         session.delete(lot)
     for tx in point_transactions:
         session.delete(tx)
     for account in point_accounts:
         session.delete(account)
+
+    # Force child-row deletes to hit the database before deleting FK parents.
+    session.flush()
+
+    for account in authorization_accounts:
+        session.delete(account)
     for device in devices_to_delete:
         session.delete(device)
     for kami in redeemed_kamis:
         session.delete(kami)
+
+    session.flush()
+
     for user in users:
         session.delete(user)
 

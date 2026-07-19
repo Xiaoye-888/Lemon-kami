@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, Session, create_engine, select
 
@@ -42,6 +43,16 @@ def make_engine():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+
+
+def make_engine_with_foreign_keys():
+    engine = make_engine()
+
+    @event.listens_for(engine, "connect")
+    def enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+    return engine
 
 
 def make_app(app_id="app_demo", name="Demo"):
@@ -805,6 +816,101 @@ def test_admin_delete_end_users_removes_legacy_owner_key_accounts_without_user_i
             ).all() == []
             assert session.exec(select(Kami).where(Kami.kami_code == "USERLEGACY")).all() == []
             assert session.exec(select(EventLog).where(EventLog.kami_code == "USERLEGACY")).all() == []
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_delete_end_users_respects_foreign_key_delete_order():
+    engine = make_engine_with_foreign_keys()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        user = EndUser(app_id="app_demo", username="delete-fk", password_hash="hash")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+        account = AuthorizationAccount(
+            app_id="app_demo",
+            owner_type=AuthorizationOwnerType.user,
+            owner_key=f"username:{user.username}",
+            username=user.username,
+            points_balance=70,
+        )
+        session.add(account)
+        session.commit()
+        session.refresh(account)
+        account_id = account.id
+
+        session.add_all(
+            [
+                AuthorizationLot(
+                    account_id=account.id,
+                    benefit_type=AuthorizationBenefitType.points,
+                    amount_total=70,
+                    amount_remaining=70,
+                ),
+                AuthorizationTransaction(
+                    transaction_id="fk-order-tx",
+                    account_id=account.id,
+                    transaction_type=AuthorizationTransactionType.grant,
+                    benefit_type=AuthorizationBenefitType.points,
+                    amount=70,
+                    balance_after=70,
+                ),
+                Kami(
+                    app_id="app_demo",
+                    kami_code="FKORDER",
+                    kami_type=KamiType.points,
+                    status=KamiStatus.active,
+                    points_amount=70,
+                    redeemed_by_user_id=user.id,
+                    authorization_owner=AuthorizationOwnerMode.user,
+                ),
+                KamiDeviceBinding(
+                    app_id="app_demo",
+                    kami_code="FKORDER",
+                    device_uuid="fk-device",
+                    fingerprint="fk-fingerprint",
+                ),
+                EventLog(
+                    app_id="app_demo",
+                    kami_code="FKORDER",
+                    event_type="verify",
+                    payload='{"username": "delete-fk"}',
+                    status=1,
+                ),
+                Device(
+                    app_id="app_demo",
+                    uuid="fk-device",
+                    fingerprint="fk-fingerprint",
+                ),
+            ]
+        )
+        session.commit()
+        user_id = user.id
+
+    try:
+        response = client.post("/api/v1/admin/end-users/delete", json={"user_ids": [user_id]})
+        assert response.status_code == 200
+
+        with Session(engine) as session:
+            assert session.get(EndUser, user_id) is None
+            assert session.get(AuthorizationAccount, account_id) is None
+            assert session.exec(
+                select(AuthorizationLot).where(AuthorizationLot.account_id == account_id)
+            ).all() == []
+            assert session.exec(
+                select(AuthorizationTransaction).where(AuthorizationTransaction.account_id == account_id)
+            ).all() == []
+            assert session.exec(select(Kami).where(Kami.kami_code == "FKORDER")).all() == []
+            assert session.exec(select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code == "FKORDER")).all() == []
+            assert session.exec(select(EventLog).where(EventLog.kami_code == "FKORDER")).all() == []
     finally:
         fastapi_app.dependency_overrides.clear()
 
