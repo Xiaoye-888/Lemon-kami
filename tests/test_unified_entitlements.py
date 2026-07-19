@@ -1131,6 +1131,63 @@ def test_admin_kami_views_infer_legacy_device_binding_and_redeem_time_from_kami_
         fastapi_app.dependency_overrides.clear()
 
 
+def test_admin_devices_infer_historical_device_authorization_without_device_row():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+    activated_at = get_now_naive()
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        session.add(
+            Kami(
+                app_id="app_demo",
+                kami_code="HISTORYDEVICE",
+                kami_type=KamiType.month,
+                status=KamiStatus.active,
+                bind_uuid="historical-device-1",
+                bind_ip="10.0.0.9",
+                activate_time=activated_at,
+                redeemed_at=None,
+                authorization_owner=AuthorizationOwnerMode.device,
+                machine_bind_mode=MachineBindMode.one_card_one_device,
+                max_bind_devices=1,
+            )
+        )
+        session.add(
+            EventLog(
+                app_id="app_demo",
+                kami_code="HISTORYDEVICE",
+                event_type="activate",
+                ip_address="10.0.0.9",
+                device_uuid="historical-device-1",
+                status=1,
+                payload='{"fingerprint": "historical-fingerprint-1"}',
+            )
+        )
+        session.commit()
+
+    try:
+        response = client.get("/api/v1/admin/devices", params={"app_id": "app_demo"})
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["total"] == 1
+        item = data["items"][0]
+        assert item["uuid"] == "historical-device-1"
+        assert item["fingerprint"] == "historical-fingerprint-1"
+        assert item["last_ip"] == "10.0.0.9"
+        assert item["kami_code"] == "HISTORYDEVICE"
+        assert item["kami_codes"] == ["HISTORYDEVICE"]
+        assert item["binding_relation"] == "设备授权"
+        assert item["machine_bind_mode"] == "one_card_one_device"
+        assert item["redeemed_at"] is not None
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_admin_kami_spec_detail_includes_device_link_and_redeem_time_fallback():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
@@ -1181,6 +1238,49 @@ def test_admin_kami_spec_detail_includes_device_link_and_redeem_time_fallback():
         assert item["device_bind_count"] == 1
         assert item["bound_device_uuids"] == ["spec-device-1"]
         assert item["redeemed_at"] is not None
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_end_user_kamis_preserves_deleted_source_kami_reference():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        user = EndUser(app_id="app_demo", username="frank", password_hash="hash")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        account = get_or_create_authorization_account(
+            session=session,
+            app_id="app_demo",
+            owner_type=AuthorizationOwnerType.user.value,
+            user_id=user.id,
+            username=user.username,
+        )
+        grant_points(session, account, 88, source_kami_code="DELETEDSOURCE")
+        user_id = user.id
+
+    try:
+        response = client.get(
+            f"/api/v1/admin/end-users/{user_id}/kamis",
+            params={"app_id": "app_demo"},
+        )
+        assert response.status_code == 200
+        items = response.json()["data"]["items"]
+        assert len(items) == 1
+        item = items[0]
+        assert item["kami_code"] == "DELETEDSOURCE"
+        assert item["batch_no"] == "来源卡密已删除"
+        assert item["source_kami_deleted"] is True
+        assert item["binding_relation"] == "用户授权"
+        assert item["points_amount"] == 88
+        assert item["authorization_lots"][0]["source_kami_code"] == "DELETEDSOURCE"
     finally:
         fastapi_app.dependency_overrides.clear()
 

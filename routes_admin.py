@@ -12,6 +12,7 @@ import csv
 import io
 import logging
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 # 中国时区
@@ -3490,6 +3491,103 @@ def _admin_device_payload(
     }
 
 
+def _fingerprint_from_event_payload(payload_value: Optional[str]) -> Optional[str]:
+    if not payload_value:
+        return None
+    try:
+        payload = json.loads(payload_value)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    fingerprint = payload.get("fingerprint") or payload.get("device_fingerprint")
+    return str(fingerprint) if fingerprint else None
+
+
+def _historical_device_candidates(
+    session: Session,
+    app_id: str,
+    physical_devices: list[Device],
+) -> list[Any]:
+    existing_identities = {
+        identity
+        for device in physical_devices
+        for identity in (device.uuid, device.fingerprint)
+        if identity
+    }
+    virtual_by_uuid = {}
+
+    def add_virtual_device(
+        uuid_value: Optional[str],
+        *,
+        fingerprint: Optional[str] = None,
+        last_ip: Optional[str] = None,
+    ) -> None:
+        if not uuid_value:
+            return
+        if uuid_value in virtual_by_uuid:
+            device = virtual_by_uuid[uuid_value]
+            if fingerprint and device.fingerprint == device.uuid:
+                device.fingerprint = fingerprint
+                existing_identities.add(fingerprint)
+            if last_ip and not device.last_ip:
+                device.last_ip = last_ip
+            return
+        if uuid_value in existing_identities or (fingerprint and fingerprint in existing_identities):
+            return
+        virtual_by_uuid[uuid_value] = SimpleNamespace(
+            id=f"historical:{uuid_value}",
+            app_id=app_id,
+            uuid=uuid_value,
+            fingerprint=fingerprint or uuid_value,
+            last_ip=last_ip,
+            risk_level=0,
+        )
+        existing_identities.add(uuid_value)
+        if fingerprint:
+            existing_identities.add(fingerprint)
+
+    legacy_kamis = session.exec(
+        select(Kami).where(
+            Kami.app_id == app_id,
+            Kami.status == KamiStatus.active,
+            Kami.bind_uuid.is_not(None),
+        )
+    ).all()
+    for kami in legacy_kamis:
+        if _is_user_identity_bind_uuid(kami.bind_uuid):
+            continue
+        add_virtual_device(kami.bind_uuid, last_ip=kami.bind_ip)
+
+    bindings = session.exec(
+        select(KamiDeviceBinding).where(KamiDeviceBinding.app_id == app_id)
+    ).all()
+    for binding in bindings:
+        add_virtual_device(
+            binding.device_uuid or binding.fingerprint,
+            fingerprint=binding.fingerprint,
+            last_ip=binding.bind_ip,
+        )
+
+    logs = session.exec(
+        select(EventLog)
+        .where(
+            EventLog.app_id == app_id,
+            EventLog.status == 1,
+            EventLog.device_uuid.is_not(None),
+        )
+        .order_by(EventLog.created_at.desc())
+    ).all()
+    for log in logs:
+        add_virtual_device(
+            log.device_uuid,
+            fingerprint=_fingerprint_from_event_payload(log.payload),
+            last_ip=log.ip_address,
+        )
+
+    return list(virtual_by_uuid.values())
+
+
 @router.get("/devices", summary="获取设备列表")
 async def list_devices(
     app_id: str,
@@ -3513,14 +3611,19 @@ async def list_devices(
     if risk_level is not None:
         statement = statement.where(Device.risk_level == risk_level)
 
+    physical_devices = session.exec(statement).all()
+    all_devices = physical_devices
+    if risk_level in (None, 0):
+        all_devices = [
+            *physical_devices,
+            *_historical_device_candidates(session, app_id, physical_devices),
+        ]
+
     # 分页
-    total = len(session.exec(statement).all())
+    total = len(all_devices)
     offset = (page - 1) * page_size
-    statement = statement.offset(offset).limit(page_size)
+    devices = all_devices[offset:offset + page_size]
 
-    devices = session.exec(statement).all()
-
-    device_keys = {(device.uuid, device.fingerprint) for device in devices}
     device_uuids = [device.uuid for device in devices]
     fingerprints = [device.fingerprint for device in devices]
 
@@ -4351,6 +4454,7 @@ async def list_end_user_kamis(
     def lot_payload(lot: AuthorizationLot) -> dict:
         return {
             "id": lot.id,
+            "source_kami_code": lot.source_kami_code,
             "benefit_type": _enum_value(lot.benefit_type),
             "amount_total": lot.amount_total,
             "amount_remaining": lot.amount_remaining,
@@ -4386,6 +4490,7 @@ async def list_end_user_kamis(
             "max_bind_devices": kami.max_bind_devices,
             "authorization_owner": get_authorization_owner_value(kami.authorization_owner),
             "binding_relation": get_binding_relation_text(kami),
+            "source_kami_deleted": False,
             "user_bind_mode": get_user_bind_mode_value(kami.user_bind_mode),
             "point_balance": (
                 _authorization_points_balance(accounts_by_app_id.get(kami.app_id))
@@ -4456,6 +4561,7 @@ async def list_end_user_kamis(
             "max_bind_devices": 0,
             "authorization_owner": AuthorizationOwnerMode.user.value,
             "binding_relation": "用户授权",
+            "source_kami_deleted": False,
             "user_bind_mode": UserBindMode.required.value,
             "point_balance": account.points_balance if account else None,
             "account_points_balance": account.points_balance if account else None,
@@ -4476,11 +4582,73 @@ async def list_end_user_kamis(
             "authorization_lots": [lot_payload(lot)],
         }
 
+    def build_deleted_source_lot_detail_item(source_kami_code: str, lots: list[AuthorizationLot]) -> dict:
+        first_lot = lots[0]
+        account = accounts_by_id.get(first_lot.account_id)
+        benefit_type = _enum_value(first_lot.benefit_type)
+        is_points = benefit_type == AuthorizationBenefitType.points.value
+        is_times = benefit_type == AuthorizationBenefitType.times.value
+        is_time = benefit_type == AuthorizationBenefitType.time.value
+        total_amount = sum(lot.amount_total or 0 for lot in lots)
+        remaining_amount = sum(lot.amount_remaining or 0 for lot in lots)
+        latest_created_at = max((lot.created_at for lot in lots if lot.created_at), default=None)
+        expires_at = first_lot.expires_at or (account.time_expires_at if account else None)
+        is_lifetime = bool(account and account.is_lifetime and is_time)
+        kami_type = KamiType.lifetime.value if is_lifetime else (KamiType.day.value if is_time else benefit_type)
+
+        return {
+            "id": f"deleted-source-kami-{source_kami_code}",
+            "app_id": account.app_id if account else app_id,
+            "kami_code": source_kami_code,
+            "kami_type": kami_type,
+            "status": "active" if not account or account.status == 1 else "frozen",
+            "batch_no": "来源卡密已删除",
+            "points_amount": total_amount if is_points else None,
+            "points_valid_days": None,
+            "time_value": total_amount if is_time and total_amount else None,
+            "time_unit": "day" if is_time and total_amount else None,
+            "times_total": total_amount if is_times else None,
+            "times_remaining": remaining_amount if is_times else None,
+            "bind_uuid": None,
+            "bind_ip": None,
+            "machine_bind_mode": MachineBindMode.no_limit.value,
+            "machine_bind_mode_text": get_machine_bind_mode_text(MachineBindMode.no_limit),
+            "max_bind_devices": 0,
+            "authorization_owner": AuthorizationOwnerMode.user.value,
+            "binding_relation": "用户授权",
+            "source_kami_deleted": True,
+            "user_bind_mode": UserBindMode.required.value,
+            "point_balance": account.points_balance if account else None,
+            "account_points_balance": account.points_balance if account else None,
+            "point_remaining_balance": remaining_amount if is_points else None,
+            "points_remaining": remaining_amount if is_points else None,
+            "points_redeemed": max(total_amount - remaining_amount, 0) if is_points else None,
+            "point_source_total": total_amount if is_points else None,
+            "point_source_remaining": remaining_amount if is_points else None,
+            "point_source_redeemed": max(total_amount - remaining_amount, 0) if is_points else None,
+            "device_bind_count": 0,
+            "bound_device_uuids": [],
+            "created_at": to_api_beijing_iso(latest_created_at, naive="civil") if latest_created_at else None,
+            "activate_time": None,
+            "expire_time": to_api_beijing_iso(expires_at, naive="civil") if expires_at else None,
+            "redeemed_at": to_api_beijing_iso(latest_created_at, naive="civil") if latest_created_at else None,
+            "last_verify_at": None,
+            "last_consume_at": None,
+            "remark": None,
+            "authorization_lots": [lot_payload(lot) for lot in lots],
+        }
+
     items = [build_kami_detail_item(kami) for kami in kamis]
     items.extend(
         build_manual_lot_detail_item(lot)
         for lot in authorization_lots
         if not lot.source_kami_code
+    )
+    covered_source_codes = {kami.kami_code for kami in kamis if kami.kami_code}
+    items.extend(
+        build_deleted_source_lot_detail_item(source_code, lots)
+        for source_code, lots in lots_by_code.items()
+        if source_code not in covered_source_codes
     )
 
     return {
