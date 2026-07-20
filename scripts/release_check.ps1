@@ -115,8 +115,8 @@ function Invoke-ReleaseBoundaryStaticChecks {
         "must be an absolute Linux path when set.",
         "must not be /.",
         "must not contain whitespace.",
-        'docker build -t "${BACKEND_IMAGE}:${GITHUB_SHA}" .',
-        'docker build -t "${FRONTEND_IMAGE}:${GITHUB_SHA}" ./admin',
+        '--build-arg PIP_INDEX_URL=https://pypi.org/simple',
+        '--build-arg NPM_REGISTRY=https://registry.npmjs.org',
         "CLEANUP_CMD",
         '${DEPLOY_DIR}/lemon-kami-images.tar.gz',
         '${DEPLOY_DIR}/runtime.env'

@@ -175,8 +175,12 @@ jobs:
 
       - name: Build Docker images
         run: |
-          docker build -t "${BACKEND_IMAGE}:${GITHUB_SHA}" .
-          docker build -t "${FRONTEND_IMAGE}:${GITHUB_SHA}" ./admin
+          docker build \
+            --build-arg PIP_INDEX_URL=https://pypi.org/simple \
+            -t "${BACKEND_IMAGE}:${GITHUB_SHA}" .
+          docker build \
+            --build-arg NPM_REGISTRY=https://registry.npmjs.org \
+            -t "${FRONTEND_IMAGE}:${GITHUB_SHA}" ./admin
           docker save "${BACKEND_IMAGE}:${GITHUB_SHA}" "${FRONTEND_IMAGE}:${GITHUB_SHA}" | gzip > lemon-kami-images.tar.gz
 
       - name: Prepare runtime environment
