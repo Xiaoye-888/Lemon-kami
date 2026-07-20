@@ -3,7 +3,7 @@ from typing import Optional, List
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from enum import Enum
-from sqlalchemy import Column, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Column, String, Text, UniqueConstraint
 
 # 中国时区
 CST = ZoneInfo("Asia/Shanghai")
@@ -270,7 +270,7 @@ class AppNotice(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     app_id: str = Field(
-        sa_column=Column(String(64), ForeignKey("apps.app_id"), nullable=False, index=True),
+        sa_column=Column(String(64), nullable=False, index=True),
         description="App ID",
     )
     title: str = Field(sa_column=Column(String(128), nullable=False), description="Notice title")
@@ -299,7 +299,7 @@ class AppVersion(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     app_id: str = Field(
-        sa_column=Column(String(64), ForeignKey("apps.app_id"), nullable=False, index=True),
+        sa_column=Column(String(64), nullable=False, index=True),
         description="App ID",
     )
     platform: str = Field(

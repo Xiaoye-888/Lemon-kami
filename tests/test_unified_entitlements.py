@@ -179,9 +179,11 @@ def test_release_tables_use_mysql_safe_column_types():
 
     assert "app_id VARCHAR(64) NOT NULL" in notice_ddl
     assert "content TEXT NOT NULL" in notice_ddl
+    assert "FOREIGN KEY(app_id) REFERENCES apps (app_id)" not in notice_ddl
     assert "app_id VARCHAR(64) NOT NULL" in version_ddl
     assert "notes TEXT" in version_ddl
     assert "download_url TEXT" in version_ddl
+    assert "FOREIGN KEY(app_id) REFERENCES apps (app_id)" not in version_ddl
 
 
 def test_admin_notice_and_version_management_records_history_and_validates_force_update():
