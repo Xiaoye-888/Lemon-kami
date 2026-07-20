@@ -31,6 +31,8 @@ from database import get_session
 from redis_client import get_redis
 from models import (
     App,
+    AppNotice,
+    AppVersion,
     Kami,
     EventLog,
     Device,
@@ -59,6 +61,17 @@ from models import (
     AuthorizationOwnerType,
     UserBindMode,
     is_kami_code_expired,
+)
+from app_release_service import (
+    normalize_notice_level,
+    normalize_notice_times,
+    normalize_update_platform,
+    normalize_update_status,
+    normalize_url_type,
+    next_notice_revision,
+    notice_payload,
+    version_payload,
+    ensure_legacy_app_content_records,
 )
 from kami_spec_service import (
     build_spec_key,
@@ -538,6 +551,30 @@ class AppInterfaceConfigRequest(BaseModel):
     remark: Optional[str] = None
 
 
+class AppNoticeRequest(BaseModel):
+    title: str = PydanticField(..., min_length=1, max_length=128)
+    content: str = PydanticField(..., min_length=1)
+    level: str = "normal"
+    enabled: bool = True
+    popup: bool = False
+    show_once: bool = True
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
+
+
+class AppVersionRequest(BaseModel):
+    platform: str = "all"
+    version: str = PydanticField(..., min_length=1, max_length=64)
+    version_code: int = PydanticField(..., ge=1)
+    title: str = PydanticField("发现新版本", min_length=1, max_length=128)
+    notes: Optional[str] = None
+    force_update: bool = False
+    download_url: Optional[str] = None
+    url_type: str = "direct"
+    button_text: str = PydanticField("立即下载", min_length=1, max_length=64)
+    status: str = "draft"
+
+
 def _handle_point_error(error: PointServiceError):
     raise HTTPException(
         status_code=error.status_code,
@@ -616,21 +653,7 @@ def _apply_app_interface_config_to_app(app: App, interface_key: str, config: Opt
         return
 
     field_groups = {
-        "sdk.app_config": {
-            "notice_enabled",
-            "notice_title",
-            "notice",
-            "notice_level",
-            "notice_popup",
-            "version",
-            "version_info",
-            "force_update",
-            "update_url",
-            "update_url_type",
-            "download_url",
-            "download_note",
-            "download_button_text",
-        },
+        "sdk.app_config": set(),
         "sdk.verify": {
             "signature_required",
             "nonce_required",
@@ -900,6 +923,21 @@ async def get_dashboard(
 
 # ==================== 应用管理接口 ====================
 
+def _get_manageable_app(
+    session: Session,
+    app_id: str,
+    current_user: dict,
+) -> App:
+    app = session.exec(select(App).where(App.app_id == app_id)).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="App not found")
+    username = current_user.get("sub")
+    is_admin = current_user.get("is_admin", False)
+    if not check_app_permission(session, app_id, username, is_admin):
+        raise HTTPException(status_code=403, detail="无权操作此应用")
+    return app
+
+
 @router.post("/apps", summary="创建应用")
 async def create_app(
     name: str,
@@ -1047,6 +1085,234 @@ async def update_app_status(
             "status": app.status,
         },
     }
+
+
+@router.get("/apps/{app_id}/notices", summary="公告管理列表")
+async def list_app_notices(
+    app_id: str,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    app = _get_manageable_app(session, app_id, current_user)
+    ensure_legacy_app_content_records(session, app)
+    notices = session.exec(
+        select(AppNotice)
+        .where(AppNotice.app_id == app_id)
+        .order_by(AppNotice.updated_at.desc(), AppNotice.id.desc())
+    ).all()
+    return {
+        "success": True,
+        "data": {
+            "total": len(notices),
+            "items": [notice_payload(notice) for notice in notices],
+        },
+    }
+
+
+@router.post("/apps/{app_id}/notices", summary="发布公告")
+async def create_app_notice(
+    app_id: str,
+    payload: AppNoticeRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _get_manageable_app(session, app_id, current_user)
+    now = get_now().replace(tzinfo=None)
+    notice = AppNotice(
+        app_id=app_id,
+        title=payload.title.strip(),
+        content=payload.content.strip(),
+        level=normalize_notice_level(payload.level),
+        enabled=payload.enabled,
+        popup=payload.popup,
+        show_once=payload.show_once,
+        revision=next_notice_revision(session, app_id),
+        starts_at=payload.starts_at,
+        ends_at=payload.ends_at,
+        created_by=current_user.get("sub"),
+        created_at=now,
+        updated_at=now,
+    )
+    normalize_notice_times(notice)
+    if notice.ends_at and notice.starts_at and notice.ends_at < notice.starts_at:
+        raise HTTPException(status_code=400, detail="公告失效时间不能早于生效时间")
+    session.add(notice)
+    session.commit()
+    session.refresh(notice)
+
+    log_admin_action(
+        session=session,
+        username=current_user.get("sub"),
+        event_type="app_notice_create",
+        app_id=app_id,
+        payload={"notice_id": notice.id, "revision": notice.revision},
+        message=f"用户 {current_user.get('sub')} 发布了公告 {notice.title}",
+    )
+    return {"success": True, "message": "公告已保存", "data": notice_payload(notice)}
+
+
+@router.put("/apps/{app_id}/notices/{notice_id}", summary="更新公告")
+async def update_app_notice(
+    app_id: str,
+    notice_id: int,
+    payload: AppNoticeRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _get_manageable_app(session, app_id, current_user)
+    notice = session.exec(
+        select(AppNotice).where(AppNotice.id == notice_id, AppNotice.app_id == app_id)
+    ).first()
+    if not notice:
+        raise HTTPException(status_code=404, detail="公告不存在")
+    notice.title = payload.title.strip()
+    notice.content = payload.content.strip()
+    notice.level = normalize_notice_level(payload.level)
+    notice.enabled = payload.enabled
+    notice.popup = payload.popup
+    notice.show_once = payload.show_once
+    notice.starts_at = payload.starts_at
+    notice.ends_at = payload.ends_at
+    notice.revision = (notice.revision or 0) + 1
+    notice.updated_at = get_now().replace(tzinfo=None)
+    normalize_notice_times(notice)
+    if notice.ends_at and notice.starts_at and notice.ends_at < notice.starts_at:
+        raise HTTPException(status_code=400, detail="公告失效时间不能早于生效时间")
+    session.add(notice)
+    session.commit()
+    session.refresh(notice)
+    return {"success": True, "message": "公告已更新", "data": notice_payload(notice)}
+
+
+def _validate_version_payload(payload: AppVersionRequest) -> None:
+    status = normalize_update_status(payload.status)
+    if payload.force_update and status == "published" and not payload.download_url:
+        raise HTTPException(status_code=400, detail="强制更新发布前必须填写下载地址")
+    if status == "published" and payload.download_url is not None and not payload.download_url.strip():
+        raise HTTPException(status_code=400, detail="下载地址不能为空")
+
+
+@router.get("/apps/{app_id}/updates", summary="版本更新列表")
+async def list_app_versions(
+    app_id: str,
+    platform: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    app = _get_manageable_app(session, app_id, current_user)
+    ensure_legacy_app_content_records(session, app)
+    statement = select(AppVersion).where(AppVersion.app_id == app_id)
+    if platform:
+        statement = statement.where(AppVersion.platform == normalize_update_platform(platform))
+    versions = session.exec(
+        statement.order_by(AppVersion.version_code.desc(), AppVersion.updated_at.desc(), AppVersion.id.desc())
+    ).all()
+    return {
+        "success": True,
+        "data": {
+            "total": len(versions),
+            "items": [version_payload(version) for version in versions],
+        },
+    }
+
+
+@router.post("/apps/{app_id}/updates", summary="新增版本更新")
+async def create_app_version(
+    app_id: str,
+    payload: AppVersionRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _get_manageable_app(session, app_id, current_user)
+    _validate_version_payload(payload)
+    platform = normalize_update_platform(payload.platform)
+    existing = session.exec(
+        select(AppVersion).where(
+            AppVersion.app_id == app_id,
+            AppVersion.platform == platform,
+            AppVersion.version_code == payload.version_code,
+        )
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="该平台版本编码已存在")
+    now = get_now().replace(tzinfo=None)
+    status = normalize_update_status(payload.status)
+    version = AppVersion(
+        app_id=app_id,
+        platform=platform,
+        version=payload.version.strip(),
+        version_code=payload.version_code,
+        title=payload.title.strip(),
+        notes=payload.notes,
+        force_update=payload.force_update,
+        download_url=payload.download_url.strip() if payload.download_url else None,
+        url_type=normalize_url_type(payload.url_type),
+        button_text=payload.button_text.strip() or "立即下载",
+        status=status,
+        created_by=current_user.get("sub"),
+        published_at=now if status == "published" else None,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(version)
+    session.commit()
+    session.refresh(version)
+    log_admin_action(
+        session=session,
+        username=current_user.get("sub"),
+        event_type="app_version_create",
+        app_id=app_id,
+        payload={"version_id": version.id, "version": version.version, "version_code": version.version_code},
+        message=f"用户 {current_user.get('sub')} 新增了版本 {version.version}",
+    )
+    return {"success": True, "message": "版本更新已保存", "data": version_payload(version)}
+
+
+@router.put("/apps/{app_id}/updates/{version_id}", summary="更新版本")
+async def update_app_version(
+    app_id: str,
+    version_id: int,
+    payload: AppVersionRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _get_manageable_app(session, app_id, current_user)
+    _validate_version_payload(payload)
+    version = session.exec(
+        select(AppVersion).where(AppVersion.id == version_id, AppVersion.app_id == app_id)
+    ).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    platform = normalize_update_platform(payload.platform)
+    duplicate = session.exec(
+        select(AppVersion).where(
+            AppVersion.app_id == app_id,
+            AppVersion.platform == platform,
+            AppVersion.version_code == payload.version_code,
+            AppVersion.id != version_id,
+        )
+    ).first()
+    if duplicate:
+        raise HTTPException(status_code=400, detail="该平台版本编码已存在")
+    now = get_now().replace(tzinfo=None)
+    new_status = normalize_update_status(payload.status)
+    version.platform = platform
+    version.version = payload.version.strip()
+    version.version_code = payload.version_code
+    version.title = payload.title.strip()
+    version.notes = payload.notes
+    version.force_update = payload.force_update
+    version.download_url = payload.download_url.strip() if payload.download_url else None
+    version.url_type = normalize_url_type(payload.url_type)
+    version.button_text = payload.button_text.strip() or "立即下载"
+    if new_status == "published" and version.status != "published":
+        version.published_at = now
+    version.status = new_status
+    version.updated_at = now
+    session.add(version)
+    session.commit()
+    session.refresh(version)
+    return {"success": True, "message": "版本更新已保存", "data": version_payload(version)}
 
 
 @router.post("/interfaces", summary="新增接口")
@@ -1340,6 +1606,8 @@ async def delete_app(
     kamis = session.exec(select(Kami).where(Kami.app_id == app_id)).all()
     kami_codes = [kami.kami_code for kami in kamis if kami.kami_code]
     devices = session.exec(select(Device).where(Device.app_id == app_id)).all()
+    notices = session.exec(select(AppNotice).where(AppNotice.app_id == app_id)).all()
+    versions = session.exec(select(AppVersion).where(AppVersion.app_id == app_id)).all()
     bindings = session.exec(select(KamiDeviceBinding).where(KamiDeviceBinding.app_id == app_id)).all()
     legacy_access_rows = session.exec(select(AppAuthorization).where(AppAuthorization.app_id == app_id)).all()
     interface_configs = session.exec(
@@ -1376,6 +1644,10 @@ async def delete_app(
 
     for log in event_logs:
         session.delete(log)
+    for notice in notices:
+        session.delete(notice)
+    for version in versions:
+        session.delete(version)
     for row in legacy_access_rows:
         session.delete(row)
     for config in interface_configs:
@@ -1425,6 +1697,8 @@ async def delete_app(
             "binding_count": binding_count,
             "legacy_access_count": legacy_access_count,
             "event_log_count": len(event_logs),
+            "notice_count": len(notices),
+            "version_count": len(versions),
             "interface_config_count": len(interface_configs),
             "batch_count": len(batches),
             "spec_count": len(specs),

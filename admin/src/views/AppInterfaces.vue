@@ -8,7 +8,7 @@
             <p>归属应用：{{ currentAppName || appId }}</p>
           </div>
           <div class="header-actions">
-            <el-button @click="router.push('/apps')">返回应用</el-button>
+            <el-button @click="router.push('/apps/info')">返回应用</el-button>
             <el-button type="primary" :loading="loading" @click="loadAppInterfaces">刷新</el-button>
           </div>
         </div>
@@ -147,42 +147,6 @@
           />
         </el-form>
 
-        <div v-if="isAppConfigEditing" class="client-preview">
-          <div class="client-preview__top">
-            <span class="client-preview__title">{{ appConfigPreview.noticeTitle }}</span>
-            <el-tag :type="appConfigPreview.noticeTag" effect="plain">
-              {{ appConfigPreview.noticeLevelText }}
-            </el-tag>
-          </div>
-          <div v-if="appConfigPreview.noticeEnabled" class="client-preview__notice">
-            {{ appConfigPreview.noticeContent }}
-          </div>
-          <div v-else class="client-preview__muted">公告未启用，客户端可跳过公告展示。</div>
-
-          <div class="client-preview__version">
-            <span>当前版本：{{ appConfigPreview.version }}</span>
-            <el-tag v-if="appConfigPreview.forceUpdate" type="danger">强制更新</el-tag>
-          </div>
-          <div class="client-preview__notes">{{ appConfigPreview.versionInfo }}</div>
-
-          <div class="client-preview__actions">
-            <el-button
-              v-if="appConfigPreview.hasUpdateUrl"
-              tag="a"
-              :href="appConfigPreview.updateUrl"
-              target="_blank"
-              rel="noopener noreferrer"
-              type="primary"
-              size="small"
-            >
-              {{ appConfigPreview.buttonText }}
-            </el-button>
-            <el-button v-else type="primary" size="small" disabled>
-              {{ appConfigPreview.buttonText }}
-            </el-button>
-            <el-button size="small">稍后再说</el-button>
-          </div>
-        </div>
       </template>
       <template #footer>
         <el-button @click="configDialogVisible = false">取消</el-button>
@@ -277,40 +241,6 @@ const configSchemas = {
     { key: 'release_on_logout', label: '退出自动释放', type: 'switch', default: true },
     { key: 'heartbeat_timeout_seconds', label: '心跳超时秒数', type: 'number', min: 30, max: 86400, default: 180 }
   ],
-  'sdk.app_config': [
-    { key: 'notice_enabled', label: '启用公告', type: 'switch', default: false },
-    { key: 'notice_title', label: '公告标题', type: 'input', default: '系统公告' },
-    { key: 'notice', label: '应用公告', type: 'textarea', rows: 3 },
-    {
-      key: 'notice_level',
-      label: '公告级别',
-      type: 'select',
-      default: 'normal',
-      options: [
-        { label: '普通', value: 'normal' },
-        { label: '重要', value: 'important' },
-        { label: '紧急', value: 'urgent' }
-      ]
-    },
-    { key: 'notice_popup', label: '启动弹窗', type: 'switch', default: false },
-    { key: 'version', label: '最新版本', type: 'input' },
-    { key: 'version_info', label: '更新说明', type: 'textarea', rows: 3 },
-    { key: 'force_update', label: '强制更新', type: 'switch', default: false },
-    { key: 'update_url', label: '更新/下载外链', type: 'input' },
-    {
-      key: 'update_url_type',
-      label: '地址类型',
-      type: 'select',
-      default: 'direct',
-      options: [
-        { label: '直链', value: 'direct' },
-        { label: '网盘/外链', value: 'external' }
-      ]
-    },
-    { key: 'download_button_text', label: '下载按钮文案', type: 'input', default: '立即下载' },
-    { key: 'download_url', label: '兼容下载地址', type: 'input' },
-    { key: 'download_note', label: '兼容下载备注', type: 'textarea', rows: 2 }
-  ],
   'sdk.report': [
     { key: 'allow_report', label: '允许事件上报', type: 'switch', default: true },
     { key: 'max_payload_kb', label: '最大载荷 KB', type: 'number', min: 1, max: 1024, default: 64 }
@@ -326,34 +256,6 @@ const currentAppName = computed(() => {
 const currentSchema = computed(() => {
   if (!editingInterface.value) return []
   return configSchemas[editingInterface.value.interface_key] || []
-})
-
-const isAppConfigEditing = computed(() => editingInterface.value?.interface_key === 'sdk.app_config')
-
-const appConfigPreview = computed(() => {
-  const data = configForm.data || {}
-  const noticeLevel = data.notice_level || 'normal'
-  const noticeLevelMap = {
-    normal: { text: '普通公告', tag: 'info' },
-    important: { text: '重要公告', tag: 'warning' },
-    urgent: { text: '紧急公告', tag: 'danger' }
-  }
-  const level = noticeLevelMap[noticeLevel] || noticeLevelMap.normal
-  const updateUrl = data.update_url || data.download_url || ''
-
-  return {
-    noticeEnabled: Boolean(data.notice_enabled),
-    noticeTitle: data.notice_title || '系统公告',
-    noticeContent: data.notice || '公告内容将在客户端软件中展示。',
-    noticeLevelText: level.text,
-    noticeTag: level.tag,
-    version: data.version || '未配置',
-    versionInfo: data.version_info || data.download_note || '暂无更新说明',
-    forceUpdate: Boolean(data.force_update),
-    buttonText: data.download_button_text || '立即下载',
-    updateUrl,
-    hasUpdateUrl: Boolean(updateUrl)
-  }
 })
 
 const filteredInterfaces = computed(() => {
@@ -561,65 +463,6 @@ onMounted(async () => {
   color: #64748b;
   font-size: 12px;
   line-height: 1.4;
-}
-
-.client-preview {
-  margin-top: 18px;
-  padding: 16px;
-  border: 1px solid #d7e8ff;
-  border-radius: 8px;
-  background: #f8fbff;
-}
-
-.client-preview__top,
-.client-preview__version,
-.client-preview__actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.client-preview__top {
-  justify-content: space-between;
-  margin-bottom: 10px;
-}
-
-.client-preview__title {
-  font-size: 16px;
-  font-weight: 800;
-  color: #0f172a;
-}
-
-.client-preview__notice,
-.client-preview__muted,
-.client-preview__notes {
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.client-preview__notice {
-  color: #1f2937;
-}
-
-.client-preview__muted {
-  color: #64748b;
-}
-
-.client-preview__version {
-  margin-top: 14px;
-  color: #334155;
-  font-weight: 700;
-}
-
-.client-preview__notes {
-  margin-top: 8px;
-  color: #475569;
-}
-
-.client-preview__actions {
-  margin-top: 14px;
 }
 
 @media (max-width: 1180px) {

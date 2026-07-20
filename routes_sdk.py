@@ -22,6 +22,13 @@ from models import (
     get_now,
     is_kami_code_expired,
 )
+from app_release_service import (
+    current_notice,
+    latest_published_version,
+    sdk_notice_payload,
+    update_check_payload,
+    normalize_update_platform,
+)
 from datetime_utils import to_api_beijing_iso
 from dependencies import get_decrypted_data
 from interface_service import get_app_interface_config, require_app_interface_enabled
@@ -1177,6 +1184,82 @@ async def consume_kami(
     return encrypt_response(response_data, app_info.get("app_secret", ""))
 
 
+@router.get("/apps/{app_id}/notice")
+async def get_app_notice(
+    app_id: str,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    """获取应用公告。公告接口不返回版本更新字段。"""
+    client_ip = _client_ip_from_request(request)
+    user_agent = request.headers.get("user-agent", "")
+    app = session.exec(select(App).where(App.app_id == app_id)).first()
+    if not app:
+        _record_event_log(session, app_id, None, "notice", client_ip, None, user_agent, status=0, message="应用不存在")
+        raise HTTPException(status_code=404, detail="App not found")
+    if app.status != 1:
+        _record_event_log(session, app_id, None, "notice", client_ip, None, user_agent, status=0, message="应用已禁用")
+        raise HTTPException(status_code=403, detail="App is disabled")
+    require_app_interface_enabled(session, app_id, "sdk.notice")
+    notice = current_notice(session, app)
+    _record_event_log(
+        session,
+        app_id,
+        None,
+        "notice",
+        client_ip,
+        None,
+        user_agent,
+        status=1,
+        message="公告读取成功",
+        payload={"notice_id": notice.id if notice else None},
+    )
+    return {"success": True, "data": sdk_notice_payload(notice)}
+
+
+@router.get("/apps/{app_id}/updates/check")
+async def check_app_update(
+    app_id: str,
+    request: Request,
+    current_version: Optional[str] = None,
+    current_version_code: Optional[int] = None,
+    platform: str = "all",
+    session: Session = Depends(get_session),
+):
+    """检查应用是否有可用更新。客户端只根据 has_update 决定是否弹更新。"""
+    client_ip = _client_ip_from_request(request)
+    user_agent = request.headers.get("user-agent", "")
+    app = session.exec(select(App).where(App.app_id == app_id)).first()
+    if not app:
+        _record_event_log(session, app_id, None, "update_check", client_ip, None, user_agent, status=0, message="应用不存在")
+        raise HTTPException(status_code=404, detail="App not found")
+    if app.status != 1:
+        _record_event_log(session, app_id, None, "update_check", client_ip, None, user_agent, status=0, message="应用已禁用")
+        raise HTTPException(status_code=403, detail="App is disabled")
+    require_app_interface_enabled(session, app_id, "sdk.update_check")
+    normalized_platform = normalize_update_platform(platform)
+    latest = latest_published_version(session, app, normalized_platform)
+    payload = update_check_payload(latest, current_version_code, current_version)
+    _record_event_log(
+        session,
+        app_id,
+        None,
+        "update_check",
+        client_ip,
+        None,
+        user_agent,
+        status=1,
+        message="版本更新检查成功",
+        payload={
+            "platform": normalized_platform,
+            "current_version": current_version,
+            "current_version_code": current_version_code,
+            "has_update": payload.get("has_update"),
+        },
+    )
+    return {"success": True, "data": payload}
+
+
 @router.get("/apps/{app_id}/config")
 async def get_app_config(
     app_id: str,
@@ -1229,13 +1312,27 @@ async def get_app_config(
         )
         raise
 
+    notice = current_notice(session, app)
+    latest_version = latest_published_version(session, app, "all")
+    notice_data = sdk_notice_payload(notice)
+    update_url = latest_version.download_url if latest_version else app.update_url
+    update_url_type = latest_version.url_type if latest_version else app.update_url_type
+    download_button_text = (
+        latest_version.button_text
+        if latest_version
+        else app.download_button_text or "立即下载"
+    )
+    version_name = latest_version.version if latest_version else app.version
+    version_info = latest_version.notes if latest_version else app.version_info
+    force_update = latest_version.force_update if latest_version else app.force_update
+
     files = []
-    if app.download_url:
+    if update_url:
         files.append({
             "name": app.name,
-            "url": app.download_url,
-            "type": app.update_url_type or "direct",
-            "note": app.download_note,
+            "url": update_url,
+            "type": update_url_type or "direct",
+            "note": version_info or app.download_note,
         })
 
     response_data = {
@@ -1243,17 +1340,13 @@ async def get_app_config(
         "data": {
             "app_id": app.app_id,
             "name": app.name,
-            "notice_enabled": app.notice_enabled,
-            "notice_title": app.notice_title,
-            "notice": app.notice,
-            "notice_level": app.notice_level,
-            "notice_popup": app.notice_popup,
-            "version": app.version,
-            "version_info": app.version_info,
-            "force_update": app.force_update,
-            "update_url": app.update_url,
-            "update_url_type": app.update_url_type,
-            "download_button_text": app.download_button_text or "立即下载",
+            **notice_data,
+            "version": version_name,
+            "version_info": version_info,
+            "force_update": force_update,
+            "update_url": update_url,
+            "update_url_type": update_url_type,
+            "download_button_text": download_button_text,
             "files": files,
             "security": {
                 "signature_required": app.signature_required,
@@ -1279,9 +1372,9 @@ async def get_app_config(
         status=1,
         message="应用配置读取成功",
         payload={
-            "notice_enabled": app.notice_enabled,
-            "has_update_url": bool(app.update_url),
-            "has_download_url": bool(app.download_url),
+            "notice_enabled": notice_data.get("notice_enabled"),
+            "has_update_url": bool(update_url),
+            "has_download_url": bool(update_url),
             "file_count": len(files),
         },
     )

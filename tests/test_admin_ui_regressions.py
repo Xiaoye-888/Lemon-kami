@@ -52,5 +52,7 @@ def test_app_delete_warning_mentions_all_app_scoped_data():
     assert "批次" in source
     assert "规格" in source
     assert "授权" in source
+    assert "公告" in source
+    assert "版本更新" in source
     assert "接口配置" in source
     assert "日志" in source

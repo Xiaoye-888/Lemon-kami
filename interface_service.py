@@ -49,6 +49,11 @@ def require_app_interface_enabled(
         return {}
 
     interface, config, config_data = get_app_interface_config(session, app_id, interface_key)
+    if not interface:
+        from interface_docs_service import ensure_builtin_interfaces
+
+        ensure_builtin_interfaces(session)
+        interface, config, config_data = get_app_interface_config(session, app_id, interface_key)
     now = get_now_naive()
     if not interface or interface.status != 1:
         raise HTTPException(

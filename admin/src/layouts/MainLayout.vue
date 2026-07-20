@@ -23,10 +23,24 @@
           <el-icon><DataAnalysis /></el-icon>
           <span>运营总览</span>
         </el-menu-item>
-        <el-menu-item index="/apps">
-          <el-icon><Setting /></el-icon>
-          <span>应用管理</span>
-        </el-menu-item>
+        <el-sub-menu index="/apps">
+          <template #title>
+            <el-icon><Setting /></el-icon>
+            <span>应用管理</span>
+          </template>
+          <el-menu-item index="/apps/info">
+            <el-icon><Setting /></el-icon>
+            <span>应用信息</span>
+          </el-menu-item>
+          <el-menu-item index="/apps/notices">
+            <el-icon><Document /></el-icon>
+            <span>公告管理</span>
+          </el-menu-item>
+          <el-menu-item index="/apps/versions">
+            <el-icon><UploadFilled /></el-icon>
+            <span>版本更新</span>
+          </el-menu-item>
+        </el-sub-menu>
         <el-sub-menu index="/kamis">
           <template #title>
             <el-icon><Key /></el-icon>
@@ -147,7 +161,8 @@ import {
   Moon,
   Sunny,
   Connection,
-  DataAnalysis
+  DataAnalysis,
+  UploadFilled
 } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
 import { useThemeStore } from '../stores/theme'

@@ -2,7 +2,9 @@ from datetime import timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy import event
+from sqlalchemy.dialects import mysql
 from sqlalchemy.pool import StaticPool
+from sqlalchemy.schema import CreateTable
 from sqlmodel import SQLModel, Session, create_engine, select
 
 import routes_admin
@@ -13,6 +15,8 @@ from main import app as fastapi_app
 from models import (
     ApiInterface,
     App,
+    AppNotice,
+    AppVersion,
     AuthorizationAccount,
     AuthorizationBenefitType,
     AuthorizationLot,
@@ -94,6 +98,162 @@ class FakeRedis:
 
     def delete(self, key):
         self.hashes.pop(key, None)
+
+
+def test_notice_and_update_check_are_separate_sdk_surfaces():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_sdk.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        session.add(
+            AppNotice(
+                app_id="app_demo",
+                title="维护公告",
+                content="今晚维护",
+                level="important",
+                enabled=True,
+                popup=True,
+                show_once=True,
+                revision=1,
+                created_by="admin",
+            )
+        )
+        session.add(
+            AppVersion(
+                app_id="app_demo",
+                platform="windows",
+                version="1.2.0",
+                version_code=120,
+                title="发现新版本",
+                notes="新增版本更新模块",
+                force_update=False,
+                download_url="https://example.com/app.exe",
+                url_type="direct",
+                button_text="立即下载",
+                status="published",
+            )
+        )
+        session.commit()
+
+    try:
+        notice_response = client.get("/api/v1/sdk/apps/app_demo/notice")
+        assert notice_response.status_code == 200
+        notice_data = notice_response.json()["data"]
+        assert notice_data["notice_title"] == "维护公告"
+        assert notice_data["notice"] == "今晚维护"
+        assert notice_data["notice_popup"] is True
+        assert "version" not in notice_data
+        assert "update_url" not in notice_data
+        assert "force_update" not in notice_data
+
+        old_version_response = client.get(
+            "/api/v1/sdk/apps/app_demo/updates/check",
+            params={"current_version_code": 100, "platform": "windows"},
+        )
+        assert old_version_response.status_code == 200
+        old_version_data = old_version_response.json()["data"]
+        assert old_version_data["has_update"] is True
+        assert old_version_data["latest_version"] == "1.2.0"
+        assert old_version_data["latest_version_code"] == 120
+        assert old_version_data["download_url"] == "https://example.com/app.exe"
+
+        current_version_response = client.get(
+            "/api/v1/sdk/apps/app_demo/updates/check",
+            params={"current_version_code": 120, "platform": "windows"},
+        )
+        assert current_version_response.status_code == 200
+        assert current_version_response.json()["data"] == {"has_update": False}
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_release_tables_use_mysql_safe_column_types():
+    notice_ddl = str(CreateTable(AppNotice.__table__).compile(dialect=mysql.dialect()))
+    version_ddl = str(CreateTable(AppVersion.__table__).compile(dialect=mysql.dialect()))
+
+    assert "app_id VARCHAR(64) NOT NULL" in notice_ddl
+    assert "content TEXT NOT NULL" in notice_ddl
+    assert "app_id VARCHAR(64) NOT NULL" in version_ddl
+    assert "notes TEXT" in version_ddl
+    assert "download_url TEXT" in version_ddl
+
+
+def test_admin_notice_and_version_management_records_history_and_validates_force_update():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        session.commit()
+
+    try:
+        notice_response = client.post(
+            "/api/v1/admin/apps/app_demo/notices",
+            json={
+                "title": "系统公告",
+                "content": "公告内容",
+                "level": "normal",
+                "enabled": True,
+                "popup": True,
+                "show_once": True,
+            },
+        )
+        assert notice_response.status_code == 200
+        assert notice_response.json()["data"]["revision"] == 1
+
+        notices_response = client.get("/api/v1/admin/apps/app_demo/notices")
+        assert notices_response.status_code == 200
+        notices = notices_response.json()["data"]["items"]
+        assert len(notices) == 1
+        assert notices[0]["title"] == "系统公告"
+
+        invalid_update_response = client.post(
+            "/api/v1/admin/apps/app_demo/updates",
+            json={
+                "version": "2.0.0",
+                "version_code": 200,
+                "title": "强制更新",
+                "notes": "必须更新",
+                "force_update": True,
+                "status": "published",
+            },
+        )
+        assert invalid_update_response.status_code == 400
+
+        update_response = client.post(
+            "/api/v1/admin/apps/app_demo/updates",
+            json={
+                "platform": "windows",
+                "version": "2.0.0",
+                "version_code": 200,
+                "title": "强制更新",
+                "notes": "必须更新",
+                "force_update": True,
+                "download_url": "https://example.com/v2.exe",
+                "status": "published",
+            },
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["data"]["status"] == "published"
+
+        updates_response = client.get("/api/v1/admin/apps/app_demo/updates")
+        assert updates_response.status_code == 200
+        updates = updates_response.json()["data"]["items"]
+        assert len(updates) == 1
+        assert updates[0]["version"] == "2.0.0"
+        assert updates[0]["force_update"] is True
+    finally:
+        fastapi_app.dependency_overrides.clear()
 
 
 def test_points_redeem_credits_unified_user_app_account_and_stacks_by_app():

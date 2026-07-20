@@ -34,7 +34,10 @@ const routes = [
     meta: { requiresAuth: true },
     children: [
       { path: 'dashboard', name: 'Dashboard', component: () => import('../views/Dashboard.vue'), meta: { title: '运营总览' } },
-      { path: 'apps', name: 'Apps', component: () => import('../views/Apps.vue'), meta: { title: '应用管理' } },
+      { path: 'apps', redirect: '/apps/info' },
+      { path: 'apps/info', name: 'Apps', component: () => import('../views/Apps.vue'), meta: { title: '应用信息' } },
+      { path: 'apps/notices', name: 'AppNotices', component: () => import('../views/AppNotices.vue'), meta: { title: '公告管理' } },
+      { path: 'apps/versions', name: 'AppVersions', component: () => import('../views/AppVersions.vue'), meta: { title: '版本更新' } },
       {
         path: 'apps/:app_id/interfaces',
         name: 'AppInterfaces',

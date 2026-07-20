@@ -3,7 +3,7 @@ from typing import Optional, List
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from enum import Enum
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import Column, ForeignKey, String, Text, UniqueConstraint
 
 # 中国时区
 CST = ZoneInfo("Asia/Shanghai")
@@ -263,6 +263,79 @@ class App(SQLModel, table=True):
         back_populates="app",
         sa_relationship_kwargs={"passive_deletes": True},
     )
+
+
+class AppNotice(SQLModel, table=True):
+    __tablename__ = "app_notices"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    app_id: str = Field(
+        sa_column=Column(String(64), ForeignKey("apps.app_id"), nullable=False, index=True),
+        description="App ID",
+    )
+    title: str = Field(sa_column=Column(String(128), nullable=False), description="Notice title")
+    content: str = Field(sa_column=Column(Text, nullable=False), description="Notice content")
+    level: str = Field(
+        default="normal",
+        sa_column=Column(String(32), nullable=False, index=True),
+        description="normal/important/urgent",
+    )
+    enabled: bool = Field(default=True, index=True, description="Whether this notice is active")
+    popup: bool = Field(default=False, description="Whether clients should show a startup popup")
+    show_once: bool = Field(default=True, description="Whether clients should show this notice once")
+    revision: int = Field(default=1, index=True, description="Notice revision for client read tracking")
+    starts_at: Optional[datetime] = Field(default=None, index=True, description="Notice effective start")
+    ends_at: Optional[datetime] = Field(default=None, index=True, description="Notice effective end")
+    created_by: Optional[str] = Field(default=None, sa_column=Column(String(255)), description="Admin username")
+    created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Created time")
+    updated_at: datetime = Field(default_factory=get_now_naive, description="Updated time")
+
+
+class AppVersion(SQLModel, table=True):
+    __tablename__ = "app_versions"
+    __table_args__ = (
+        UniqueConstraint("app_id", "platform", "version_code", name="uk_app_version_platform_code"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    app_id: str = Field(
+        sa_column=Column(String(64), ForeignKey("apps.app_id"), nullable=False, index=True),
+        description="App ID",
+    )
+    platform: str = Field(
+        default="all",
+        sa_column=Column(String(32), nullable=False, index=True),
+        description="all/windows/macos/android",
+    )
+    version: str = Field(sa_column=Column(String(64), nullable=False, index=True), description="Version name")
+    version_code: int = Field(index=True, description="Comparable version code")
+    title: str = Field(
+        default="发现新版本",
+        sa_column=Column(String(128), nullable=False),
+        description="Update title",
+    )
+    notes: Optional[str] = Field(default=None, sa_column=Column(Text), description="Update notes")
+    force_update: bool = Field(default=False, index=True, description="Whether update is mandatory")
+    download_url: Optional[str] = Field(default=None, sa_column=Column(Text), description="Download URL")
+    url_type: str = Field(
+        default="direct",
+        sa_column=Column(String(32), nullable=False),
+        description="direct/external",
+    )
+    button_text: str = Field(
+        default="立即下载",
+        sa_column=Column(String(64), nullable=False),
+        description="Download button label",
+    )
+    status: str = Field(
+        default="draft",
+        sa_column=Column(String(32), nullable=False, index=True),
+        description="draft/published/archived",
+    )
+    created_by: Optional[str] = Field(default=None, sa_column=Column(String(255)), description="Admin username")
+    published_at: Optional[datetime] = Field(default=None, index=True, description="Publish time")
+    created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Created time")
+    updated_at: datetime = Field(default_factory=get_now_naive, description="Updated time")
 
 
 class KamiSpec(SQLModel, table=True):
