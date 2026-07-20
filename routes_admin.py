@@ -3455,15 +3455,17 @@ def _admin_device_payload(
     kamis_by_code: dict,
     users_by_id: dict,
     ip_count: int,
-    event_user_by_uuid: Optional[dict] = None,
+    event_user_by_device_key: Optional[dict] = None,
     related_kami_codes: Optional[list[str]] = None,
+    apps_by_id: Optional[dict] = None,
 ) -> dict:
     related_kami_codes = list(dict.fromkeys(related_kami_codes or ([] if not binding else [binding.kami_code])))
     related_kamis = [kamis_by_code[code] for code in related_kami_codes if code in kamis_by_code]
     kami = related_kamis[0] if related_kamis else (kamis_by_code.get(binding.kami_code) if binding else None)
-    event_user_by_uuid = event_user_by_uuid or {}
+    event_user_by_device_key = event_user_by_device_key or {}
     user = users_by_id.get(kami.redeemed_by_user_id) if kami and kami.redeemed_by_user_id else None
-    event_user = event_user_by_uuid.get(device.uuid)
+    event_user = event_user_by_device_key.get((device.app_id, device.uuid))
+    app = apps_by_id.get(device.app_id) if apps_by_id else None
     username = user.username if user else event_user.get("username") if event_user else None
     user_id = user.id if user else event_user.get("user_id") if event_user else None
     risk = get_device_risk_payload(device.risk_level, ip_count)
@@ -3471,6 +3473,8 @@ def _admin_device_payload(
     redeemed_at = _kami_redeemed_at(kami) if kami else None
     return {
         "id": device.id,
+        "app_id": device.app_id,
+        "app_name": app.name if app else None,
         "uuid": device.uuid,
         "fingerprint": device.fingerprint,
         "last_ip": device.last_ip,
@@ -3506,107 +3510,133 @@ def _fingerprint_from_event_payload(payload_value: Optional[str]) -> Optional[st
 
 def _historical_device_candidates(
     session: Session,
-    app_id: str,
+    app_id: Optional[str],
     physical_devices: list[Device],
 ) -> list[Any]:
     existing_identities = {
-        identity
+        (device.app_id, identity)
         for device in physical_devices
         for identity in (device.uuid, device.fingerprint)
         if identity
     }
-    virtual_by_uuid = {}
+    virtual_by_key = {}
 
     def add_virtual_device(
+        candidate_app_id: Optional[str],
         uuid_value: Optional[str],
         *,
         fingerprint: Optional[str] = None,
         last_ip: Optional[str] = None,
     ) -> None:
-        if not uuid_value:
+        if not candidate_app_id or not uuid_value:
             return
-        if uuid_value in virtual_by_uuid:
-            device = virtual_by_uuid[uuid_value]
+        key = (candidate_app_id, uuid_value)
+        fingerprint_key = (candidate_app_id, fingerprint) if fingerprint else None
+        if key in virtual_by_key:
+            device = virtual_by_key[key]
             if fingerprint and device.fingerprint == device.uuid:
                 device.fingerprint = fingerprint
-                existing_identities.add(fingerprint)
+                existing_identities.add((candidate_app_id, fingerprint))
             if last_ip and not device.last_ip:
                 device.last_ip = last_ip
             return
-        if uuid_value in existing_identities or (fingerprint and fingerprint in existing_identities):
+        if key in existing_identities or (fingerprint_key and fingerprint_key in existing_identities):
             return
-        virtual_by_uuid[uuid_value] = SimpleNamespace(
-            id=f"historical:{uuid_value}",
-            app_id=app_id,
+        virtual_by_key[key] = SimpleNamespace(
+            id=f"historical:{candidate_app_id}:{uuid_value}",
+            app_id=candidate_app_id,
             uuid=uuid_value,
             fingerprint=fingerprint or uuid_value,
             last_ip=last_ip,
             risk_level=0,
         )
-        existing_identities.add(uuid_value)
+        existing_identities.add(key)
         if fingerprint:
-            existing_identities.add(fingerprint)
+            existing_identities.add((candidate_app_id, fingerprint))
 
-    legacy_kamis = session.exec(
-        select(Kami).where(
-            Kami.app_id == app_id,
-            Kami.status == KamiStatus.active,
-            Kami.bind_uuid.is_not(None),
-        )
-    ).all()
+    legacy_statement = select(Kami).where(
+        Kami.status == KamiStatus.active,
+        Kami.bind_uuid.is_not(None),
+    )
+    if app_id:
+        legacy_statement = legacy_statement.where(Kami.app_id == app_id)
+    legacy_kamis = session.exec(legacy_statement).all()
     for kami in legacy_kamis:
         if _is_user_identity_bind_uuid(kami.bind_uuid):
             continue
-        add_virtual_device(kami.bind_uuid, last_ip=kami.bind_ip)
+        add_virtual_device(kami.app_id, kami.bind_uuid, last_ip=kami.bind_ip)
 
-    bindings = session.exec(
-        select(KamiDeviceBinding).where(KamiDeviceBinding.app_id == app_id)
-    ).all()
+    binding_statement = select(KamiDeviceBinding)
+    if app_id:
+        binding_statement = binding_statement.where(KamiDeviceBinding.app_id == app_id)
+    bindings = session.exec(binding_statement).all()
     for binding in bindings:
         add_virtual_device(
+            binding.app_id,
             binding.device_uuid or binding.fingerprint,
             fingerprint=binding.fingerprint,
             last_ip=binding.bind_ip,
         )
 
-    logs = session.exec(
-        select(EventLog)
-        .where(
-            EventLog.app_id == app_id,
-            EventLog.status == 1,
-            EventLog.device_uuid.is_not(None),
-        )
-        .order_by(EventLog.created_at.desc())
-    ).all()
+    log_statement = select(EventLog).where(
+        EventLog.status == 1,
+        EventLog.device_uuid.is_not(None),
+    )
+    if app_id:
+        log_statement = log_statement.where(EventLog.app_id == app_id)
+    logs = session.exec(log_statement.order_by(EventLog.created_at.desc())).all()
     for log in logs:
         add_virtual_device(
+            log.app_id,
             log.device_uuid,
             fingerprint=_fingerprint_from_event_payload(log.payload),
             last_ip=log.ip_address,
         )
 
-    return list(virtual_by_uuid.values())
+    return list(virtual_by_key.values())
+
+
+def _device_payload_matches_keyword(payload: dict, keyword: Optional[str]) -> bool:
+    if not keyword:
+        return True
+    keyword_lower = keyword.lower()
+    values = [
+        payload.get("app_id"),
+        payload.get("app_name"),
+        payload.get("uuid"),
+        payload.get("fingerprint"),
+        payload.get("last_ip"),
+        payload.get("kami_code"),
+        payload.get("username"),
+        payload.get("user_id"),
+    ]
+    values.extend(payload.get("kami_codes") or [])
+    return any(keyword_lower in str(value).lower() for value in values if value is not None)
 
 
 @router.get("/devices", summary="获取设备列表")
 async def list_devices(
-    app_id: str,
+    app_id: Optional[str] = Query(None, description="应用ID，为空返回全部应用"),
     risk_level: Optional[int] = Query(None, description="风险等级过滤"),
+    keyword: Optional[str] = Query(None, description="搜索卡密、设备或应用"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
     """获取设备列表（支持风险等级过滤）- 全局共享"""
-    # 验证应用是否存在
-    statement_app = select(App).where(App.app_id == app_id)
-    app = session.exec(statement_app).first()
-    
-    if not app:
-        raise HTTPException(status_code=404, detail="应用不存在")
-    
+    selected_app_id = app_id.strip() if app_id else None
+    keyword_value = keyword.strip() if keyword else None
+
+    if selected_app_id:
+        app = session.exec(select(App).where(App.app_id == selected_app_id)).first()
+        if not app:
+            raise HTTPException(status_code=404, detail="应用不存在")
+
     # 移除权限检查，所有人可以查看所有设备
-    statement = select(Device).where(Device.app_id == app_id)
+    statement = select(Device)
+    if selected_app_id:
+        statement = statement.where(Device.app_id == selected_app_id)
 
     if risk_level is not None:
         statement = statement.where(Device.risk_level == risk_level)
@@ -3616,16 +3646,11 @@ async def list_devices(
     if risk_level in (None, 0):
         all_devices = [
             *physical_devices,
-            *_historical_device_candidates(session, app_id, physical_devices),
+            *_historical_device_candidates(session, selected_app_id, physical_devices),
         ]
 
-    # 分页
-    total = len(all_devices)
-    offset = (page - 1) * page_size
-    devices = all_devices[offset:offset + page_size]
-
-    device_uuids = [device.uuid for device in devices]
-    fingerprints = [device.fingerprint for device in devices]
+    device_uuids = [device.uuid for device in all_devices]
+    fingerprints = [device.fingerprint for device in all_devices]
 
     bindings = []
     if device_uuids or fingerprints:
@@ -3634,23 +3659,21 @@ async def list_devices(
             binding_conditions.append(KamiDeviceBinding.device_uuid.in_(device_uuids))
         if fingerprints:
             binding_conditions.append(KamiDeviceBinding.fingerprint.in_(fingerprints))
-        bindings = session.exec(
-            select(KamiDeviceBinding).where(
-                KamiDeviceBinding.app_id == app_id,
-                or_(*binding_conditions),
-            )
-        ).all()
+        binding_statement = select(KamiDeviceBinding).where(or_(*binding_conditions))
+        if selected_app_id:
+            binding_statement = binding_statement.where(KamiDeviceBinding.app_id == selected_app_id)
+        bindings = session.exec(binding_statement).all()
 
-    related_codes_by_device_id = {device.id: [] for device in devices}
+    related_codes_by_device_id = {device.id: [] for device in all_devices}
     primary_binding_by_device_id = {}
     kami_codes = set()
     bindings_by_uuid = {}
     bindings_by_fingerprint = {}
     for binding in bindings:
         if binding.device_uuid in device_uuids:
-            bindings_by_uuid.setdefault(binding.device_uuid, []).append(binding)
+            bindings_by_uuid.setdefault((binding.app_id, binding.device_uuid), []).append(binding)
         if binding.fingerprint in fingerprints:
-            bindings_by_fingerprint.setdefault(binding.fingerprint, []).append(binding)
+            bindings_by_fingerprint.setdefault((binding.app_id, binding.fingerprint), []).append(binding)
 
     def add_related_code(device: Device, kami_code: Optional[str]) -> None:
         if not kami_code:
@@ -3660,14 +3683,14 @@ async def list_devices(
             bucket.append(kami_code)
             kami_codes.add(kami_code)
 
-    for device in devices:
+    for device in all_devices:
         seen_binding_ids = set()
         matching_bindings = []
-        for binding in bindings_by_uuid.get(device.uuid, []):
+        for binding in bindings_by_uuid.get((device.app_id, device.uuid), []):
             if binding.id not in seen_binding_ids:
                 matching_bindings.append(binding)
                 seen_binding_ids.add(binding.id)
-        for binding in bindings_by_fingerprint.get(device.fingerprint, []):
+        for binding in bindings_by_fingerprint.get((device.app_id, device.fingerprint), []):
             if binding.id not in seen_binding_ids:
                 matching_bindings.append(binding)
                 seen_binding_ids.add(binding.id)
@@ -3677,32 +3700,28 @@ async def list_devices(
 
     legacy_bind_values = sorted({value for value in [*device_uuids, *fingerprints] if value})
     if legacy_bind_values:
-        legacy_kamis = session.exec(
-            select(Kami).where(
-                Kami.app_id == app_id,
-                Kami.bind_uuid.in_(legacy_bind_values),
-            )
-        ).all()
+        legacy_statement = select(Kami).where(Kami.bind_uuid.in_(legacy_bind_values))
+        if selected_app_id:
+            legacy_statement = legacy_statement.where(Kami.app_id == selected_app_id)
+        legacy_kamis = session.exec(legacy_statement).all()
         devices_by_identity = {}
-        for device in devices:
+        for device in all_devices:
             for identity in {device.uuid, device.fingerprint}:
                 if identity:
-                    devices_by_identity.setdefault(identity, []).append(device)
+                    devices_by_identity.setdefault((device.app_id, identity), []).append(device)
         for kami in legacy_kamis:
             if not kami.bind_uuid or _is_user_identity_bind_uuid(kami.bind_uuid):
                 continue
-            for device in devices_by_identity.get(kami.bind_uuid, []):
+            for device in devices_by_identity.get((kami.app_id, kami.bind_uuid), []):
                 add_related_code(device, kami.kami_code)
 
     kamis_by_code = {}
     user_ids = []
     if kami_codes:
-        kamis = session.exec(
-            select(Kami).where(
-                Kami.app_id == app_id,
-                Kami.kami_code.in_(list(kami_codes)),
-            )
-        ).all()
+        kami_statement = select(Kami).where(Kami.kami_code.in_(list(kami_codes)))
+        if selected_app_id:
+            kami_statement = kami_statement.where(Kami.app_id == selected_app_id)
+        kamis = session.exec(kami_statement).all()
         kamis_by_code = {kami.kami_code: kami for kami in kamis}
         user_ids = [kami.redeemed_by_user_id for kami in kamis if kami.redeemed_by_user_id]
 
@@ -3711,31 +3730,55 @@ async def list_devices(
         users = session.exec(select(EndUser).where(EndUser.id.in_(user_ids))).all()
         users_by_id = {user.id: user for user in users}
 
-    ip_sets_by_uuid = {device.uuid: set() for device in devices}
-    event_user_by_uuid = {}
+    app_ids = sorted({device.app_id for device in all_devices if device.app_id})
+    apps_by_id = {}
+    if app_ids:
+        apps = session.exec(select(App).where(App.app_id.in_(app_ids))).all()
+        apps_by_id = {app.app_id: app for app in apps}
+
+    ip_sets_by_device_key = {(device.app_id, device.uuid): set() for device in all_devices}
+    event_user_by_device_key = {}
     if device_uuids:
-        logs = session.exec(
-            select(EventLog).where(
-                EventLog.app_id == app_id,
-                EventLog.device_uuid.in_(device_uuids),
-            ).order_by(EventLog.created_at.desc())
-        ).all()
+        log_statement = select(EventLog).where(EventLog.device_uuid.in_(device_uuids))
+        if selected_app_id:
+            log_statement = log_statement.where(EventLog.app_id == selected_app_id)
+        logs = session.exec(log_statement.order_by(EventLog.created_at.desc())).all()
         for log in logs:
-            if log.device_uuid in ip_sets_by_uuid and log.ip_address:
-                ip_sets_by_uuid[log.device_uuid].add(log.ip_address)
-            if log.device_uuid and log.device_uuid not in event_user_by_uuid and log.payload:
+            device_key = (log.app_id, log.device_uuid)
+            if device_key in ip_sets_by_device_key and log.ip_address:
+                ip_sets_by_device_key[device_key].add(log.ip_address)
+            if log.device_uuid and device_key not in event_user_by_device_key and log.payload:
                 try:
                     payload = json.loads(log.payload)
                 except json.JSONDecodeError:
                     payload = {}
                 if payload.get("user_id") or payload.get("username"):
-                    event_user_by_uuid[log.device_uuid] = {
+                    event_user_by_device_key[device_key] = {
                         "user_id": payload.get("user_id"),
                         "username": payload.get("username"),
                     }
-    for device in devices:
+    for device in all_devices:
         if device.last_ip:
-            ip_sets_by_uuid.setdefault(device.uuid, set()).add(device.last_ip)
+            ip_sets_by_device_key.setdefault((device.app_id, device.uuid), set()).add(device.last_ip)
+
+    payloads = [
+        _admin_device_payload(
+            device,
+            primary_binding_by_device_id.get(device.id),
+            kamis_by_code,
+            users_by_id,
+            len(ip_sets_by_device_key.get((device.app_id, device.uuid), set())),
+            event_user_by_device_key,
+            related_codes_by_device_id.get(device.id, []),
+            apps_by_id,
+        )
+        for device in all_devices
+    ]
+    payloads = [payload for payload in payloads if _device_payload_matches_keyword(payload, keyword_value)]
+
+    total = len(payloads)
+    offset = (page - 1) * page_size
+    page_payloads = payloads[offset:offset + page_size]
 
     return {
         "success": True,
@@ -3743,18 +3786,7 @@ async def list_devices(
             "total": total,
             "page": page,
             "page_size": page_size,
-            "items": [
-                _admin_device_payload(
-                    device,
-                    primary_binding_by_device_id.get(device.id),
-                    kamis_by_code,
-                    users_by_id,
-                    len(ip_sets_by_uuid.get(device.uuid, set())),
-                    event_user_by_uuid,
-                    related_codes_by_device_id.get(device.id, []),
-                )
-                for device in devices
-            ]
+            "items": page_payloads
         }
     }
 

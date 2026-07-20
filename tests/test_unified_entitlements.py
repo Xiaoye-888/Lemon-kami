@@ -1188,6 +1188,78 @@ def test_admin_devices_infer_historical_device_authorization_without_device_row(
         fastapi_app.dependency_overrides.clear()
 
 
+def test_admin_devices_can_search_device_card_across_all_apps():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+    activated_at = get_now_naive()
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_alpha", "Alpha App"))
+        session.add(make_app("app_beta", "Beta App"))
+        session.add(
+            Kami(
+                app_id="app_beta",
+                kami_code="TARGETDEVICE",
+                kami_type=KamiType.lifetime,
+                status=KamiStatus.active,
+                bind_uuid="beta-device-1",
+                activate_time=activated_at,
+                redeemed_at=activated_at,
+                authorization_owner=AuthorizationOwnerMode.device,
+                machine_bind_mode=MachineBindMode.no_limit,
+            )
+        )
+        session.add(
+            KamiDeviceBinding(
+                app_id="app_beta",
+                kami_code="TARGETDEVICE",
+                device_uuid="beta-device-1",
+                fingerprint="beta-fingerprint-1",
+                bind_ip="10.0.1.5",
+            )
+        )
+        session.add(
+            Device(
+                app_id="app_beta",
+                uuid="beta-device-1",
+                fingerprint="beta-fingerprint-1",
+                last_ip="10.0.1.5",
+            )
+        )
+        session.add(
+            Device(
+                app_id="app_alpha",
+                uuid="alpha-device-1",
+                fingerprint="alpha-fingerprint-1",
+                last_ip="10.0.1.8",
+            )
+        )
+        session.commit()
+
+    try:
+        all_response = client.get("/api/v1/admin/devices")
+        assert all_response.status_code == 200
+        all_items = all_response.json()["data"]["items"]
+        assert {item["app_id"] for item in all_items} == {"app_alpha", "app_beta"}
+
+        search_response = client.get("/api/v1/admin/devices", params={"keyword": "TARGETDEVICE"})
+        assert search_response.status_code == 200
+        data = search_response.json()["data"]
+        assert data["total"] == 1
+        item = data["items"][0]
+        assert item["app_id"] == "app_beta"
+        assert item["app_name"] == "Beta App"
+        assert item["uuid"] == "beta-device-1"
+        assert item["kami_code"] == "TARGETDEVICE"
+        assert item["kami_codes"] == ["TARGETDEVICE"]
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_admin_kami_spec_detail_includes_device_link_and_redeem_time_fallback():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

@@ -7,7 +7,8 @@
 
       <el-form :inline="true" :model="queryParams" class="filter-form">
         <el-form-item label="应用">
-          <el-select v-model="queryParams.app_id" placeholder="选择应用" style="width: 200px" @change="loadDevices">
+          <el-select v-model="queryParams.app_id" placeholder="全部应用" clearable style="width: 200px" @change="handleFilterChange">
+            <el-option label="全部应用" value="" />
             <el-option
               v-for="app in apps"
               :key="app.app_id"
@@ -16,17 +17,23 @@
             />
           </el-select>
         </el-form-item>
+        <el-form-item label="搜索">
+          <el-input
+            v-model="queryParams.keyword"
+            placeholder="搜索卡密/设备"
+            clearable
+            style="width: 240px"
+            @keyup.enter="handleFilterChange"
+            @clear="handleFilterChange"
+          />
+        </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="loadDevices">查询</el-button>
+          <el-button type="primary" @click="handleFilterChange">查询</el-button>
         </el-form-item>
       </el-form>
 
-      <!-- 提示：未选择应用 -->
-      <el-empty v-if="!queryParams.app_id" description="请先选择应用" />
-
       <!-- 设备表格 -->
       <el-table
-        v-else
         :data="devices"
         v-loading="loading"
         element-loading-custom-class="yz-bounce"
@@ -34,6 +41,9 @@
         stripe
       >
         <el-table-column prop="id" label="ID" width="80" />
+        <el-table-column prop="app_name" label="应用" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.app_name || row.app_id || '-' }}</template>
+        </el-table-column>
         <el-table-column prop="uuid" label="设备UUID" min-width="200" show-overflow-tooltip />
         <el-table-column prop="fingerprint" label="指纹" min-width="200" show-overflow-tooltip />
         <el-table-column label="关联卡密" min-width="180" show-overflow-tooltip>
@@ -112,6 +122,7 @@ const total = ref(0)
 
 const queryParams = reactive({
   app_id: '',  // 默认为空，显示全部
+  keyword: '',
   page: 1,
   page_size: 20
 })
@@ -120,13 +131,6 @@ const loadApps = async () => {
   try {
     const res = await getApps()
     apps.value = res.data
-    
-    // 如果有应用且当前没有选择，自动选择第一个
-    if (apps.value.length > 0 && !queryParams.app_id) {
-      queryParams.app_id = apps.value[0].app_id
-      // 自动加载设备
-      await loadDevices()
-    }
   } catch (error) {
     console.error('加载应用失败:', error)
     ElMessage.error('加载应用列表失败')
@@ -134,12 +138,6 @@ const loadApps = async () => {
 }
 
 const loadDevices = async () => {
-  if (!queryParams.app_id) {
-    devices.value = []
-    total.value = 0
-    return
-  }
-  
   loading.value = true
   try {
     const res = await getDevices(queryParams)
@@ -151,6 +149,11 @@ const loadDevices = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const handleFilterChange = () => {
+  queryParams.page = 1
+  loadDevices()
 }
 
 const getDeviceKamiText = (row) => {
