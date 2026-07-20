@@ -116,7 +116,10 @@ function Invoke-ReleaseBoundaryStaticChecks {
         "must not be /.",
         "must not contain whitespace.",
         'docker build -t "${BACKEND_IMAGE}:${GITHUB_SHA}" .',
-        'docker build -t "${FRONTEND_IMAGE}:${GITHUB_SHA}" ./admin'
+        'docker build -t "${FRONTEND_IMAGE}:${GITHUB_SHA}" ./admin',
+        "CLEANUP_CMD",
+        '${DEPLOY_DIR}/lemon-kami-images.tar.gz',
+        '${DEPLOY_DIR}/runtime.env'
     )) {
         Assert-Contains $workflowPath $pattern
     }
