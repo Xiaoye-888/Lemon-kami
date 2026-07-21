@@ -367,8 +367,19 @@ const sortedVersions = computed(() => [...versions.value].sort((left, right) => 
   return String(right.updated_at || '').localeCompare(String(left.updated_at || ''))
 }))
 
+function compareSdkEffectiveVersions(left, right) {
+  const codeDiff = Number(right.version_code || 0) - Number(left.version_code || 0)
+  if (codeDiff !== 0) return codeDiff
+
+  const publishedDiff = String(right.published_at || '').localeCompare(String(left.published_at || ''))
+  if (publishedDiff !== 0) return publishedDiff
+
+  return String(right.id || '').localeCompare(String(left.id || ''))
+}
+
 const publishedVersions = computed(() => sortedVersions.value.filter((version) => version.status === 'published'))
-const currentVersion = computed(() => publishedVersions.value[0] || null)
+const effectivePublishedVersions = computed(() => [...publishedVersions.value].sort(compareSdkEffectiveVersions))
+const currentVersion = computed(() => effectivePublishedVersions.value[0] || null)
 const highestVersionCode = computed(() => sortedVersions.value.reduce((highest, version) => {
   return Math.max(highest, Number(version.version_code || 0))
 }, 0))

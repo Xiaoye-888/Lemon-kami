@@ -75,6 +75,21 @@ def test_app_versions_dialog_publish_requires_explicit_windows_confirmation():
     assert "confirmDialogPublish" not in publish_source
 
 
+def test_app_versions_current_effective_order_matches_sdk_release_selection():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert "function compareSdkEffectiveVersions(left, right)" in source
+    comparator_source = source.split("function compareSdkEffectiveVersions", 1)[1].split("const publishedVersions", 1)[0]
+    assert "Number(right.version_code || 0) - Number(left.version_code || 0)" in comparator_source
+    assert "String(right.published_at || '').localeCompare(String(left.published_at || ''))" in comparator_source
+    assert "String(right.id || '').localeCompare(String(left.id || ''))" in comparator_source
+    assert "updated_at" not in comparator_source
+
+    assert "const effectivePublishedVersions = computed(() => [...publishedVersions.value].sort(compareSdkEffectiveVersions))" in source
+    assert "const currentVersion = computed(() => effectivePublishedVersions.value[0] || null)" in source
+    assert "const currentVersion = computed(() => publishedVersions.value[0] || null)" not in source
+
+
 def test_app_versions_row_actions_write_immediately_and_guard_duplicates():
     source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
 
