@@ -316,7 +316,7 @@
 
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="saving || Boolean(rowActionLoading)" @click="saveVersion()">保存</el-button>
+        <el-button type="primary" :loading="saving" :disabled="saving || Boolean(rowActionLoading)" @click="saveVersion()">{{ saveButtonText }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -332,6 +332,8 @@ import { copyTextToClipboard } from '../utils/clipboard'
 import { formatBeijingTime } from '../utils/datetime'
 
 const WINDOWS_PLATFORM = 'windows'
+const ALL_PLATFORM = 'all'
+const WINDOWS_COMPATIBLE_PLATFORMS = new Set([WINDOWS_PLATFORM, ALL_PLATFORM])
 const DEFAULT_TITLE_SUFFIX = '更新内容'
 
 const apps = ref([])
@@ -416,6 +418,8 @@ const showLowCodeHint = computed(() => {
   return highestOtherPublishedCode > 0 && publishingCode <= highestOtherPublishedCode
 })
 
+const saveButtonText = computed(() => form.status === 'published' ? '确认发布' : '保存')
+
 const statusText = (value) => ({ draft: '草稿', published: '已发布', archived: '已下架' }[value] || '草稿')
 const statusTag = (value) => ({ draft: 'info', published: 'success', archived: 'warning' }[value] || 'info')
 
@@ -444,6 +448,14 @@ function formatLocalDate(date = new Date()) {
 
 function defaultUpdateTitle() {
   return `${selectedAppName.value} ${formatLocalDate()} ${DEFAULT_TITLE_SUFFIX}`
+}
+
+function normalizeVersionPlatform(value) {
+  return String(value || ALL_PLATFORM).trim().toLowerCase()
+}
+
+function isWindowsCompatibleVersion(version) {
+  return WINDOWS_COMPATIBLE_PLATFORMS.has(normalizeVersionPlatform(version?.platform))
 }
 
 const resetForm = () => {
@@ -486,8 +498,8 @@ const loadVersions = async () => {
   }
   loading.value = true
   try {
-    const res = await getAppVersions(selectedAppId.value, { platform: WINDOWS_PLATFORM })
-    versions.value = res.data?.items || []
+    const res = await getAppVersions(selectedAppId.value)
+    versions.value = (res.data?.items || []).filter(isWindowsCompatibleVersion)
     if (selectedVersion.value) {
       selectedVersion.value = versions.value.find((version) => version.id === selectedVersion.value.id) || null
     }
@@ -601,6 +613,25 @@ const confirmLowVersionPublish = async (payload, excludedVersionId = editingVers
   }
 }
 
+async function confirmDialogPublish(payload) {
+  if (payload.status !== 'published') return true
+
+  try {
+    await ElMessageBox.confirm(
+      '发布后将立即影响 Windows 客户端的在线更新弹窗，是否继续？',
+      '确认发布',
+      {
+        type: 'warning',
+        confirmButtonText: '确认发布',
+        cancelButtonText: '取消'
+      }
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function saveVersion(statusOverride) {
   if (rowActionLoading.value) return
 
@@ -614,6 +645,7 @@ async function saveVersion(statusOverride) {
     return
   }
   if (!(await confirmLowVersionPublish(payload))) return
+  if (!(await confirmDialogPublish(payload))) return
 
   saving.value = true
   try {

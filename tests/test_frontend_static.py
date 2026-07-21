@@ -43,15 +43,36 @@ def test_app_versions_new_version_defaults_are_generated_from_app_and_date():
     assert "form.version_code = nextVersionCode.value" in source
 
 
-def test_app_versions_uses_windows_payload_and_windows_query():
+def test_app_versions_uses_windows_payload_and_windows_compatible_source_rows():
     source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
 
     assert "function versionPayloadFromForm" in source
     assert "function versionPayloadFromVersion" in source
     payload_source = source.split("function versionPayloadFromForm", 1)[1][:1200]
     assert "platform: WINDOWS_PLATFORM" in payload_source
-    assert "getAppVersions(selectedAppId.value, { platform: WINDOWS_PLATFORM })" in source
+    assert "WINDOWS_COMPATIBLE_PLATFORMS" in source
+    assert "function isWindowsCompatibleVersion" in source
+    assert "getAppVersions(selectedAppId.value)" in source
+    assert "versions.value = (res.data?.items || []).filter(isWindowsCompatibleVersion)" in source
+    assert "getAppVersions(selectedAppId.value, { platform: WINDOWS_PLATFORM })" not in source
     assert "platform: form.platform" not in source
+
+
+def test_app_versions_dialog_publish_requires_explicit_windows_confirmation():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert "const saveButtonText = computed" in source
+    assert "{{ saveButtonText }}" in source
+    assert "form.status === 'published' ? '确认发布' : '保存'" in source
+    assert "async function confirmDialogPublish(payload)" in source
+
+    save_source = source.split("async function saveVersion", 1)[1].split("async function publishDraft", 1)[0]
+    assert "if (!(await confirmDialogPublish(payload))) return" in save_source
+    assert "createAppVersion(selectedAppId.value, payload)" in save_source
+    assert "updateAppVersion(selectedAppId.value, editingVersion.value.id, payload)" in save_source
+
+    publish_source = source.split("async function publishDraft", 1)[1].split("async function archiveVersion", 1)[0]
+    assert "confirmDialogPublish" not in publish_source
 
 
 def test_app_versions_row_actions_write_immediately_and_guard_duplicates():
