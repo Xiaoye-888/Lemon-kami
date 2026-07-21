@@ -13,7 +13,7 @@
 
 ## 对接流程
 
-1. 客户端启动后可请求 `GET /api/v1/sdk/apps/{app_id}/config`，读取公告、版本更新、下载外链和安全策略。
+1. 客户端启动后可请求 `GET /api/v1/sdk/apps/{app_id}/notice` 读取公告，并请求 `GET /api/v1/sdk/apps/{app_id}/updates/check` 检查版本更新。
 2. 用户输入卡密后调用 `sdk.verify(kami_code)`。验证接口只做授权检查、激活和绑定，不扣次数。
 3. 次数卡在用户实际完成一次业务动作后，由业务端调用 `POST /api/v1/sdk/consume` 扣减次数。
 4. 行为、心跳或业务日志使用 `sdk.report_event(kami_code, event_type, extra_data)` 上报。

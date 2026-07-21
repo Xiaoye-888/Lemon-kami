@@ -6,7 +6,7 @@
 
 推荐客户端按下面顺序接入：
 
-1. 启动软件后调用 `GET /api/v1/sdk/apps/{app_id}/config` 获取公告、版本、更新说明、下载外链和安全策略。
+1. 启动软件后分别调用 `GET /api/v1/sdk/apps/{app_id}/notice` 获取公告，调用 `GET /api/v1/sdk/apps/{app_id}/updates/check` 检查版本更新。
 2. 用户输入卡密后调用 `POST /api/v1/sdk/verify` 验证授权。验证接口只做激活、绑定和可用性检查，不扣次数。
 3. 次数卡在用户实际完成一次业务动作后调用 `POST /api/v1/sdk/consume` 扣减次数，例如生成 1 章小说后扣 1 次。
 4. 软件可按需调用 `POST /api/v1/sdk/report` 上报登录、心跳、业务动作等事件。
@@ -185,62 +185,61 @@ Query 参数：
 }
 ```
 
-## 5. SDK：获取应用配置
+## 5. SDK：公告读取与版本更新
 
-`GET /api/v1/sdk/apps/{app_id}/config`
+公告只通过独立公告接口读取，不返回版本或下载字段：
 
-响应示例：
+`GET /api/v1/sdk/apps/{app_id}/notice`
 
 ```json
 {
   "success": true,
   "data": {
-    "app_id": "app_core",
-    "name": "Core App",
     "notice_enabled": true,
-    "notice_title": "公告标题",
+    "notice_id": 1,
+    "notice_revision": 1,
+    "notice_title": "系统公告",
     "notice": "公告内容...",
     "notice_level": "important",
     "notice_popup": true,
-    "version": "1.0.0",
-    "version_info": "修复已知问题",
-    "force_update": true,
-    "update_url": "https://example.com/download",
-    "update_url_type": "external",
-    "download_button_text": "立即下载",
-    "files": [
-      {
-        "name": "Core App",
-        "url": "https://example.com/client.zip",
-        "type": "direct",
-        "note": "Windows 客户端"
-      }
-    ],
-    "security": {
-      "signature_required": true,
-      "nonce_required": true,
-      "timestamp_tolerance_seconds": 300,
-      "ip_lock_enabled": true,
-      "allow_unbind": true,
-      "max_unbind_count": 1,
-      "unbind_cooldown_hours": 24,
-      "unbind_deduct_hours": 2,
-      "unbind_deduct_times": 1
-    }
+    "show_once": true
+  }
+}
+```
+
+版本更新只通过版本检查接口读取，客户端应根据 `has_update` 决定是否展示更新弹窗：
+
+`GET /api/v1/sdk/apps/{app_id}/updates/check?current_version_code=100&platform=windows`
+
+```json
+{
+  "success": true,
+  "data": {
+    "has_update": true,
+    "latest_version": "1.1.0",
+    "latest_version_code": 110,
+    "platform": "windows",
+    "force_update": false,
+    "update_title": "发现新版本",
+    "update_notes": "修复已知问题",
+    "download_url": "https://example.com/download",
+    "url_type": "external",
+    "button_text": "立即下载"
   }
 }
 ```
 
 ## 6. 管理端：接口独立配置
 
-应用公告、版本、文件外链、验证安全策略和解绑策略已统一迁移到接口独立配置中维护。
+应用公告和版本更新已迁移到独立管理页面维护；验证安全策略和解绑策略仍通过接口独立配置维护。
 
 - `GET /api/v1/admin/apps/{app_id}/interfaces`
 - `PUT /api/v1/admin/apps/{app_id}/interfaces/{interface_id}`
 
 对应接口：
 
-- `sdk.app_config`：公告、版本、更新地址、文件外链
+- `sdk.notice`：公告读取
+- `sdk.update_check`：版本更新检查
 - `sdk.verify`：签名、nonce、时间戳容差、IP 风控
 - `sdk.unbind`：解绑开关、解绑次数、冷却时间、扣减规则
 
@@ -248,7 +247,7 @@ Query 参数：
 
 ## 7. 管理端：卡密规格管理
 
-后台现在按“应用 -> 卡密类型 -> 规格 -> 批次 -> 卡密”管理库存。规格属于应用，批次属于规格，卡密属于批次。SDK 客户端不需要调用规格接口，客户端仍然只调用验证、消费、应用配置、公告和下载接口。
+后台现在按“应用 -> 卡密类型 -> 规格 -> 批次 -> 卡密”管理库存。规格属于应用，批次属于规格，卡密属于批次。SDK 客户端不需要调用规格接口，客户端只调用验证、消费、公告读取、版本更新检查和 SDK 下载接口。
 
 规格用于解决同一应用下多种积分面额、次数面额或时间卡混在批次列表里难管理的问题。相同应用、卡密类型、权益和绑定策略会归入同一个规格；例如 150 积分、一机一码、自动识别授权会固定落到同一个规格下，后续继续在该规格下生成新批次。
 

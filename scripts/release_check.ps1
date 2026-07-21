@@ -316,7 +316,8 @@ required = {
     "/api/v1/docs/interfaces",
     "/api/v1/sdk/verify",
     "/api/v1/sdk/consume",
-    "/api/v1/sdk/apps/{app_id}/config",
+    "/api/v1/sdk/apps/{app_id}/notice",
+    "/api/v1/sdk/apps/{app_id}/updates/check",
 }
 missing = sorted(required - routes)
 if missing:

@@ -107,7 +107,8 @@ docker compose logs --tail=100 admin
 
 - `verify` 只验证授权，不扣次数
 - 次数卡扣减必须调用 `consume`
-- 公告、更新和外链下载读取 `GET /api/v1/sdk/apps/{app_id}/config`
+- 公告读取 `GET /api/v1/sdk/apps/{app_id}/notice`
+- 版本更新检查 `GET /api/v1/sdk/apps/{app_id}/updates/check`
 - SDK 下载入口使用 `GET /api/sdk/download?type=python|javascript|java`
 
 ## 7. 回滚原则

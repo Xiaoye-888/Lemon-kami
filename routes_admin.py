@@ -71,7 +71,6 @@ from app_release_service import (
     next_notice_revision,
     notice_payload,
     version_payload,
-    ensure_legacy_app_content_records,
 )
 from kami_spec_service import (
     build_spec_key,
@@ -653,7 +652,6 @@ def _apply_app_interface_config_to_app(app: App, interface_key: str, config: Opt
         return
 
     field_groups = {
-        "sdk.app_config": set(),
         "sdk.verify": {
             "signature_required",
             "nonce_required",
@@ -670,9 +668,6 @@ def _apply_app_interface_config_to_app(app: App, interface_key: str, config: Opt
         },
     }
     bool_fields = {
-        "notice_enabled",
-        "notice_popup",
-        "force_update",
         "signature_required",
         "nonce_required",
         "ip_lock_enabled",
@@ -811,7 +806,6 @@ async def get_dashboard(
         "activate",
         "consume",
         "points_consume",
-        "app_config",
         "unbind",
         "report",
     ]
@@ -1093,8 +1087,7 @@ async def list_app_notices(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    app = _get_manageable_app(session, app_id, current_user)
-    ensure_legacy_app_content_records(session, app)
+    _get_manageable_app(session, app_id, current_user)
     notices = session.exec(
         select(AppNotice)
         .where(AppNotice.app_id == app_id)
@@ -1199,8 +1192,7 @@ async def list_app_versions(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    app = _get_manageable_app(session, app_id, current_user)
-    ensure_legacy_app_content_records(session, app)
+    _get_manageable_app(session, app_id, current_user)
     statement = select(AppVersion).where(AppVersion.app_id == app_id)
     if platform:
         statement = statement.where(AppVersion.platform == normalize_update_platform(platform))

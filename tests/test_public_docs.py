@@ -100,3 +100,35 @@ def test_public_docs_sdk_user_identity_fields_are_documented_together():
         assert "后台展示注册用户名" in verify_params["payload.username"]["description"]
     finally:
         fastapi_app.dependency_overrides.clear()
+
+
+def test_legacy_app_config_interface_is_not_exposed():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    def override_session():
+        with Session(engine) as session:
+            yield session
+
+    fastapi_app.dependency_overrides[routes_docs.get_session] = override_session
+    client = TestClient(fastapi_app)
+
+    try:
+        response = client.get(
+            "/api/v1/docs/interfaces",
+            params={"page_size": 100},
+            headers={"accept": "application/json"},
+        )
+
+        assert response.status_code == 200
+        items = response.json()["data"]["items"]
+        interface_keys = {item["interface_key"] for item in items}
+        assert "sdk.app_config" not in interface_keys
+
+        runtime_paths = {
+            getattr(route, "path", None)
+            for route in fastapi_app.routes
+        }
+        assert "/api/v1/sdk/apps/{app_id}/config" not in runtime_paths
+    finally:
+        fastapi_app.dependency_overrides.clear()

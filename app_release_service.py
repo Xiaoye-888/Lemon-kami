@@ -40,65 +40,6 @@ def _normalize_datetime(value: Optional[datetime]) -> Optional[datetime]:
     return value
 
 
-def ensure_legacy_app_content_records(session: Session, app: App) -> None:
-    """Persist existing app-level notice/update fields into the new history tables once."""
-    existing_notice = session.exec(
-        select(AppNotice).where(AppNotice.app_id == app.app_id)
-    ).first()
-    has_legacy_notice = bool(app.notice or app.notice_title or app.notice_enabled or app.notice_popup)
-    if not existing_notice and has_legacy_notice:
-        now = get_now_naive()
-        session.add(
-            AppNotice(
-                app_id=app.app_id,
-                title=app.notice_title or "系统公告",
-                content=app.notice or "",
-                level=normalize_notice_level(app.notice_level),
-                enabled=bool(app.notice_enabled),
-                popup=bool(app.notice_popup),
-                show_once=True,
-                revision=1,
-                created_by=app.created_by,
-                created_at=now,
-                updated_at=now,
-            )
-        )
-        session.commit()
-
-    existing_version = session.exec(
-        select(AppVersion).where(AppVersion.app_id == app.app_id)
-    ).first()
-    has_legacy_version = bool(
-        app.version
-        or app.version_info
-        or app.force_update
-        or app.update_url
-        or app.download_url
-    )
-    if not existing_version and has_legacy_version:
-        now = get_now_naive()
-        session.add(
-            AppVersion(
-                app_id=app.app_id,
-                platform="all",
-                version=app.version or "1.0.0",
-                version_code=1,
-                title="发现新版本",
-                notes=app.version_info or app.download_note,
-                force_update=bool(app.force_update),
-                download_url=app.update_url or app.download_url,
-                url_type=normalize_url_type(app.update_url_type),
-                button_text=app.download_button_text or "立即下载",
-                status="published",
-                created_by=app.created_by,
-                published_at=now,
-                created_at=now,
-                updated_at=now,
-            )
-        )
-        session.commit()
-
-
 def next_notice_revision(session: Session, app_id: str) -> int:
     notices = session.exec(select(AppNotice).where(AppNotice.app_id == app_id)).all()
     return max((notice.revision or 0 for notice in notices), default=0) + 1
@@ -148,7 +89,6 @@ def sdk_notice_payload(notice: Optional[AppNotice]) -> dict:
 
 
 def current_notice(session: Session, app: App) -> Optional[AppNotice]:
-    ensure_legacy_app_content_records(session, app)
     now = get_now_naive()
     return session.exec(
         select(AppNotice)
@@ -188,7 +128,6 @@ def latest_published_version(
     app: App,
     platform: Optional[str] = None,
 ) -> Optional[AppVersion]:
-    ensure_legacy_app_content_records(session, app)
     normalized_platform = normalize_update_platform(platform)
     platform_values = {"all", normalized_platform}
     return session.exec(
