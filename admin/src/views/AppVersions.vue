@@ -113,16 +113,16 @@
             <template #default="{ row }">
               <div class="action-group">
                 <el-button size="small" type="primary" plain @click.stop="openEdit(row)">
-                  {{ row.status === 'archived' ? '查看' : row.status === 'draft' ? '继续编辑' : '编辑' }}
+                  {{ row.status === 'draft' ? '继续编辑' : '编辑' }}
                 </el-button>
                 <el-button size="small" plain @click.stop="copyAsNewVersion(row, row.status === 'archived')">
                   {{ row.status === 'archived' ? '复制为回退包' : '复制新版本' }}
                 </el-button>
                 <el-button v-if="row.status === 'draft'" size="small" type="success" plain @click.stop="publishDraft(row)">
-                  发布
+                  编辑发布
                 </el-button>
                 <el-button v-if="row.status !== 'archived'" size="small" type="warning" plain @click.stop="archiveVersion(row)">
-                  下架
+                  编辑下架
                 </el-button>
               </div>
             </template>
@@ -948,6 +948,12 @@ onMounted(async () => {
 .dialog-preview {
   position: sticky;
   top: 0;
+}
+
+:deep(.version-dialog.el-dialog),
+:deep(.version-dialog .el-dialog),
+:deep(.el-dialog.version-dialog) {
+  max-width: 92vw;
 }
 
 :deep(.history-table .is-current-effective td.el-table__cell) {
