@@ -68,10 +68,10 @@
               {{ row.status === 'archived' ? '复制为回退包' : '复制新版本' }}
             </el-button>
             <el-button v-if="row.status === 'draft'" size="small" type="success" plain @click.stop="publishDraft(row)">
-              发布
+              编辑发布
             </el-button>
             <el-button v-if="row.status !== 'archived'" size="small" type="warning" plain @click.stop="archiveVersion(row)">
-              下架
+              编辑下架
             </el-button>
           </template>
         </el-table-column>
@@ -351,13 +351,25 @@ function versionPayloadFromForm(statusOverride) {
 }
 
 const confirmLowVersionPublish = async (payload) => {
-  if (payload.status !== 'published' || !currentVersion.value) return true
-  if (editingVersion.value?.id === currentVersion.value.id) return true
-  if (payload.version_code > Number(currentVersion.value.version_code || 0)) return true
+  if (payload.status !== 'published') return true
+
+  const editingVersionId = editingVersion.value?.id
+  const publishingCode = Number(payload.version_code || 0)
+  const highestOtherPublishedCode = publishedVersions.value.reduce((highest, version) => {
+    if (version.id === editingVersionId) return highest
+    return Math.max(highest, Number(version.version_code || 0))
+  }, 0)
+  const currentVersionCode = Number(currentVersion.value?.version_code || 0)
+  const isLoweringCurrentVersion = editingVersionId === currentVersion.value?.id && publishingCode < currentVersionCode
+  const needsWarning = highestOtherPublishedCode > 0
+    ? publishingCode <= highestOtherPublishedCode || isLoweringCurrentVersion
+    : isLoweringCurrentVersion || (!editingVersionId && currentVersionCode > 0 && publishingCode <= currentVersionCode)
+
+  if (!needsWarning) return true
 
   try {
     await ElMessageBox.confirm(
-      '发布的版本编码不高于当前生效版本，客户端判断可能不会触发更新，是否继续保存？',
+      '发布的版本编码不高于当前或其他已发布版本，客户端判断可能不会触发更新，是否继续保存？',
       '版本编码提醒',
       {
         type: 'warning',
