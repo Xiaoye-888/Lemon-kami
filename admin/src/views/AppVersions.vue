@@ -374,7 +374,7 @@ function compareSdkEffectiveVersions(left, right) {
   const publishedDiff = String(right.published_at || '').localeCompare(String(left.published_at || ''))
   if (publishedDiff !== 0) return publishedDiff
 
-  return String(right.id || '').localeCompare(String(left.id || ''))
+  return Number(right.id || 0) - Number(left.id || 0)
 }
 
 const publishedVersions = computed(() => sortedVersions.value.filter((version) => version.status === 'published'))

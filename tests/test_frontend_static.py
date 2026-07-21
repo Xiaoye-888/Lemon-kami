@@ -82,7 +82,8 @@ def test_app_versions_current_effective_order_matches_sdk_release_selection():
     comparator_source = source.split("function compareSdkEffectiveVersions", 1)[1].split("const publishedVersions", 1)[0]
     assert "Number(right.version_code || 0) - Number(left.version_code || 0)" in comparator_source
     assert "String(right.published_at || '').localeCompare(String(left.published_at || ''))" in comparator_source
-    assert "String(right.id || '').localeCompare(String(left.id || ''))" in comparator_source
+    assert "Number(right.id || 0) - Number(left.id || 0)" in comparator_source
+    assert "String(right.id || '').localeCompare(String(left.id || ''))" not in comparator_source
     assert "updated_at" not in comparator_source
 
     assert "const effectivePublishedVersions = computed(() => [...publishedVersions.value].sort(compareSdkEffectiveVersions))" in source
