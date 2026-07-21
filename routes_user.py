@@ -245,6 +245,7 @@ async def register_user(payload: RegisterRequest, session: Session = Depends(get
         email=payload.email,
         phone=payload.phone,
         status=1,
+        last_login=get_now().replace(tzinfo=None),
     )
     session.add(user)
     session.commit()
