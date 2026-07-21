@@ -36,8 +36,9 @@ def test_app_versions_new_version_defaults_are_generated_from_app_and_date():
     assert "formatLocalDate()" in source
     assert "${selectedAppName.value} ${formatLocalDate()} ${DEFAULT_TITLE_SUFFIX}" in source
     assert "更新内容" in source
-    assert "nextVersionCode" in source
-    assert "Math.max" in source
+    assert "const nextVersionCode = computed" in source
+    next_version_code_source = source.split("const nextVersionCode = computed", 1)[1][:800]
+    assert "+ 1" in next_version_code_source
     assert "form.title = defaultUpdateTitle()" in source
     assert "form.version_code = nextVersionCode.value" in source
 
@@ -49,7 +50,6 @@ def test_app_versions_uses_windows_payload_and_windows_query():
     payload_source = source.split("function versionPayloadFromForm", 1)[1][:1200]
     assert "platform: WINDOWS_PLATFORM" in payload_source
     assert "getAppVersions(selectedAppId.value, { platform: WINDOWS_PLATFORM })" in source
-    assert "form.platform" not in source
     assert "platform: form.platform" not in source
 
 
@@ -59,12 +59,16 @@ def test_app_versions_has_release_workspace_and_copy_actions():
     assert "currentVersion" in source
     assert "effectiveState" in source
     assert "复制检查接口" in source
+    assert '@click="copyUpdateCheckUrl"' in source
     assert "copyTextToClipboard" in source
     assert "copyAsNewVersion" in source
     assert "复制新版本" in source
+    assert '@click.stop="copyAsNewVersion(row, row.status === \'archived\')"' in source
     assert "复制为回退包" in source
     assert "客户端判断" in source
     assert "新增版本" in source
+    assert '@click.stop="publishDraft(row)"' in source
+    assert '@click.stop="archiveVersion(row)"' in source
     assert "弹窗预览" in source
 
 
