@@ -32,6 +32,9 @@ def test_app_versions_new_version_defaults_are_generated_from_app_and_date():
 
     assert "function formatLocalDate" in source
     assert "function defaultUpdateTitle" in source
+    assert "selectedAppName" in source
+    assert "formatLocalDate()" in source
+    assert "${selectedAppName.value} ${formatLocalDate()} ${DEFAULT_TITLE_SUFFIX}" in source
     assert "更新内容" in source
     assert "nextVersionCode" in source
     assert "Math.max" in source
@@ -42,8 +45,10 @@ def test_app_versions_new_version_defaults_are_generated_from_app_and_date():
 def test_app_versions_uses_windows_payload_and_windows_query():
     source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
 
+    assert "function versionPayloadFromForm" in source
+    payload_source = source.split("function versionPayloadFromForm", 1)[1][:1200]
+    assert "platform: WINDOWS_PLATFORM" in payload_source
     assert "getAppVersions(selectedAppId.value, { platform: WINDOWS_PLATFORM })" in source
-    assert "platform: WINDOWS_PLATFORM" in source
     assert "form.platform" not in source
     assert "platform: form.platform" not in source
 
@@ -55,6 +60,8 @@ def test_app_versions_has_release_workspace_and_copy_actions():
     assert "effectiveState" in source
     assert "复制检查接口" in source
     assert "copyTextToClipboard" in source
+    assert "copyAsNewVersion" in source
+    assert "复制新版本" in source
     assert "复制为回退包" in source
     assert "客户端判断" in source
     assert "新增版本" in source
