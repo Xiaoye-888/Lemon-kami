@@ -118,11 +118,27 @@
                 <el-button size="small" plain @click.stop="copyAsNewVersion(row, row.status === 'archived')">
                   {{ row.status === 'archived' ? '复制为回退包' : '复制新版本' }}
                 </el-button>
-                <el-button v-if="row.status === 'draft'" size="small" type="success" plain @click.stop="publishDraft(row)">
-                  编辑发布
+                <el-button
+                  v-if="row.status === 'draft'"
+                  size="small"
+                  type="success"
+                  plain
+                  :loading="rowActionLoading === `publish:${row.id}`"
+                  :disabled="Boolean(rowActionLoading)"
+                  @click.stop="publishDraft(row)"
+                >
+                  立即发布
                 </el-button>
-                <el-button v-if="row.status !== 'archived'" size="small" type="warning" plain @click.stop="archiveVersion(row)">
-                  编辑下架
+                <el-button
+                  v-if="row.status !== 'archived'"
+                  size="small"
+                  type="warning"
+                  plain
+                  :loading="rowActionLoading === `archive:${row.id}`"
+                  :disabled="Boolean(rowActionLoading)"
+                  @click.stop="archiveVersion(row)"
+                >
+                  立即下架
                 </el-button>
               </div>
             </template>
@@ -312,6 +328,7 @@ const selectedAppId = ref('')
 const selectedVersion = ref(null)
 const loading = ref(false)
 const saving = ref(false)
+const rowActionLoading = ref('')
 const dialogVisible = ref(false)
 const editingVersion = ref(null)
 
@@ -522,20 +539,34 @@ function versionPayloadFromForm(statusOverride) {
   }
 }
 
-const confirmLowVersionPublish = async (payload) => {
+function versionPayloadFromVersion(row, statusOverride) {
+  return {
+    platform: WINDOWS_PLATFORM,
+    version: String(row.version || '').trim(),
+    version_code: Number(row.version_code || 1),
+    title: String(row.title || '').trim(),
+    notes: String(row.notes || '').trim() || null,
+    force_update: Boolean(row.force_update),
+    download_url: String(row.download_url || '').trim() || null,
+    url_type: row.url_type || 'direct',
+    button_text: String(row.button_text || '').trim() || '立即下载',
+    status: typeof statusOverride === 'string' ? statusOverride : row.status || 'draft'
+  }
+}
+
+const confirmLowVersionPublish = async (payload, excludedVersionId = editingVersion.value?.id) => {
   if (payload.status !== 'published') return true
 
-  const editingVersionId = editingVersion.value?.id
   const publishingCode = Number(payload.version_code || 0)
   const highestOtherPublishedCode = publishedVersions.value.reduce((highest, version) => {
-    if (version.id === editingVersionId) return highest
+    if (version.id === excludedVersionId) return highest
     return Math.max(highest, Number(version.version_code || 0))
   }, 0)
   const currentVersionCode = Number(currentVersion.value?.version_code || 0)
-  const isLoweringCurrentVersion = editingVersionId === currentVersion.value?.id && publishingCode < currentVersionCode
+  const isLoweringCurrentVersion = excludedVersionId === currentVersion.value?.id && publishingCode < currentVersionCode
   const needsWarning = highestOtherPublishedCode > 0
     ? publishingCode <= highestOtherPublishedCode || isLoweringCurrentVersion
-    : isLoweringCurrentVersion || (!editingVersionId && currentVersionCode > 0 && publishingCode <= currentVersionCode)
+    : isLoweringCurrentVersion || (!excludedVersionId && currentVersionCode > 0 && publishingCode <= currentVersionCode)
 
   if (!needsWarning) return true
 
@@ -587,14 +618,72 @@ async function saveVersion(statusOverride) {
   }
 }
 
-const publishDraft = (row) => {
-  openEdit(row)
-  form.status = 'published'
+async function publishDraft(row) {
+  if (!selectedAppId.value || rowActionLoading.value) return
+
+  rowActionLoading.value = `publish:${row.id}`
+  const payload = versionPayloadFromVersion(row, 'published')
+  try {
+    if (!payload.version || !payload.title) {
+      ElMessage.warning('请填写版本号和更新标题')
+      return
+    }
+    if (payload.force_update && !payload.download_url) {
+      ElMessage.warning('强制更新发布前必须填写下载地址')
+      return
+    }
+    if (!(await confirmLowVersionPublish(payload, row.id))) return
+
+    await ElMessageBox.confirm(
+      '发布后将立即影响 Windows 客户端的在线更新弹窗，是否继续？',
+      '确认发布',
+      {
+        type: 'warning',
+        confirmButtonText: '立即发布',
+        cancelButtonText: '取消'
+      }
+    )
+    await updateAppVersion(selectedAppId.value, row.id, payload)
+    ElMessage.success('版本已发布')
+    selectedVersion.value = row
+    await loadVersions()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      console.error('发布版本失败:', error)
+      ElMessage.error('发布版本失败')
+    }
+  } finally {
+    rowActionLoading.value = ''
+  }
 }
 
-const archiveVersion = (row) => {
-  openEdit(row)
-  form.status = 'archived'
+async function archiveVersion(row) {
+  if (!selectedAppId.value || rowActionLoading.value) return
+
+  rowActionLoading.value = `archive:${row.id}`
+  const payload = versionPayloadFromVersion(row, 'archived')
+  try {
+    await ElMessageBox.confirm(
+      '下架后该版本将不再作为 Windows 更新提示使用，是否继续？',
+      '确认下架',
+      {
+        type: 'warning',
+        confirmButtonText: '立即下架',
+        cancelButtonText: '取消'
+      }
+    )
+    await updateAppVersion(selectedAppId.value, row.id, payload)
+    ElMessage.success('版本已下架')
+    selectedVersion.value = row
+    await loadVersions()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      console.error('下架版本失败:', error)
+      ElMessage.error('下架版本失败')
+    }
+  } finally {
+    rowActionLoading.value = ''
+  }
 }
 
 const copyUpdateCheckUrl = async () => {
@@ -603,7 +692,11 @@ const copyUpdateCheckUrl = async () => {
     return
   }
   const origin = globalThis.location?.origin || ''
-  const path = `/api/v1/sdk/apps/${selectedAppId.value}/updates/check?platform=${WINDOWS_PLATFORM}`
+  const query = new URLSearchParams({
+    platform: WINDOWS_PLATFORM,
+    current_version_code: String(currentVersion.value?.version_code || 0)
+  })
+  const path = `/api/v1/sdk/apps/${selectedAppId.value}/updates/check?${query.toString()}`
   try {
     await copyTextToClipboard(`${origin}${path}`)
     ElMessage.success('复制成功')

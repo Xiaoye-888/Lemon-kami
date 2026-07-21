@@ -47,10 +47,41 @@ def test_app_versions_uses_windows_payload_and_windows_query():
     source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
 
     assert "function versionPayloadFromForm" in source
+    assert "function versionPayloadFromVersion" in source
     payload_source = source.split("function versionPayloadFromForm", 1)[1][:1200]
     assert "platform: WINDOWS_PLATFORM" in payload_source
     assert "getAppVersions(selectedAppId.value, { platform: WINDOWS_PLATFORM })" in source
     assert "platform: form.platform" not in source
+
+
+def test_app_versions_row_actions_write_immediately_and_guard_duplicates():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert "const rowActionLoading = ref('')" in source
+    assert ':loading="rowActionLoading === `publish:${row.id}`"' in source
+    assert ':loading="rowActionLoading === `archive:${row.id}`"' in source
+
+    publish_source = source.split("async function publishDraft", 1)[1].split("async function archiveVersion", 1)[0]
+    assert "versionPayloadFromVersion(row, 'published')" in publish_source
+    assert "updateAppVersion(selectedAppId.value, row.id, payload)" in publish_source
+    assert "confirmLowVersionPublish(payload, row.id)" in publish_source
+    assert "rowActionLoading.value = `publish:${row.id}`" in publish_source
+    assert "openEdit(row)" not in publish_source
+
+    archive_source = source.split("async function archiveVersion", 1)[1].split("const copyUpdateCheckUrl", 1)[0]
+    assert "versionPayloadFromVersion(row, 'archived')" in archive_source
+    assert "updateAppVersion(selectedAppId.value, row.id, payload)" in archive_source
+    assert "rowActionLoading.value = `archive:${row.id}`" in archive_source
+    assert "openEdit(row)" not in archive_source
+
+
+def test_app_versions_copy_update_check_url_includes_windows_and_current_code():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    copy_source = source.split("const copyUpdateCheckUrl", 1)[1]
+    assert "new URLSearchParams" in copy_source
+    assert "platform: WINDOWS_PLATFORM" in copy_source
+    assert "current_version_code: String(currentVersion.value?.version_code || 0)" in copy_source
 
 
 def test_app_versions_has_release_workspace_and_copy_actions():
