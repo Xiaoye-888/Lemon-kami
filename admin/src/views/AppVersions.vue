@@ -11,6 +11,7 @@
           class="app-select"
           placeholder="选择应用"
           filterable
+          :disabled="Boolean(rowActionLoading)"
           @change="loadVersions"
         >
           <el-option
@@ -25,7 +26,7 @@
           <el-icon><DocumentCopy /></el-icon>
           复制检查接口
         </el-button>
-        <el-button type="primary" :disabled="!selectedAppId" @click="openCreate">
+        <el-button type="primary" :disabled="!selectedAppId || Boolean(rowActionLoading)" @click="openCreate">
           <el-icon><Plus /></el-icon>
           新增版本
         </el-button>
@@ -112,10 +113,21 @@
           <el-table-column label="Actions" width="300" fixed="right">
             <template #default="{ row }">
               <div class="action-group">
-                <el-button size="small" type="primary" plain @click.stop="openEdit(row)">
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :disabled="Boolean(rowActionLoading)"
+                  @click.stop="openEdit(row)"
+                >
                   {{ row.status === 'draft' ? '继续编辑' : '编辑' }}
                 </el-button>
-                <el-button size="small" plain @click.stop="copyAsNewVersion(row, row.status === 'archived')">
+                <el-button
+                  size="small"
+                  plain
+                  :disabled="Boolean(rowActionLoading)"
+                  @click.stop="copyAsNewVersion(row, row.status === 'archived')"
+                >
                   {{ row.status === 'archived' ? '复制为回退包' : '复制新版本' }}
                 </el-button>
                 <el-button
@@ -182,7 +194,7 @@
             强制发布需要下载地址。
           </div>
 
-          <el-button type="primary" :disabled="!selectedAppId" @click="openCreate">
+          <el-button type="primary" :disabled="!selectedAppId || Boolean(rowActionLoading)" @click="openCreate">
             <el-icon><Plus /></el-icon>
             新增版本
           </el-button>
@@ -304,7 +316,7 @@
 
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveVersion()">保存</el-button>
+        <el-button type="primary" :loading="saving" :disabled="saving || Boolean(rowActionLoading)" @click="saveVersion()">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -492,6 +504,7 @@ const selectVersion = (row) => {
 }
 
 const openCreate = () => {
+  if (rowActionLoading.value) return
   editingVersion.value = null
   selectedVersion.value = null
   resetForm()
@@ -499,6 +512,7 @@ const openCreate = () => {
 }
 
 const openEdit = (row) => {
+  if (rowActionLoading.value) return
   editingVersion.value = row
   selectedVersion.value = row
   applyVersionToForm(row)
@@ -506,6 +520,7 @@ const openEdit = (row) => {
 }
 
 const copyAsNewVersion = (row, asRollback = false) => {
+  if (rowActionLoading.value) return
   editingVersion.value = null
   selectedVersion.value = row
   resetForm()
@@ -587,6 +602,8 @@ const confirmLowVersionPublish = async (payload, excludedVersionId = editingVers
 }
 
 async function saveVersion(statusOverride) {
+  if (rowActionLoading.value) return
+
   const payload = versionPayloadFromForm(statusOverride)
   if (!payload.version || !payload.title) {
     ElMessage.warning('请填写版本号和更新标题')
@@ -619,7 +636,8 @@ async function saveVersion(statusOverride) {
 }
 
 async function publishDraft(row) {
-  if (!selectedAppId.value || rowActionLoading.value) return
+  const appId = selectedAppId.value
+  if (!appId || rowActionLoading.value) return
 
   rowActionLoading.value = `publish:${row.id}`
   const payload = versionPayloadFromVersion(row, 'published')
@@ -643,7 +661,7 @@ async function publishDraft(row) {
         cancelButtonText: '取消'
       }
     )
-    await updateAppVersion(selectedAppId.value, row.id, payload)
+    await updateAppVersion(appId, row.id, payload)
     ElMessage.success('版本已发布')
     selectedVersion.value = row
     await loadVersions()
@@ -658,7 +676,8 @@ async function publishDraft(row) {
 }
 
 async function archiveVersion(row) {
-  if (!selectedAppId.value || rowActionLoading.value) return
+  const appId = selectedAppId.value
+  if (!appId || rowActionLoading.value) return
 
   rowActionLoading.value = `archive:${row.id}`
   const payload = versionPayloadFromVersion(row, 'archived')
@@ -672,7 +691,7 @@ async function archiveVersion(row) {
         cancelButtonText: '取消'
       }
     )
-    await updateAppVersion(selectedAppId.value, row.id, payload)
+    await updateAppVersion(appId, row.id, payload)
     ElMessage.success('版本已下架')
     selectedVersion.value = row
     await loadVersions()

@@ -58,19 +58,26 @@ def test_app_versions_row_actions_write_immediately_and_guard_duplicates():
     source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
 
     assert "const rowActionLoading = ref('')" in source
+    assert ':disabled="!selectedAppId || Boolean(rowActionLoading)"' in source
+    assert '@click.stop="openEdit(row)"' in source
+    assert '@click.stop="copyAsNewVersion(row, row.status === \'archived\')"' in source
+    assert ':disabled="Boolean(rowActionLoading)"' in source
+    assert ':disabled="saving || Boolean(rowActionLoading)"' in source
     assert ':loading="rowActionLoading === `publish:${row.id}`"' in source
     assert ':loading="rowActionLoading === `archive:${row.id}`"' in source
 
     publish_source = source.split("async function publishDraft", 1)[1].split("async function archiveVersion", 1)[0]
+    assert "const appId = selectedAppId.value" in publish_source
     assert "versionPayloadFromVersion(row, 'published')" in publish_source
-    assert "updateAppVersion(selectedAppId.value, row.id, payload)" in publish_source
+    assert "updateAppVersion(appId, row.id, payload)" in publish_source
     assert "confirmLowVersionPublish(payload, row.id)" in publish_source
     assert "rowActionLoading.value = `publish:${row.id}`" in publish_source
     assert "openEdit(row)" not in publish_source
 
     archive_source = source.split("async function archiveVersion", 1)[1].split("const copyUpdateCheckUrl", 1)[0]
+    assert "const appId = selectedAppId.value" in archive_source
     assert "versionPayloadFromVersion(row, 'archived')" in archive_source
-    assert "updateAppVersion(selectedAppId.value, row.id, payload)" in archive_source
+    assert "updateAppVersion(appId, row.id, payload)" in archive_source
     assert "rowActionLoading.value = `archive:${row.id}`" in archive_source
     assert "openEdit(row)" not in archive_source
 
