@@ -13,6 +13,140 @@ def test_version_update_preview_embeds_download_url_in_download_button():
     assert 'rel="noopener noreferrer"' in source
 
 
+def test_app_versions_page_is_windows_only_release_console():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert "WINDOWS_PLATFORM = 'windows'" in source
+    assert 'class="control locked"' in source
+    assert ">Windows<" in source
+    assert 'v-model="platformFilter"' not in source
+    assert 'label="全部平台"' not in source
+    assert 'label="通用"' not in source
+    assert 'label="macOS"' not in source
+    assert 'label="Android"' not in source
+    assert "platformText" not in source
+
+
+def test_app_versions_new_version_defaults_are_generated_from_app_and_date():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert "function formatLocalDate" in source
+    assert "function defaultUpdateTitle" in source
+    assert "selectedAppName" in source
+    assert "formatLocalDate()" in source
+    assert "${selectedAppName.value} ${formatLocalDate()} ${DEFAULT_TITLE_SUFFIX}" in source
+    assert "更新内容" in source
+    assert "const nextVersionCode = computed" in source
+    next_version_code_source = source.split("const nextVersionCode = computed", 1)[1][:800]
+    assert "+ 1" in next_version_code_source
+    assert "form.title = defaultUpdateTitle()" in source
+    assert "form.version_code = nextVersionCode.value" in source
+
+
+def test_app_versions_uses_windows_payload_and_windows_compatible_source_rows():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert "function versionPayloadFromForm" in source
+    assert "function versionPayloadFromVersion" in source
+    payload_source = source.split("function versionPayloadFromForm", 1)[1][:1200]
+    assert "platform: WINDOWS_PLATFORM" in payload_source
+    assert "WINDOWS_COMPATIBLE_PLATFORMS" in source
+    assert "function isWindowsCompatibleVersion" in source
+    assert "getAppVersions(selectedAppId.value)" in source
+    assert "versions.value = (res.data?.items || []).filter(isWindowsCompatibleVersion)" in source
+    assert "getAppVersions(selectedAppId.value, { platform: WINDOWS_PLATFORM })" not in source
+    assert "platform: form.platform" not in source
+
+
+def test_app_versions_dialog_publish_requires_explicit_windows_confirmation():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert "const saveButtonText = computed" in source
+    assert "{{ saveButtonText }}" in source
+    assert "form.status === 'published' ? '确认发布' : '保存'" in source
+    assert "async function confirmDialogPublish(payload)" in source
+
+    save_source = source.split("async function saveVersion", 1)[1].split("async function publishDraft", 1)[0]
+    assert "if (!(await confirmDialogPublish(payload))) return" in save_source
+    assert "createAppVersion(selectedAppId.value, payload)" in save_source
+    assert "updateAppVersion(selectedAppId.value, editingVersion.value.id, payload)" in save_source
+
+    publish_source = source.split("async function publishDraft", 1)[1].split("async function archiveVersion", 1)[0]
+    assert "confirmDialogPublish" not in publish_source
+
+
+def test_app_versions_current_effective_order_matches_sdk_release_selection():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert "function compareSdkEffectiveVersions(left, right)" in source
+    comparator_source = source.split("function compareSdkEffectiveVersions", 1)[1].split("const publishedVersions", 1)[0]
+    assert "Number(right.version_code || 0) - Number(left.version_code || 0)" in comparator_source
+    assert "String(right.published_at || '').localeCompare(String(left.published_at || ''))" in comparator_source
+    assert "Number(right.id || 0) - Number(left.id || 0)" in comparator_source
+    assert "String(right.id || '').localeCompare(String(left.id || ''))" not in comparator_source
+    assert "updated_at" not in comparator_source
+
+    assert "const effectivePublishedVersions = computed(() => [...publishedVersions.value].sort(compareSdkEffectiveVersions))" in source
+    assert "const currentVersion = computed(() => effectivePublishedVersions.value[0] || null)" in source
+    assert "const currentVersion = computed(() => publishedVersions.value[0] || null)" not in source
+
+
+def test_app_versions_row_actions_write_immediately_and_guard_duplicates():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert "const rowActionLoading = ref('')" in source
+    assert ':disabled="!selectedAppId || Boolean(rowActionLoading)"' in source
+    assert '@click.stop="openEdit(row)"' in source
+    assert '@click.stop="copyAsNewVersion(row, row.status === \'archived\')"' in source
+    assert ':disabled="Boolean(rowActionLoading)"' in source
+    assert ':disabled="saving || Boolean(rowActionLoading)"' in source
+    assert ':loading="rowActionLoading === `publish:${row.id}`"' in source
+    assert ':loading="rowActionLoading === `archive:${row.id}`"' in source
+
+    publish_source = source.split("async function publishDraft", 1)[1].split("async function archiveVersion", 1)[0]
+    assert "const appId = selectedAppId.value" in publish_source
+    assert "versionPayloadFromVersion(row, 'published')" in publish_source
+    assert "updateAppVersion(appId, row.id, payload)" in publish_source
+    assert "confirmLowVersionPublish(payload, row.id)" in publish_source
+    assert "rowActionLoading.value = `publish:${row.id}`" in publish_source
+    assert "openEdit(row)" not in publish_source
+
+    archive_source = source.split("async function archiveVersion", 1)[1].split("const copyUpdateCheckUrl", 1)[0]
+    assert "const appId = selectedAppId.value" in archive_source
+    assert "versionPayloadFromVersion(row, 'archived')" in archive_source
+    assert "updateAppVersion(appId, row.id, payload)" in archive_source
+    assert "rowActionLoading.value = `archive:${row.id}`" in archive_source
+    assert "openEdit(row)" not in archive_source
+
+
+def test_app_versions_copy_update_check_url_includes_windows_and_current_code():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    copy_source = source.split("const copyUpdateCheckUrl", 1)[1]
+    assert "new URLSearchParams" in copy_source
+    assert "platform: WINDOWS_PLATFORM" in copy_source
+    assert "current_version_code: String(currentVersion.value?.version_code || 0)" in copy_source
+
+
+def test_app_versions_has_release_workspace_and_copy_actions():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert "currentVersion" in source
+    assert "effectiveState" in source
+    assert "复制检查接口" in source
+    assert '@click="copyUpdateCheckUrl"' in source
+    assert "copyTextToClipboard" in source
+    assert "copyAsNewVersion" in source
+    assert "复制新版本" in source
+    assert '@click.stop="copyAsNewVersion(row, row.status === \'archived\')"' in source
+    assert "复制为回退包" in source
+    assert "客户端判断" in source
+    assert "新增版本" in source
+    assert '@click.stop="publishDraft(row)"' in source
+    assert '@click.stop="archiveVersion(row)"' in source
+    assert "弹窗预览" in source
+
+
 def test_devices_page_defaults_to_all_apps_with_keyword_search():
     source = (PROJECT_ROOT / "admin/src/views/Devices.vue").read_text(encoding="utf-8")
 
