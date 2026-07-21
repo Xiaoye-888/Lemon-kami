@@ -13,6 +13,54 @@ def test_version_update_preview_embeds_download_url_in_download_button():
     assert 'rel="noopener noreferrer"' in source
 
 
+def test_app_versions_page_is_windows_only_release_console():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert "WINDOWS_PLATFORM = 'windows'" in source
+    assert 'class="control locked"' in source
+    assert ">Windows<" in source
+    assert 'v-model="platformFilter"' not in source
+    assert 'label="全部平台"' not in source
+    assert 'label="通用"' not in source
+    assert 'label="macOS"' not in source
+    assert 'label="Android"' not in source
+    assert "platformText" not in source
+
+
+def test_app_versions_new_version_defaults_are_generated_from_app_and_date():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert "function formatLocalDate" in source
+    assert "function defaultUpdateTitle" in source
+    assert "更新内容" in source
+    assert "nextVersionCode" in source
+    assert "Math.max" in source
+    assert "form.title = defaultUpdateTitle()" in source
+    assert "form.version_code = nextVersionCode.value" in source
+
+
+def test_app_versions_uses_windows_payload_and_windows_query():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert "getAppVersions(selectedAppId.value, { platform: WINDOWS_PLATFORM })" in source
+    assert "platform: WINDOWS_PLATFORM" in source
+    assert "form.platform" not in source
+    assert "platform: form.platform" not in source
+
+
+def test_app_versions_has_release_workspace_and_copy_actions():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert "currentVersion" in source
+    assert "effectiveState" in source
+    assert "复制检查接口" in source
+    assert "copyTextToClipboard" in source
+    assert "复制为回退包" in source
+    assert "客户端判断" in source
+    assert "新增版本" in source
+    assert "弹窗预览" in source
+
+
 def test_devices_page_defaults_to_all_apps_with_keyword_search():
     source = (PROJECT_ROOT / "admin/src/views/Devices.vue").read_text(encoding="utf-8")
 
