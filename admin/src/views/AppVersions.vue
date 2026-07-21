@@ -823,7 +823,13 @@ onMounted(async () => {
 }
 
 .action-group {
-  flex-wrap: nowrap;
+  max-width: 100%;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+
+.action-group :deep(.el-button) {
+  flex: 0 0 auto;
 }
 
 .action-group :deep(.el-button + .el-button),
