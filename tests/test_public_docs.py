@@ -1,9 +1,10 @@
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
-from sqlmodel import SQLModel, Session, create_engine
+from sqlmodel import SQLModel, Session, create_engine, select
 
 import routes_docs
 from main import app as fastapi_app
+from models import ApiInterface
 
 
 def make_engine():
@@ -130,5 +131,51 @@ def test_legacy_app_config_interface_is_not_exposed():
             for route in fastapi_app.routes
         }
         assert "/api/v1/sdk/apps/{app_id}/config" not in runtime_paths
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_public_docs_hides_removed_builtin_interfaces_from_legacy_database_rows():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        session.add(
+            ApiInterface(
+                name="Legacy App Config",
+                interface_key="sdk.app_config",
+                category="SDK",
+                method="GET",
+                path="/api/v1/sdk/apps/{app_id}/config",
+                is_builtin=True,
+                status=1,
+            )
+        )
+        session.commit()
+
+    def override_session():
+        with Session(engine) as session:
+            yield session
+
+    fastapi_app.dependency_overrides[routes_docs.get_session] = override_session
+    client = TestClient(fastapi_app)
+
+    try:
+        response = client.get(
+            "/api/v1/docs/interfaces",
+            params={"page_size": 100},
+            headers={"accept": "application/json"},
+        )
+
+        assert response.status_code == 200
+        items = response.json()["data"]["items"]
+        interface_keys = {item["interface_key"] for item in items}
+        assert "sdk.app_config" not in interface_keys
+
+        with Session(engine) as session:
+            legacy = session.exec(
+                select(ApiInterface).where(ApiInterface.interface_key == "sdk.app_config")
+            ).one()
+            assert legacy.status == 0
     finally:
         fastapi_app.dependency_overrides.clear()

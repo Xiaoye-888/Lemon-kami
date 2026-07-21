@@ -104,5 +104,18 @@ def ensure_builtin_interfaces(session: Session) -> None:
             session.add(item)
             changed = True
 
+    stale_builtin_items = session.exec(
+        select(ApiInterface).where(
+            ApiInterface.is_builtin == True,
+            ~ApiInterface.interface_key.in_(keys),
+            ApiInterface.status != 0,
+        )
+    ).all()
+    for item in stale_builtin_items:
+        item.status = 0
+        item.updated_at = now
+        session.add(item)
+        changed = True
+
     if changed:
         session.commit()
