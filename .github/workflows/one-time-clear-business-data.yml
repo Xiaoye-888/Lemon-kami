@@ -1,0 +1,225 @@
+name: One-Time Clear Online Business Data
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/one-time-clear-business-data.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lemon-kami-one-time-clear-business-data
+  cancel-in-progress: false
+
+env:
+  DEFAULT_SERVER_HOST: 154.12.26.231
+
+jobs:
+  clear-business-data:
+    name: Clear card user device business data
+    runs-on: ubuntu-24.04
+    if: "${{ github.event_name == 'push' && contains(github.event.head_commit.message, 'ops: clear online business data') }}"
+
+    steps:
+      - name: Prepare SSH
+        shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+
+          strip_leading_bom() {
+            local key="$1"
+            local value="${!key:-}"
+            value="${value#$'\xef\xbb\xbf'}"
+            printf -v "${key}" '%s' "${value}"
+          }
+
+          for key in SERVER_HOST SERVER_PORT SERVER_SSH_KEY; do
+            strip_leading_bom "${key}"
+          done
+
+          SERVER_HOST="${SERVER_HOST:-${DEFAULT_SERVER_HOST}}"
+          SERVER_PORT="${SERVER_PORT:-22}"
+
+          if [ -z "${SERVER_SSH_KEY:-}" ]; then
+            echo "Missing required GitHub secret: SERVER_SSH_KEY" >&2
+            exit 1
+          fi
+          if ! [[ "${SERVER_PORT}" =~ ^[0-9]+$ ]]; then
+            echo "SERVER_PORT must be a number." >&2
+            exit 1
+          fi
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "${SERVER_SSH_KEY}" > ~/.ssh/lemon_kami_deploy_key
+          chmod 600 ~/.ssh/lemon_kami_deploy_key
+          ssh-keyscan -p "${SERVER_PORT}" "${SERVER_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Run one-time cleanup on server
+        shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR }}
+        run: |
+          set -Eeuo pipefail
+
+          strip_leading_bom() {
+            local key="$1"
+            local value="${!key:-}"
+            value="${value#$'\xef\xbb\xbf'}"
+            printf -v "${key}" '%s' "${value}"
+          }
+
+          for key in SERVER_HOST SERVER_USER SERVER_PORT DEPLOY_APP_DIR; do
+            strip_leading_bom "${key}"
+          done
+
+          SERVER_HOST="${SERVER_HOST:-${DEFAULT_SERVER_HOST}}"
+          SERVER_PORT="${SERVER_PORT:-22}"
+          DEPLOY_APP_DIR="${DEPLOY_APP_DIR:-/opt/lemon-kami}"
+
+          if [ -z "${SERVER_USER:-}" ]; then
+            echo "Missing required GitHub secret: SERVER_USER" >&2
+            exit 1
+          fi
+
+          REMOTE="${SERVER_USER}@${SERVER_HOST}"
+          printf -v REMOTE_CMD 'APP_DIR=%q bash -s' "${DEPLOY_APP_DIR}"
+
+          ssh -i ~/.ssh/lemon_kami_deploy_key -p "${SERVER_PORT}" "${REMOTE}" "${REMOTE_CMD}" <<'REMOTE_SCRIPT'
+          set -Eeuo pipefail
+
+          cd "${APP_DIR}"
+          if [ ! -f docker-compose.prod.yml ]; then
+            echo "docker-compose.prod.yml not found in app directory" >&2
+            exit 1
+          fi
+          if [ ! -f .env ]; then
+            echo ".env not found in app directory" >&2
+            exit 1
+          fi
+
+          compose() {
+            docker compose --env-file .env -f docker-compose.prod.yml "$@"
+          }
+
+          compose exec -T fastapi python - <<'PY'
+          import json
+
+          from sqlalchemy import delete, func
+          from sqlmodel import Session, select
+
+          from database import engine
+          from models import (
+              AdminUser,
+              ApiInterface,
+              App,
+              AppAuthorization,
+              AppInterfaceConfig,
+              AppNotice,
+              AppVersion,
+              AuthorizationAccount,
+              AuthorizationLot,
+              AuthorizationTransaction,
+              Device,
+              EndUser,
+              EventLog,
+              Kami,
+              KamiBatch,
+              KamiDeviceBinding,
+              KamiSpec,
+              PointTransaction,
+              UserPointAccount,
+              UserPointLot,
+          )
+          from redis_client import get_redis
+
+          delete_order = [
+              EventLog,
+              KamiDeviceBinding,
+              AuthorizationTransaction,
+              AuthorizationLot,
+              PointTransaction,
+              UserPointLot,
+              UserPointAccount,
+              AuthorizationAccount,
+              Kami,
+              KamiBatch,
+              KamiSpec,
+              Device,
+              EndUser,
+          ]
+
+          preserve_models = [
+              App,
+              AppNotice,
+              AppVersion,
+              ApiInterface,
+              AppInterfaceConfig,
+              AppAuthorization,
+              AdminUser,
+          ]
+
+          def count_rows(session, model):
+              return int(session.exec(select(func.count()).select_from(model)).one())
+
+          with Session(engine) as session:
+              before_delete = {
+                  model.__tablename__: count_rows(session, model)
+                  for model in delete_order
+              }
+              before_preserve = {
+                  model.__tablename__: count_rows(session, model)
+                  for model in preserve_models
+              }
+
+              for model in delete_order:
+                  session.execute(delete(model))
+              session.commit()
+
+          with Session(engine) as session:
+              after_delete = {
+                  model.__tablename__: count_rows(session, model)
+                  for model in delete_order
+              }
+              after_preserve = {
+                  model.__tablename__: count_rows(session, model)
+                  for model in preserve_models
+              }
+
+          redis_deleted = 0
+          redis_client = get_redis()
+          for key in redis_client.scan_iter(match="device_bind:*", count=1000):
+              redis_client.delete(key)
+              redis_deleted += 1
+
+          remaining = {
+              table: count
+              for table, count in after_delete.items()
+              if count != 0
+          }
+          changed_preserved = {
+              table: {"before": before_preserve[table], "after": after_preserve[table]}
+              for table in before_preserve
+              if before_preserve[table] != after_preserve[table]
+          }
+
+          print("delete_before=" + json.dumps(before_delete, ensure_ascii=False, sort_keys=True))
+          print("delete_after=" + json.dumps(after_delete, ensure_ascii=False, sort_keys=True))
+          print("preserve_counts=" + json.dumps(after_preserve, ensure_ascii=False, sort_keys=True))
+          print("redis_device_bind_keys_deleted=" + str(redis_deleted))
+
+          if remaining:
+              raise SystemExit("cleanup failed, remaining rows: " + json.dumps(remaining, sort_keys=True))
+          if changed_preserved:
+              raise SystemExit("preserved tables changed: " + json.dumps(changed_preserved, sort_keys=True))
+          PY
+          REMOTE_SCRIPT
