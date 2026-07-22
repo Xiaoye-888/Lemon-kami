@@ -22,13 +22,9 @@
           />
         </el-select>
         <div class="control locked">Windows</div>
-        <el-button :disabled="!selectedAppId" @click="copyUpdateCheckUrl">
-          <el-icon><DocumentCopy /></el-icon>
-          复制检查接口
-        </el-button>
         <el-button type="primary" :disabled="!selectedAppId || Boolean(rowActionLoading)" @click="openCreate">
           <el-icon><Plus /></el-icon>
-          新增版本
+          完整新增版本
         </el-button>
       </div>
     </header>
@@ -51,11 +47,6 @@
         <span class="metric-card__label">客户端判断</span>
         <strong>客户端版本编码低于当前已发布最高编码时，将提示更新</strong>
         <small>只有已发布版本参与判断</small>
-      </article>
-      <article class="metric-card metric-card--wide">
-        <span class="metric-card__label">默认标题</span>
-        <strong>{{ defaultUpdateTitle() }}</strong>
-        <small>可在发布工作区手动修改</small>
       </article>
     </section>
 
@@ -167,17 +158,17 @@
           </el-table-column>
         </el-table>
 
-        <div class="history-assistant">
+        <div class="history-secondary">
           <section class="assistant-card">
-            <h3>客户端判断规则</h3>
-            <p>客户端版本编码低于当前已发布最高编码时，将提示更新。</p>
-            <ul>
-              <li>草稿和已下架版本不会触发更新。</li>
-              <li>回退包也需要使用更高版本编码。</li>
-            </ul>
-          </section>
-          <section class="assistant-card">
-            <h3>发布检查</h3>
+            <div class="assistant-card__heading">
+              <div>
+                <h3>发布检查</h3>
+                <p>字段是否满足发布条件，一眼判断能不能发。</p>
+              </div>
+              <el-tag :type="releaseChecks.every((item) => item.passed) ? 'success' : 'warning'" effect="plain">
+                {{ releaseChecks.filter((item) => !item.passed).length }} 项待完善
+              </el-tag>
+            </div>
             <div class="check-list">
               <div
                 v-for="item in releaseChecks"
@@ -185,21 +176,28 @@
                 class="check-list__item"
                 :class="{ 'is-passed': item.passed }"
               >
-                <span>{{ item.passed ? '已完成' : '待完善' }}</span>
                 <strong>{{ item.label }}</strong>
+                <span>{{ item.passed ? '已完成' : '待完善' }}</span>
               </div>
             </div>
           </section>
-          <section class="assistant-card assistant-card--details">
-            <h3>当前选择版本详情</h3>
-            <div v-if="selectedVersion" class="selected-version">
-              <strong>{{ selectedVersion.title || '未设置标题' }}</strong>
-              <span>版本 {{ selectedVersion.version || '未填写' }} · 编码 {{ selectedVersion.version_code || '-' }}</span>
-              <span>按钮文案：{{ selectedVersion.button_text || '立即下载' }}</span>
-              <span>下载地址：{{ selectedVersion.download_url || '未填写' }}</span>
-              <p>{{ selectedVersion.notes || '暂无更新说明' }}</p>
+          <section class="assistant-card recent-activity">
+            <div class="assistant-card__heading">
+              <div>
+                <h3>最近发布活动</h3>
+                <p>最近版本动作直接放在首屏，不再藏到页面底部。</p>
+              </div>
+              <el-tag type="info" effect="plain">{{ recentActivities.length }} 条</el-tag>
             </div>
-            <p v-else>选择一条历史版本后，这里会显示标题、说明、下载地址和按钮文案。</p>
+            <div class="activity-list">
+              <div v-for="item in recentActivities" :key="item.key" class="activity-list__item">
+                <time>{{ item.time }}</time>
+                <div>
+                  <strong>{{ item.title }}</strong>
+                  <span>{{ item.summary }}</span>
+                </div>
+              </div>
+            </div>
           </section>
         </div>
       </section>
@@ -208,8 +206,8 @@
         <section class="panel draft-panel">
           <div class="panel-heading panel-heading--compact">
             <div>
-              <h2>发布工作区</h2>
-              <p>{{ editingVersion ? '正在编辑历史版本' : '新版本草稿' }}</p>
+              <h2>快捷发布</h2>
+              <p>{{ editingVersion ? '正在编辑历史版本' : '常用字段快速创建并发布新版本' }}</p>
             </div>
             <el-tag type="info" effect="plain">Windows</el-tag>
           </div>
@@ -263,10 +261,6 @@
                 />
               </el-form-item>
             </div>
-
-            <el-form-item label="更新说明">
-              <el-input v-model="form.notes" type="textarea" :rows="6" placeholder="填写本次更新内容，客户端弹窗会展示这里的说明" />
-            </el-form-item>
           </el-form>
 
           <div v-if="showLowCodeHint" class="compact-warning">
@@ -277,7 +271,6 @@
           </div>
 
           <div class="workspace-actions">
-            <el-button :disabled="saving || Boolean(rowActionLoading)" @click="openCreate">重置为新版本</el-button>
             <el-button
               :loading="saving && pendingSaveStatus === 'draft'"
               :disabled="!selectedAppId || saving || Boolean(rowActionLoading)"
@@ -291,7 +284,7 @@
               :disabled="!selectedAppId || saving || Boolean(rowActionLoading)"
               @click="saveVersion('published')"
             >
-              发布版本
+              检查并发布
             </el-button>
           </div>
         </section>
@@ -337,10 +330,9 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { DocumentCopy, Plus } from '@element-plus/icons-vue'
+import { Plus } from '@element-plus/icons-vue'
 import { getApps } from '../api/admin'
 import { createAppVersion, getAppVersions, updateAppVersion } from '../api/appContent'
-import { copyTextToClipboard } from '../utils/clipboard'
 import { formatBeijingTime } from '../utils/datetime'
 
 const WINDOWS_PLATFORM = 'windows'
@@ -424,6 +416,16 @@ const draftPreview = computed(() => ({
 
 const previewVersion = computed(() => draftPreview.value)
 
+const recentActivities = computed(() => sortedVersions.value.slice(0, 3).map((version) => {
+  const status = statusText(version.status)
+  return {
+    key: `${version.id || version.version_code}-${version.updated_at || version.published_at || ''}`,
+    time: formatBeijingTime(version.published_at || version.updated_at),
+    title: `${status} ${version.version || '未填写'}`,
+    summary: version.title || version.notes || `编码 ${version.version_code || '-'}`
+  }
+}))
+
 const showForceDownloadHint = computed(() => {
   return form.force_update && form.status === 'published' && !String(form.download_url || '').trim()
 })
@@ -453,12 +455,12 @@ const releaseChecks = computed(() => {
       passed: !currentCode || formCode > currentCode || editingVersion.value?.id === currentVersion.value?.id
     },
     {
-      label: '强制更新时已填写下载地址',
-      passed: !form.force_update || Boolean(String(form.download_url || '').trim())
+      label: '按钮文案已设置',
+      passed: Boolean(String(form.button_text || '').trim())
     },
     {
-      label: '更新说明已填写',
-      passed: Boolean(String(form.notes || '').trim())
+      label: '下载地址待确认',
+      passed: Boolean(String(form.download_url || '').trim())
     }
   ]
 })
@@ -658,7 +660,7 @@ async function confirmDialogPublish(payload) {
 
   try {
     await ElMessageBox.confirm(
-      '发布后将立即影响 Windows 客户端的在线更新弹窗，是否继续？',
+      `发布后将立即影响 Windows 客户端的在线更新弹窗。\n\n版本号：${payload.version || '未填写'}\n版本编码：${payload.version_code || '-'}\n更新标题：${payload.title || '未填写'}\n下载地址：${payload.download_url || '未填写'}\n\n是否继续发布？`,
       '确认发布',
       {
         type: 'warning',
@@ -778,26 +780,6 @@ async function archiveVersion(row) {
   }
 }
 
-const copyUpdateCheckUrl = async () => {
-  if (!selectedAppId.value) {
-    ElMessage.warning('请先选择应用')
-    return
-  }
-  const origin = globalThis.location?.origin || ''
-  const query = new URLSearchParams({
-    platform: WINDOWS_PLATFORM,
-    current_version_code: String(currentVersion.value?.version_code || 0)
-  })
-  const path = `/api/v1/sdk/apps/${selectedAppId.value}/updates/check?${query.toString()}`
-  try {
-    await copyTextToClipboard(`${origin}${path}`)
-    ElMessage.success('复制成功')
-  } catch (error) {
-    console.error('复制检查接口失败:', error)
-    ElMessage.error('复制失败，请手动复制')
-  }
-}
-
 onMounted(async () => {
   await loadApps()
   await loadVersions()
@@ -875,7 +857,7 @@ onMounted(async () => {
 
 .current-release {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(160px, 0.75fr) minmax(300px, 1.4fr) minmax(260px, 1.2fr);
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 0.75fr) minmax(320px, 1.6fr);
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -1043,7 +1025,7 @@ onMounted(async () => {
   margin-left: 0;
 }
 
-.history-assistant {
+.history-secondary {
   display: grid;
   grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
   gap: 12px;
@@ -1051,47 +1033,56 @@ onMounted(async () => {
 }
 
 .assistant-card {
+  display: flex;
+  max-height: 230px;
   min-width: 0;
+  flex-direction: column;
   padding: 14px;
+  overflow: hidden;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #f8fafc;
 }
 
-.assistant-card--details {
-  grid-column: 1 / -1;
-  background: #ffffff;
-}
-
 .assistant-card h3 {
-  margin: 0 0 8px;
+  margin: 0;
   color: #0f172a;
   font-size: 14px;
   font-weight: 760;
 }
 
-.assistant-card p,
-.assistant-card li,
-.selected-version span {
+.assistant-card p {
+  margin: 4px 0 0;
   color: #64748b;
-  font-size: 13px;
-  line-height: 1.65;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
-.assistant-card ul {
-  margin: 8px 0 0;
-  padding-left: 18px;
+.assistant-card__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
 }
 
 .check-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: 1;
+  grid-template-columns: 1fr;
   gap: 8px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .check-list__item {
+  display: flex;
+  min-height: 34px;
   min-width: 0;
-  padding: 9px 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
   border: 1px solid #fed7aa;
   border-radius: 8px;
   background: #fff7ed;
@@ -1103,11 +1094,10 @@ onMounted(async () => {
 }
 
 .check-list__item span {
-  display: block;
-  margin-bottom: 4px;
   color: #9a3412;
   font-size: 11px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .check-list__item.is-passed span {
@@ -1123,22 +1113,51 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.selected-version {
+.activity-list {
   display: grid;
-  gap: 5px;
+  flex: 1;
+  gap: 8px;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.selected-version strong {
+.activity-list__item {
+  display: grid;
+  min-height: 42px;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.activity-list__item time {
   overflow: hidden;
-  color: #0f172a;
-  font-size: 15px;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 760;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.selected-version p {
-  margin: 4px 0 0;
-  white-space: pre-wrap;
+.activity-list__item strong,
+.activity-list__item span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-list__item strong {
+  color: #0f172a;
+  font-size: 12px;
+}
+
+.activity-list__item span {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
 }
 
 .release-sidebar {
@@ -1163,7 +1182,7 @@ onMounted(async () => {
 }
 
 .release-form :deep(.el-form-item) {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .release-form :deep(.el-form-item__label) {
@@ -1252,10 +1271,6 @@ onMounted(async () => {
   margin-left: 0;
 }
 
-.workspace-actions :deep(.el-button:first-child) {
-  grid-column: 1 / -1;
-}
-
 :deep(.history-table .is-current-effective td.el-table__cell) {
   background: #f8fbff;
 }
@@ -1300,7 +1315,7 @@ onMounted(async () => {
   }
 
   .current-release,
-  .history-assistant,
+  .history-secondary,
   .release-form__row,
   .check-list,
   .workspace-actions {

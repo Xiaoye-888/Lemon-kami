@@ -101,7 +101,7 @@ def test_app_versions_row_actions_write_immediately_and_guard_duplicates():
     assert '@click.stop="openEdit(row)"' in source
     assert '@click.stop="copyAsNewVersion(row, row.status === \'archived\')"' in source
     assert ':disabled="Boolean(rowActionLoading)"' in source
-    assert ':disabled="saving || Boolean(rowActionLoading)"' in source
+    assert ':disabled="!selectedAppId || saving || Boolean(rowActionLoading)"' in source
     assert ':loading="rowActionLoading === `publish:${row.id}`"' in source
     assert ':loading="rowActionLoading === `archive:${row.id}`"' in source
 
@@ -113,7 +113,7 @@ def test_app_versions_row_actions_write_immediately_and_guard_duplicates():
     assert "rowActionLoading.value = `publish:${row.id}`" in publish_source
     assert "openEdit(row)" not in publish_source
 
-    archive_source = source.split("async function archiveVersion", 1)[1].split("const copyUpdateCheckUrl", 1)[0]
+    archive_source = source.split("async function archiveVersion", 1)[1].split("onMounted", 1)[0]
     assert "const appId = selectedAppId.value" in archive_source
     assert "versionPayloadFromVersion(row, 'archived')" in archive_source
     assert "updateAppVersion(appId, row.id, payload)" in archive_source
@@ -121,32 +121,44 @@ def test_app_versions_row_actions_write_immediately_and_guard_duplicates():
     assert "openEdit(row)" not in archive_source
 
 
-def test_app_versions_copy_update_check_url_includes_windows_and_current_code():
+def test_app_versions_header_removes_default_title_and_copy_check_entry():
     source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
 
-    copy_source = source.split("const copyUpdateCheckUrl", 1)[1]
-    assert "new URLSearchParams" in copy_source
-    assert "platform: WINDOWS_PLATFORM" in copy_source
-    assert "current_version_code: String(currentVersion.value?.version_code || 0)" in copy_source
+    header_source = source.split('class="page-header"', 1)[1].split('class="current-release"', 1)[0]
+    summary_source = source.split('class="current-release"', 1)[1].split('class="workspace-grid"', 1)[0]
+
+    assert "复制检查接口" not in header_source
+    assert '@click="copyUpdateCheckUrl"' not in header_source
+    assert "DocumentCopy" not in source
+    assert "copyTextToClipboard" not in source
+    assert "copyUpdateCheckUrl" not in source
+
+    assert "默认标题" not in summary_source
+    assert "defaultUpdateTitle()" not in summary_source
+    assert "当前生效" in summary_source
+    assert "建议版本编码" in summary_source
+    assert "客户端判断" in summary_source
 
 
-def test_app_versions_has_release_workspace_and_copy_actions():
+def test_app_versions_has_quick_publish_and_history_actions():
     source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
 
     assert "currentVersion" in source
     assert "effectiveState" in source
-    assert "复制检查接口" in source
-    assert '@click="copyUpdateCheckUrl"' in source
-    assert "copyTextToClipboard" in source
     assert "copyAsNewVersion" in source
     assert "复制新版本" in source
     assert '@click.stop="copyAsNewVersion(row, row.status === \'archived\')"' in source
     assert "复制为回退包" in source
     assert "客户端判断" in source
-    assert "新增版本" in source
+    assert "完整新增版本" in source
     assert '@click.stop="publishDraft(row)"' in source
     assert '@click.stop="archiveVersion(row)"' in source
+    assert "快捷发布" in source
+    assert "检查并发布" in source
     assert "弹窗预览" in source
+
+    assert "发布工作区" not in source
+    assert ">发布版本<" not in source
 
 
 def test_app_versions_release_console_is_chinese_and_directly_editable():
@@ -174,8 +186,9 @@ def test_app_versions_release_console_is_chinese_and_directly_editable():
 
     assert "客户端版本编码低于当前已发布最高编码时，将提示更新" in source
     assert "发布检查" in source
-    assert "客户端判断规则" in source
-    assert "当前选择版本详情" in source
+    assert "最近发布活动" in source
+    assert "客户端判断规则" not in source
+    assert "当前选择版本详情" not in source
     assert "还没有发布过 Windows 版本" in source
 
     workspace_source = source.split('class="release-form"', 1)[1].split('class="preview-panel"', 1)[0]
@@ -188,14 +201,25 @@ def test_app_versions_release_console_is_chinese_and_directly_editable():
         'v-model="form.download_url"',
         'v-model="form.url_type"',
         'v-model="form.force_update"',
-        'v-model="form.notes"',
     ):
         assert binding in workspace_source
 
     assert "保存草稿" in source
-    assert "发布版本" in source
+    assert "检查并发布" in source
     assert "@click=\"saveVersion('draft')\"" in source
     assert "@click=\"saveVersion('published')\"" in source
+
+
+def test_app_versions_bottom_cards_are_bounded_to_prevent_overflow():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert 'class="history-secondary"' in source
+    assert "recent-activity" in source
+    assert 'const recentActivities = computed' in source
+    assert "sortedVersions.value.slice(0, 3)" in source
+    assert "max-height" in source
+    assert "overflow: hidden" in source
+    assert "check-list" in source
 
 
 def test_devices_page_defaults_to_all_apps_with_keyword_search():
