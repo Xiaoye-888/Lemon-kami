@@ -38,7 +38,7 @@
         <span class="metric-card__label">当前生效</span>
         <strong>{{ currentVersion ? currentVersion.version : '暂无发布版本' }}</strong>
         <small>
-          Code {{ currentVersion ? currentVersion.version_code : '-' }}
+          编码 {{ currentVersion ? currentVersion.version_code : '-' }}
           <template v-if="currentVersion"> · {{ currentVersion.force_update ? '强制更新' : '普通更新' }}</template>
         </small>
       </article>
@@ -47,15 +47,15 @@
         <strong>{{ nextVersionCode }}</strong>
         <small>按 Windows 记录最高编码 + 1</small>
       </article>
-      <article class="metric-card">
+      <article class="metric-card metric-card--wide">
         <span class="metric-card__label">客户端判断</span>
-        <strong>current_version_code &lt; latest_version_code</strong>
-        <small>仅已发布最高编码生效</small>
+        <strong>客户端版本编码低于当前已发布最高编码时，将提示更新</strong>
+        <small>只有已发布版本参与判断</small>
       </article>
       <article class="metric-card metric-card--wide">
         <span class="metric-card__label">默认标题</span>
         <strong>{{ defaultUpdateTitle() }}</strong>
-        <small>回退包也需要更高版本编码</small>
+        <small>可在发布工作区手动修改</small>
       </article>
     </section>
 
@@ -78,20 +78,30 @@
           :row-class-name="versionRowClassName"
           @row-click="selectVersion"
         >
-          <el-table-column label="Version" min-width="150">
+          <template #empty>
+            <div class="version-empty-state">
+              <strong>还没有发布过 Windows 版本</strong>
+              <span>新增第一个版本后，客户端会根据版本编码判断是否弹出更新。</span>
+              <el-button type="primary" size="small" :disabled="!selectedAppId" @click.stop="openCreate">
+                新增版本
+              </el-button>
+            </div>
+          </template>
+
+          <el-table-column label="版本信息" min-width="150">
             <template #default="{ row }">
               <div class="version-cell">
                 <strong>{{ row.version || '未填写' }}</strong>
-                <span>Code {{ row.version_code || '-' }}</span>
+                <span>编码 {{ row.version_code || '-' }}</span>
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="Status" width="110">
+          <el-table-column label="发布状态" width="110">
             <template #default="{ row }">
               <el-tag :type="statusTag(row.status)" effect="plain">{{ statusText(row.status) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="Effective state" width="150">
+          <el-table-column label="生效状态" width="150">
             <template #default="{ row }">
               <div class="state-cell">
                 <el-tag :type="effectiveTag(row)" effect="plain">{{ effectiveStateText(row) }}</el-tag>
@@ -99,7 +109,7 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="Title / Summary" min-width="260" show-overflow-tooltip>
+          <el-table-column label="标题与说明" min-width="260" show-overflow-tooltip>
             <template #default="{ row }">
               <div class="summary-cell">
                 <strong>{{ row.title || '未设置标题' }}</strong>
@@ -107,10 +117,10 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="Published time" width="180">
+          <el-table-column label="发布时间" width="180">
             <template #default="{ row }">{{ formatBeijingTime(row.published_at || row.updated_at) }}</template>
           </el-table-column>
-          <el-table-column label="Actions" width="300" fixed="right">
+          <el-table-column label="操作" width="300" fixed="right">
             <template #default="{ row }">
               <div class="action-group">
                 <el-button
@@ -156,6 +166,42 @@
             </template>
           </el-table-column>
         </el-table>
+
+        <div class="history-assistant">
+          <section class="assistant-card">
+            <h3>客户端判断规则</h3>
+            <p>客户端版本编码低于当前已发布最高编码时，将提示更新。</p>
+            <ul>
+              <li>草稿和已下架版本不会触发更新。</li>
+              <li>回退包也需要使用更高版本编码。</li>
+            </ul>
+          </section>
+          <section class="assistant-card">
+            <h3>发布检查</h3>
+            <div class="check-list">
+              <div
+                v-for="item in releaseChecks"
+                :key="item.label"
+                class="check-list__item"
+                :class="{ 'is-passed': item.passed }"
+              >
+                <span>{{ item.passed ? '已完成' : '待完善' }}</span>
+                <strong>{{ item.label }}</strong>
+              </div>
+            </div>
+          </section>
+          <section class="assistant-card assistant-card--details">
+            <h3>当前选择版本详情</h3>
+            <div v-if="selectedVersion" class="selected-version">
+              <strong>{{ selectedVersion.title || '未设置标题' }}</strong>
+              <span>版本 {{ selectedVersion.version || '未填写' }} · 编码 {{ selectedVersion.version_code || '-' }}</span>
+              <span>按钮文案：{{ selectedVersion.button_text || '立即下载' }}</span>
+              <span>下载地址：{{ selectedVersion.download_url || '未填写' }}</span>
+              <p>{{ selectedVersion.notes || '暂无更新说明' }}</p>
+            </div>
+            <p v-else>选择一条历史版本后，这里会显示标题、说明、下载地址和按钮文案。</p>
+          </section>
+        </div>
       </section>
 
       <aside class="release-sidebar">
@@ -163,29 +209,65 @@
           <div class="panel-heading panel-heading--compact">
             <div>
               <h2>发布工作区</h2>
-              <p>新版本草稿</p>
+              <p>{{ editingVersion ? '正在编辑历史版本' : '新版本草稿' }}</p>
             </div>
             <el-tag type="info" effect="plain">Windows</el-tag>
           </div>
 
-          <div class="draft-summary">
-            <div class="draft-summary__item">
-              <span>版本编码</span>
-              <strong>{{ draftPreview.version_code || nextVersionCode }}</strong>
+          <el-form class="release-form" :model="form" label-position="top">
+            <div class="release-form__row">
+              <el-form-item label="版本号" required>
+                <el-input v-model="form.version" placeholder="例如 1.1.0" />
+              </el-form-item>
+              <el-form-item label="版本编码" required>
+                <el-input-number v-model="form.version_code" :min="1" :max="999999999" controls-position="right" />
+              </el-form-item>
             </div>
-            <div class="draft-summary__item">
-              <span>发布状态</span>
-              <el-tag :type="statusTag(draftPreview.status)" effect="plain">{{ statusText(draftPreview.status) }}</el-tag>
+            <div v-if="showLowCodeHint" class="form-hint">低编码发布通常不会触发高版本客户端。</div>
+
+            <div class="release-form__row">
+              <el-form-item label="发布状态">
+                <el-select v-model="form.status">
+                  <el-option label="草稿" value="draft" />
+                  <el-option label="已发布" value="published" />
+                  <el-option label="已下架" value="archived" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="按钮文案">
+                <el-input v-model="form.button_text" maxlength="64" />
+              </el-form-item>
             </div>
-            <div class="draft-summary__item draft-summary__item--wide">
-              <span>默认标题</span>
-              <strong>{{ draftPreview.title || defaultUpdateTitle() }}</strong>
+
+            <el-form-item label="更新标题" required>
+              <el-input v-model="form.title" maxlength="128" show-word-limit />
+            </el-form-item>
+
+            <el-form-item label="下载地址">
+              <el-input v-model="form.download_url" placeholder="https://..." />
+              <div v-if="showForceDownloadHint" class="form-hint form-hint--danger">强制发布前必须填写下载地址。</div>
+            </el-form-item>
+
+            <div class="release-form__row release-form__row--compact">
+              <el-form-item label="地址类型">
+                <el-select v-model="form.url_type">
+                  <el-option label="直链" value="direct" />
+                  <el-option label="网盘/外链" value="external" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="强制更新">
+                <el-switch
+                  v-model="form.force_update"
+                  inline-prompt
+                  active-text="开启"
+                  inactive-text="关闭"
+                />
+              </el-form-item>
             </div>
-            <div class="draft-summary__item draft-summary__item--wide">
-              <span>按钮文案</span>
-              <strong>{{ draftPreview.button_text || '立即下载' }}</strong>
-            </div>
-          </div>
+
+            <el-form-item label="更新说明">
+              <el-input v-model="form.notes" type="textarea" :rows="6" placeholder="填写本次更新内容，客户端弹窗会展示这里的说明" />
+            </el-form-item>
+          </el-form>
 
           <div v-if="showLowCodeHint" class="compact-warning">
             低于当前生效编码时，已升级客户端不会触发更新。
@@ -194,10 +276,24 @@
             强制发布需要下载地址。
           </div>
 
-          <el-button type="primary" :disabled="!selectedAppId || Boolean(rowActionLoading)" @click="openCreate">
-            <el-icon><Plus /></el-icon>
-            新增版本
-          </el-button>
+          <div class="workspace-actions">
+            <el-button :disabled="saving || Boolean(rowActionLoading)" @click="openCreate">重置为新版本</el-button>
+            <el-button
+              :loading="saving && pendingSaveStatus === 'draft'"
+              :disabled="!selectedAppId || saving || Boolean(rowActionLoading)"
+              @click="saveVersion('draft')"
+            >
+              保存草稿
+            </el-button>
+            <el-button
+              type="primary"
+              :loading="saving && pendingSaveStatus === 'published'"
+              :disabled="!selectedAppId || saving || Boolean(rowActionLoading)"
+              @click="saveVersion('published')"
+            >
+              发布版本
+            </el-button>
+          </div>
         </section>
 
         <section class="panel preview-panel">
@@ -211,14 +307,14 @@
           <div class="update-preview update-preview--sidebar">
             <div class="update-preview__title">{{ previewVersion.title || '发现新版本' }}</div>
             <div class="update-preview__version">
-              Windows {{ previewVersion.version || '未填写' }} · Code {{ previewVersion.version_code || '-' }}
+              Windows {{ previewVersion.version || '未填写' }} · 编码 {{ previewVersion.version_code || '-' }}
             </div>
             <div class="update-preview__notes">{{ previewVersion.notes || '暂无更新说明' }}</div>
             <div class="update-preview__actions">
               <el-button
-                v-if="previewVersion.download_url"
+                v-if="form.download_url"
                 tag="a"
-                :href="previewVersion.download_url"
+                :href="form.download_url"
                 target="_blank"
                 rel="noopener noreferrer"
                 type="primary"
@@ -235,90 +331,6 @@
         </section>
       </aside>
     </main>
-
-    <el-dialog v-model="dialogVisible" :title="editingVersion ? '编辑版本' : '新增版本'" width="860px" class="version-dialog">
-      <div class="dialog-grid">
-        <el-form :model="form" label-width="110px">
-          <el-form-item label="平台">
-            <div class="control locked">Windows</div>
-          </el-form-item>
-          <el-form-item label="版本号" required>
-            <el-input v-model="form.version" placeholder="例如 1.1.0" />
-          </el-form-item>
-          <el-form-item label="版本编码" required>
-            <el-input-number v-model="form.version_code" :min="1" :max="999999999" />
-            <div v-if="showLowCodeHint" class="form-hint">低编码发布通常不会触发高版本客户端。</div>
-          </el-form-item>
-          <el-form-item label="更新标题" required>
-            <el-input v-model="form.title" maxlength="128" show-word-limit />
-          </el-form-item>
-          <el-form-item label="更新说明">
-            <el-input v-model="form.notes" type="textarea" :rows="5" />
-          </el-form-item>
-          <el-form-item label="强制更新">
-            <el-switch v-model="form.force_update" />
-          </el-form-item>
-          <el-form-item label="下载地址">
-            <el-input v-model="form.download_url" placeholder="https://..." />
-            <div v-if="showForceDownloadHint" class="form-hint form-hint--danger">强制发布前必须填写下载地址。</div>
-          </el-form-item>
-          <el-form-item label="地址类型">
-            <el-select v-model="form.url_type" style="width: 180px">
-              <el-option label="直链" value="direct" />
-              <el-option label="网盘/外链" value="external" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="按钮文案">
-            <el-input v-model="form.button_text" maxlength="64" />
-          </el-form-item>
-          <el-form-item label="发布状态">
-            <el-select v-model="form.status" style="width: 180px">
-              <el-option label="草稿" value="draft" />
-              <el-option label="已发布" value="published" />
-              <el-option label="已下架" value="archived" />
-            </el-select>
-          </el-form-item>
-        </el-form>
-
-        <div class="dialog-preview">
-          <div class="preview-heading">
-            <span>弹窗预览</span>
-            <el-tag :type="form.force_update ? 'danger' : 'info'" effect="plain">
-              {{ form.force_update ? '强制更新' : '可稍后' }}
-            </el-tag>
-          </div>
-          <div class="update-preview">
-            <div class="update-preview__title">{{ previewVersion.title || '发现新版本' }}</div>
-            <div class="update-preview__version">
-              当前发布版本：{{ previewVersion.version || '未填写' }}（{{ previewVersion.version_code || '-' }}）
-            </div>
-            <div class="update-preview__notes">{{ previewVersion.notes || '暂无更新说明' }}</div>
-            <div class="update-preview__actions">
-              <el-button
-                v-if="form.download_url"
-                tag="a"
-                :href="form.download_url"
-                target="_blank"
-                rel="noopener noreferrer"
-                type="primary"
-                size="small"
-              >
-                {{ form.button_text || '立即下载' }}
-              </el-button>
-              <el-button v-else type="primary" size="small" disabled>
-                {{ form.button_text || '立即下载' }}
-              </el-button>
-              <el-button size="small" :disabled="form.force_update">稍后再说</el-button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="saving || Boolean(rowActionLoading)" @click="saveVersion()">{{ saveButtonText }}</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -342,8 +354,8 @@ const selectedAppId = ref('')
 const selectedVersion = ref(null)
 const loading = ref(false)
 const saving = ref(false)
+const pendingSaveStatus = ref('')
 const rowActionLoading = ref('')
-const dialogVisible = ref(false)
 const editingVersion = ref(null)
 
 const form = reactive({
@@ -386,7 +398,6 @@ const highestVersionCode = computed(() => sortedVersions.value.reduce((highest, 
 const nextVersionCode = computed(() => highestVersionCode.value + 1)
 
 const isDraftPristine = computed(() => (
-  !dialogVisible.value &&
   !editingVersion.value &&
   !form.version &&
   !form.title &&
@@ -411,7 +422,7 @@ const draftPreview = computed(() => ({
   status: form.status
 }))
 
-const previewVersion = computed(() => (dialogVisible.value ? draftPreview.value : selectedVersion.value || draftPreview.value))
+const previewVersion = computed(() => draftPreview.value)
 
 const showForceDownloadHint = computed(() => {
   return form.force_update && form.status === 'published' && !String(form.download_url || '').trim()
@@ -429,7 +440,28 @@ const showLowCodeHint = computed(() => {
   return highestOtherPublishedCode > 0 && publishingCode <= highestOtherPublishedCode
 })
 
-const saveButtonText = computed(() => form.status === 'published' ? '确认发布' : '保存')
+const releaseChecks = computed(() => {
+  const currentCode = Number(currentVersion.value?.version_code || 0)
+  const formCode = Number(form.version_code || 0)
+  return [
+    {
+      label: '版本号已填写',
+      passed: Boolean(String(form.version || '').trim())
+    },
+    {
+      label: '版本编码高于当前发布版本',
+      passed: !currentCode || formCode > currentCode || editingVersion.value?.id === currentVersion.value?.id
+    },
+    {
+      label: '强制更新时已填写下载地址',
+      passed: !form.force_update || Boolean(String(form.download_url || '').trim())
+    },
+    {
+      label: '更新说明已填写',
+      passed: Boolean(String(form.notes || '').trim())
+    }
+  ]
+})
 
 const statusText = (value) => ({ draft: '草稿', published: '已发布', archived: '已下架' }[value] || '草稿')
 const statusTag = (value) => ({ draft: 'info', published: 'success', archived: 'warning' }[value] || 'info')
@@ -531,7 +563,6 @@ const openCreate = () => {
   editingVersion.value = null
   selectedVersion.value = null
   resetForm()
-  dialogVisible.value = true
 }
 
 const openEdit = (row) => {
@@ -539,7 +570,6 @@ const openEdit = (row) => {
   editingVersion.value = row
   selectedVersion.value = row
   applyVersionToForm(row)
-  dialogVisible.value = true
 }
 
 const copyAsNewVersion = (row, asRollback = false) => {
@@ -558,7 +588,6 @@ const copyAsNewVersion = (row, asRollback = false) => {
   if (asRollback) {
     ElMessage.info('回退包需要使用更高版本编码，才能触发已升级客户端更新。')
   }
-  dialogVisible.value = true
 }
 
 function versionPayloadFromForm(statusOverride) {
@@ -659,6 +688,7 @@ async function saveVersion(statusOverride) {
   if (!(await confirmDialogPublish(payload))) return
 
   saving.value = true
+  pendingSaveStatus.value = payload.status
   try {
     if (editingVersion.value) {
       await updateAppVersion(selectedAppId.value, editingVersion.value.id, payload)
@@ -667,7 +697,6 @@ async function saveVersion(statusOverride) {
       await createAppVersion(selectedAppId.value, payload)
       ElMessage.success('版本已保存')
     }
-    dialogVisible.value = false
     editingVersion.value = null
     await loadVersions()
   } catch (error) {
@@ -675,6 +704,7 @@ async function saveVersion(statusOverride) {
     ElMessage.error('保存版本失败')
   } finally {
     saving.value = false
+    pendingSaveStatus.value = ''
   }
 }
 
@@ -785,7 +815,7 @@ onMounted(async () => {
 .page-header,
 .current-release,
 .workspace-grid {
-  max-width: 1480px;
+  max-width: 1600px;
   margin: 0 auto;
 }
 
@@ -845,7 +875,7 @@ onMounted(async () => {
 
 .current-release {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(160px, 0.75fr) minmax(220px, 1fr) minmax(260px, 1.2fr);
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 0.75fr) minmax(300px, 1.4fr) minmax(260px, 1.2fr);
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -899,7 +929,7 @@ onMounted(async () => {
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr) 440px;
   gap: 16px;
   align-items: start;
 }
@@ -937,6 +967,27 @@ onMounted(async () => {
 
 .history-table {
   width: 100%;
+}
+
+.version-empty-state {
+  display: flex;
+  min-height: 170px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #64748b;
+  text-align: center;
+}
+
+.version-empty-state strong {
+  color: #0f172a;
+  font-size: 18px;
+}
+
+.version-empty-state span {
+  max-width: 420px;
+  line-height: 1.6;
 }
 
 .version-cell,
@@ -992,6 +1043,104 @@ onMounted(async () => {
   margin-left: 0;
 }
 
+.history-assistant {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.assistant-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.assistant-card--details {
+  grid-column: 1 / -1;
+  background: #ffffff;
+}
+
+.assistant-card h3 {
+  margin: 0 0 8px;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.assistant-card p,
+.assistant-card li,
+.selected-version span {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.assistant-card ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.check-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.check-list__item {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  background: #fff7ed;
+}
+
+.check-list__item.is-passed {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.check-list__item span {
+  display: block;
+  margin-bottom: 4px;
+  color: #9a3412;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.check-list__item.is-passed span {
+  color: #15803d;
+}
+
+.check-list__item strong {
+  display: block;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-version {
+  display: grid;
+  gap: 5px;
+}
+
+.selected-version strong {
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-version p {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+}
+
 .release-sidebar {
   display: flex;
   min-width: 0;
@@ -999,39 +1148,33 @@ onMounted(async () => {
   gap: 16px;
 }
 
-.draft-summary {
+.release-form {
+  margin-bottom: 12px;
+}
+
+.release-form__row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 10px;
-  margin-bottom: 14px;
 }
 
-.draft-summary__item {
-  min-width: 0;
-  padding: 10px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
+.release-form__row--compact {
+  align-items: center;
 }
 
-.draft-summary__item--wide {
-  grid-column: 1 / -1;
+.release-form :deep(.el-form-item) {
+  margin-bottom: 12px;
 }
 
-.draft-summary__item span {
-  display: block;
-  margin-bottom: 6px;
-  color: #64748b;
+.release-form :deep(.el-form-item__label) {
+  color: #475569;
   font-size: 12px;
+  font-weight: 700;
 }
 
-.draft-summary__item strong {
-  display: block;
-  overflow: hidden;
-  color: #0f172a;
-  font-size: 14px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.release-form :deep(.el-select),
+.release-form :deep(.el-input-number) {
+  width: 100%;
 }
 
 .compact-warning,
@@ -1099,22 +1242,18 @@ onMounted(async () => {
   white-space: pre-wrap;
 }
 
-.dialog-grid {
+.workspace-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 18px;
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
 }
 
-.dialog-preview {
-  position: sticky;
-  top: 0;
+.workspace-actions :deep(.el-button) {
+  margin-left: 0;
 }
 
-:deep(.version-dialog.el-dialog),
-:deep(.version-dialog .el-dialog),
-:deep(.el-dialog.version-dialog) {
-  max-width: 92vw;
+.workspace-actions :deep(.el-button:first-child) {
+  grid-column: 1 / -1;
 }
 
 :deep(.history-table .is-current-effective td.el-table__cell) {
@@ -1143,8 +1282,7 @@ onMounted(async () => {
   }
 
   .page-header,
-  .header-controls,
-  .dialog-grid {
+  .header-controls {
     display: block;
   }
 
@@ -1162,13 +1300,11 @@ onMounted(async () => {
   }
 
   .current-release,
-  .draft-summary {
+  .history-assistant,
+  .release-form__row,
+  .check-list,
+  .workspace-actions {
     grid-template-columns: 1fr;
-  }
-
-  .dialog-preview {
-    position: static;
-    margin-top: 16px;
   }
 }
 </style>

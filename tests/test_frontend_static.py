@@ -58,12 +58,14 @@ def test_app_versions_uses_windows_payload_and_windows_compatible_source_rows():
     assert "platform: form.platform" not in source
 
 
-def test_app_versions_dialog_publish_requires_explicit_windows_confirmation():
+def test_app_versions_workspace_publish_requires_explicit_windows_confirmation():
     source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
 
-    assert "const saveButtonText = computed" in source
-    assert "{{ saveButtonText }}" in source
-    assert "form.status === 'published' ? '确认发布' : '保存'" in source
+    assert "保存草稿" in source
+    assert "发布版本" in source
+    assert "@click=\"saveVersion('draft')\"" in source
+    assert "@click=\"saveVersion('published')\"" in source
+    assert "const pendingSaveStatus = ref('')" in source
     assert "async function confirmDialogPublish(payload)" in source
 
     save_source = source.split("async function saveVersion", 1)[1].split("async function publishDraft", 1)[0]
@@ -145,6 +147,55 @@ def test_app_versions_has_release_workspace_and_copy_actions():
     assert '@click.stop="publishDraft(row)"' in source
     assert '@click.stop="archiveVersion(row)"' in source
     assert "弹窗预览" in source
+
+
+def test_app_versions_release_console_is_chinese_and_directly_editable():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    for label in (
+        'label="版本信息"',
+        'label="发布状态"',
+        'label="生效状态"',
+        'label="标题与说明"',
+        'label="发布时间"',
+        'label="操作"',
+    ):
+        assert label in source
+
+    for english in (
+        'label="Version"',
+        'label="Status"',
+        'label="Effective state"',
+        'label="Title / Summary"',
+        'label="Actions"',
+        "current_version_code &lt; latest_version_code",
+    ):
+        assert english not in source
+
+    assert "客户端版本编码低于当前已发布最高编码时，将提示更新" in source
+    assert "发布检查" in source
+    assert "客户端判断规则" in source
+    assert "当前选择版本详情" in source
+    assert "还没有发布过 Windows 版本" in source
+
+    workspace_source = source.split('class="release-form"', 1)[1].split('class="preview-panel"', 1)[0]
+    for binding in (
+        'v-model="form.version"',
+        'v-model="form.version_code"',
+        'v-model="form.status"',
+        'v-model="form.title"',
+        'v-model="form.button_text"',
+        'v-model="form.download_url"',
+        'v-model="form.url_type"',
+        'v-model="form.force_update"',
+        'v-model="form.notes"',
+    ):
+        assert binding in workspace_source
+
+    assert "保存草稿" in source
+    assert "发布版本" in source
+    assert "@click=\"saveVersion('draft')\"" in source
+    assert "@click=\"saveVersion('published')\"" in source
 
 
 def test_devices_page_defaults_to_all_apps_with_keyword_search():
