@@ -254,6 +254,26 @@ def test_app_versions_bottom_cards_are_bounded_to_prevent_overflow():
     assert "check-list" in source
 
 
+def test_app_versions_desktop_columns_share_equal_height():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    workspace_blocks = [block.split("}", 1)[0] for block in source.split(".workspace-grid {")[1:]]
+    workspace_css = next(block for block in workspace_blocks if "grid-template-columns" in block)
+    assert "align-items: stretch" in workspace_css
+    assert "align-items: start" not in workspace_css
+
+    history_css = source.split(".history-panel {", 1)[1].split("}", 1)[0]
+    sidebar_css = source.split(".release-sidebar {", 1)[1].split("}", 1)[0]
+    draft_css = source.split(".draft-panel {", 1)[1].split("}", 1)[0]
+    assert "height: 100%" in history_css
+    assert "height: 100%" in sidebar_css
+    assert "height: 100%" in draft_css
+
+    desktop_media_source = source.split("@media (max-width: 1200px)", 1)[1]
+    assert ".draft-panel" in desktop_media_source
+    assert "height: auto" in desktop_media_source
+
+
 def test_devices_page_defaults_to_all_apps_with_keyword_search():
     source = (PROJECT_ROOT / "admin/src/views/Devices.vue").read_text(encoding="utf-8")
 

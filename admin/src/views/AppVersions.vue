@@ -1007,12 +1007,16 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 440px;
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .panel {
   min-width: 0;
   padding: 16px;
+}
+
+.history-panel {
+  height: 100%;
 }
 
 .panel-heading,
@@ -1209,9 +1213,15 @@ onMounted(async () => {
 
 .release-sidebar {
   display: flex;
+  height: 100%;
   min-width: 0;
   flex-direction: column;
   gap: 16px;
+}
+
+.draft-panel {
+  flex: 1;
+  height: 100%;
 }
 
 .release-form {
@@ -1388,6 +1398,11 @@ onMounted(async () => {
   .history-panel,
   .release-sidebar {
     grid-column: 1 / -1;
+    height: auto;
+  }
+
+  .draft-panel {
+    height: auto;
   }
 }
 
