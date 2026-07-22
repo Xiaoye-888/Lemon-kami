@@ -186,12 +186,19 @@ def test_app_versions_release_console_is_chinese_and_directly_editable():
 
     assert "客户端版本编码低于当前已发布最高编码时，将提示更新" in source
     assert "发布检查" in source
-    assert "最近发布活动" in source
+    assert "客户端弹窗预览" in source
+    assert "最近发布活动" not in source
     assert "客户端判断规则" not in source
     assert "当前选择版本详情" not in source
     assert "还没有发布过 Windows 版本" in source
 
-    workspace_source = source.split('class="release-form"', 1)[1].split('class="preview-panel"', 1)[0]
+    history_secondary_source = source.split('class="history-secondary"', 1)[1].split('class="release-sidebar"', 1)[0]
+    sidebar_source = source.split('class="release-sidebar"', 1)[1]
+    assert "客户端弹窗预览" in history_secondary_source
+    assert "update-preview" in history_secondary_source
+    assert "客户端弹窗预览" not in sidebar_source
+
+    workspace_source = source.split('class="release-form"', 1)[1].split('class="workspace-actions"', 1)[0]
     for binding in (
         'v-model="form.version"',
         'v-model="form.version_code"',
@@ -214,9 +221,10 @@ def test_app_versions_bottom_cards_are_bounded_to_prevent_overflow():
     source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
 
     assert 'class="history-secondary"' in source
-    assert "recent-activity" in source
-    assert 'const recentActivities = computed' in source
-    assert "sortedVersions.value.slice(0, 3)" in source
+    assert 'class="assistant-card preview-panel preview-panel--inline"' in source
+    assert "recent-activity" not in source
+    assert 'const recentActivities = computed' not in source
+    assert "sortedVersions.value.slice(0, 3)" not in source
     assert "max-height" in source
     assert "overflow: hidden" in source
     assert "check-list" in source

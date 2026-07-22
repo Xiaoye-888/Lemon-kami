@@ -181,21 +181,36 @@
               </div>
             </div>
           </section>
-          <section class="assistant-card recent-activity">
-            <div class="assistant-card__heading">
-              <div>
-                <h3>最近发布活动</h3>
-                <p>最近版本动作直接放在首屏，不再藏到页面底部。</p>
-              </div>
-              <el-tag type="info" effect="plain">{{ recentActivities.length }} 条</el-tag>
+          <section class="assistant-card preview-panel preview-panel--inline">
+            <div class="preview-heading">
+              <span>客户端弹窗预览</span>
+              <el-tag :type="previewVersion.force_update ? 'danger' : 'info'" effect="plain">
+                {{ previewVersion.force_update ? '强制更新' : '可稍后' }}
+              </el-tag>
             </div>
-            <div class="activity-list">
-              <div v-for="item in recentActivities" :key="item.key" class="activity-list__item">
-                <time>{{ item.time }}</time>
-                <div>
-                  <strong>{{ item.title }}</strong>
-                  <span>{{ item.summary }}</span>
-                </div>
+
+            <div class="update-preview update-preview--inline">
+              <div class="update-preview__title">{{ previewVersion.title || '发现新版本' }}</div>
+              <div class="update-preview__version">
+                Windows {{ previewVersion.version || '未填写' }} · 编码 {{ previewVersion.version_code || '-' }}
+              </div>
+              <div class="update-preview__notes">{{ previewVersion.notes || '暂无更新说明' }}</div>
+              <div class="update-preview__actions">
+                <el-button
+                  v-if="form.download_url"
+                  tag="a"
+                  :href="form.download_url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  type="primary"
+                  size="small"
+                >
+                  {{ previewVersion.button_text || '立即下载' }}
+                </el-button>
+                <el-button v-else type="primary" size="small" disabled>
+                  {{ previewVersion.button_text || '立即下载' }}
+                </el-button>
+                <el-button size="small" :disabled="previewVersion.force_update">稍后再说</el-button>
               </div>
             </div>
           </section>
@@ -286,40 +301,6 @@
             >
               检查并发布
             </el-button>
-          </div>
-        </section>
-
-        <section class="panel preview-panel">
-          <div class="preview-heading">
-            <span>弹窗预览</span>
-            <el-tag :type="previewVersion.force_update ? 'danger' : 'info'" effect="plain">
-              {{ previewVersion.force_update ? '强制更新' : '可稍后' }}
-            </el-tag>
-          </div>
-
-          <div class="update-preview update-preview--sidebar">
-            <div class="update-preview__title">{{ previewVersion.title || '发现新版本' }}</div>
-            <div class="update-preview__version">
-              Windows {{ previewVersion.version || '未填写' }} · 编码 {{ previewVersion.version_code || '-' }}
-            </div>
-            <div class="update-preview__notes">{{ previewVersion.notes || '暂无更新说明' }}</div>
-            <div class="update-preview__actions">
-              <el-button
-                v-if="form.download_url"
-                tag="a"
-                :href="form.download_url"
-                target="_blank"
-                rel="noopener noreferrer"
-                type="primary"
-                size="small"
-              >
-                {{ previewVersion.button_text || '立即下载' }}
-              </el-button>
-              <el-button v-else type="primary" size="small" disabled>
-                {{ previewVersion.button_text || '立即下载' }}
-              </el-button>
-              <el-button size="small" :disabled="previewVersion.force_update">稍后再说</el-button>
-            </div>
           </div>
         </section>
       </aside>
@@ -415,16 +396,6 @@ const draftPreview = computed(() => ({
 }))
 
 const previewVersion = computed(() => draftPreview.value)
-
-const recentActivities = computed(() => sortedVersions.value.slice(0, 3).map((version) => {
-  const status = statusText(version.status)
-  return {
-    key: `${version.id || version.version_code}-${version.updated_at || version.published_at || ''}`,
-    time: formatBeijingTime(version.published_at || version.updated_at),
-    title: `${status} ${version.version || '未填写'}`,
-    summary: version.title || version.notes || `编码 ${version.version_code || '-'}`
-  }
-}))
 
 const showForceDownloadHint = computed(() => {
   return form.force_update && form.status === 'published' && !String(form.download_url || '').trim()
@@ -1113,53 +1084,6 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.activity-list {
-  display: grid;
-  flex: 1;
-  gap: 8px;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.activity-list__item {
-  display: grid;
-  min-height: 42px;
-  grid-template-columns: 120px minmax(0, 1fr);
-  gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.activity-list__item time {
-  overflow: hidden;
-  color: #2563eb;
-  font-size: 12px;
-  font-weight: 760;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.activity-list__item strong,
-.activity-list__item span {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.activity-list__item strong {
-  color: #0f172a;
-  font-size: 12px;
-}
-
-.activity-list__item span {
-  margin-top: 3px;
-  color: #64748b;
-  font-size: 12px;
-}
-
 .release-sidebar {
   display: flex;
   min-width: 0;
@@ -1236,8 +1160,19 @@ onMounted(async () => {
   padding: 16px;
 }
 
-.update-preview--sidebar {
-  min-height: 210px;
+.preview-panel--inline {
+  background: #ffffff;
+}
+
+.preview-panel--inline .preview-heading {
+  margin-bottom: 10px;
+}
+
+.update-preview--inline {
+  flex: 1;
+  min-height: 0;
+  padding: 14px;
+  overflow: hidden;
 }
 
 .update-preview__title {
@@ -1259,6 +1194,12 @@ onMounted(async () => {
   min-height: 68px;
   margin: 12px 0;
   white-space: pre-wrap;
+}
+
+.update-preview--inline .update-preview__notes {
+  max-height: 58px;
+  min-height: 42px;
+  overflow: hidden;
 }
 
 .workspace-actions {
