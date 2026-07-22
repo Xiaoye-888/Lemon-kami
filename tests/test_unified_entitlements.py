@@ -254,6 +254,14 @@ def test_admin_notice_and_version_management_records_history_and_validates_force
         assert len(updates) == 1
         assert updates[0]["version"] == "2.0.0"
         assert updates[0]["force_update"] is True
+
+        delete_response = client.delete(f"/api/v1/admin/apps/app_demo/updates/{updates[0]['id']}")
+        assert delete_response.status_code == 200
+        assert delete_response.json()["success"] is True
+
+        empty_updates_response = client.get("/api/v1/admin/apps/app_demo/updates")
+        assert empty_updates_response.status_code == 200
+        assert empty_updates_response.json()["data"]["items"] == []
     finally:
         fastapi_app.dependency_overrides.clear()
 

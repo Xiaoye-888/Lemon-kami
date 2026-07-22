@@ -24,7 +24,7 @@
         <div class="control locked">Windows</div>
         <el-button type="primary" :disabled="!selectedAppId || Boolean(rowActionLoading)" @click="openCreate">
           <el-icon><Plus /></el-icon>
-          完整新增版本
+          新增完整版本
         </el-button>
       </div>
     </header>
@@ -124,14 +124,6 @@
                   {{ row.status === 'draft' ? '继续编辑' : '编辑' }}
                 </el-button>
                 <el-button
-                  size="small"
-                  plain
-                  :disabled="Boolean(rowActionLoading)"
-                  @click.stop="copyAsNewVersion(row, row.status === 'archived')"
-                >
-                  {{ row.status === 'archived' ? '复制为回退包' : '复制新版本' }}
-                </el-button>
-                <el-button
                   v-if="row.status === 'draft'"
                   size="small"
                   type="success"
@@ -152,6 +144,16 @@
                   @click.stop="archiveVersion(row)"
                 >
                   立即下架
+                </el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  :loading="rowActionLoading === `delete:${row.id}`"
+                  :disabled="Boolean(rowActionLoading)"
+                  @click.stop="deleteVersion(row)"
+                >
+                  删除
                 </el-button>
               </div>
             </template>
@@ -255,6 +257,17 @@
               <el-input v-model="form.title" maxlength="128" show-word-limit />
             </el-form-item>
 
+            <el-form-item label="更新说明">
+              <el-input
+                v-model="form.notes"
+                type="textarea"
+                :rows="3"
+                maxlength="1000"
+                show-word-limit
+                placeholder="填写本次更新内容，客户端弹窗会展示这里的说明"
+              />
+            </el-form-item>
+
             <el-form-item label="下载地址">
               <el-input v-model="form.download_url" placeholder="https://..." />
               <div v-if="showForceDownloadHint" class="form-hint form-hint--danger">强制发布前必须填写下载地址。</div>
@@ -305,6 +318,99 @@
         </section>
       </aside>
     </main>
+
+    <el-dialog
+      v-model="createDialogVisible"
+      title="新增完整版本"
+      width="760px"
+      class="version-dialog"
+      :close-on-click-modal="!saving"
+      :close-on-press-escape="!saving"
+    >
+      <div class="dialog-intro">
+        <strong>完整版本信息</strong>
+        <span>适合编辑正式版本、详细更新说明和下载动作。</span>
+      </div>
+      <el-form class="release-form release-form--dialog" :model="form" label-position="top">
+        <div class="release-form__row">
+          <el-form-item label="版本号" required>
+            <el-input v-model="form.version" placeholder="例如 1.1.0" />
+          </el-form-item>
+          <el-form-item label="版本编码" required>
+            <el-input-number v-model="form.version_code" :min="1" :max="999999999" controls-position="right" />
+          </el-form-item>
+        </div>
+
+        <div class="release-form__row">
+          <el-form-item label="发布状态">
+            <el-select v-model="form.status">
+              <el-option label="草稿" value="draft" />
+              <el-option label="已发布" value="published" />
+              <el-option label="已下架" value="archived" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="按钮文案">
+            <el-input v-model="form.button_text" maxlength="64" />
+          </el-form-item>
+        </div>
+
+        <el-form-item label="更新标题" required>
+          <el-input v-model="form.title" maxlength="128" show-word-limit />
+        </el-form-item>
+        <el-form-item label="更新说明">
+          <el-input
+            v-model="form.notes"
+            type="textarea"
+            :rows="6"
+            maxlength="1000"
+            show-word-limit
+            placeholder="逐条填写本次新增、修复或优化内容"
+          />
+        </el-form-item>
+        <el-form-item label="下载地址">
+          <el-input v-model="form.download_url" placeholder="https://..." />
+          <div v-if="showForceDownloadHint" class="form-hint form-hint--danger">强制发布前必须填写下载地址。</div>
+        </el-form-item>
+
+        <div class="release-form__row release-form__row--compact">
+          <el-form-item label="地址类型">
+            <el-select v-model="form.url_type">
+              <el-option label="直链" value="direct" />
+              <el-option label="网盘/外链" value="external" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="强制更新">
+            <el-switch
+              v-model="form.force_update"
+              inline-prompt
+              active-text="开启"
+              inactive-text="关闭"
+            />
+          </el-form-item>
+        </div>
+      </el-form>
+
+      <template #footer>
+        <div class="dialog-actions">
+          <el-button :disabled="saving" @click="createDialogVisible = false">取消</el-button>
+          <el-button
+            :loading="saving && pendingSaveStatus === 'draft'"
+            :disabled="!selectedAppId || saving || Boolean(rowActionLoading)"
+            @click="saveVersion('draft')"
+          >
+            保存草稿
+          </el-button>
+          <el-button
+            type="primary"
+            :loading="saving && pendingSaveStatus === 'published'"
+            :disabled="!selectedAppId || saving || Boolean(rowActionLoading)"
+            @click="saveVersion('published')"
+          >
+            检查并发布
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -313,7 +419,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { getApps } from '../api/admin'
-import { createAppVersion, getAppVersions, updateAppVersion } from '../api/appContent'
+import { createAppVersion, deleteAppVersion, getAppVersions, updateAppVersion } from '../api/appContent'
 import { formatBeijingTime } from '../utils/datetime'
 
 const WINDOWS_PLATFORM = 'windows'
@@ -330,6 +436,7 @@ const saving = ref(false)
 const pendingSaveStatus = ref('')
 const rowActionLoading = ref('')
 const editingVersion = ref(null)
+const createDialogVisible = ref(false)
 
 const form = reactive({
   version: '',
@@ -438,6 +545,7 @@ const releaseChecks = computed(() => {
 
 const statusText = (value) => ({ draft: '草稿', published: '已发布', archived: '已下架' }[value] || '草稿')
 const statusTag = (value) => ({ draft: 'info', published: 'success', archived: 'warning' }[value] || 'info')
+const urlTypeText = (value) => ({ direct: '直链', external: '网盘/外链' }[value] || '直链')
 
 function effectiveState(row) {
   if (!row || row.status !== 'published') return 'not-effective'
@@ -536,31 +644,15 @@ const openCreate = () => {
   editingVersion.value = null
   selectedVersion.value = null
   resetForm()
+  createDialogVisible.value = true
 }
 
 const openEdit = (row) => {
   if (rowActionLoading.value) return
+  createDialogVisible.value = false
   editingVersion.value = row
   selectedVersion.value = row
   applyVersionToForm(row)
-}
-
-const copyAsNewVersion = (row, asRollback = false) => {
-  if (rowActionLoading.value) return
-  editingVersion.value = null
-  selectedVersion.value = row
-  resetForm()
-  form.version = row.version || ''
-  form.notes = row.notes || ''
-  form.force_update = Boolean(row.force_update)
-  form.download_url = row.download_url || ''
-  form.url_type = row.url_type || 'direct'
-  form.button_text = row.button_text || '立即下载'
-  form.status = 'draft'
-  form.title = asRollback ? `${selectedAppName.value} ${formatLocalDate()} 回退包` : defaultUpdateTitle()
-  if (asRollback) {
-    ElMessage.info('回退包需要使用更高版本编码，才能触发已升级客户端更新。')
-  }
 }
 
 function versionPayloadFromForm(statusOverride) {
@@ -629,10 +721,17 @@ const confirmLowVersionPublish = async (payload, excludedVersionId = editingVers
 async function confirmDialogPublish(payload) {
   if (payload.status !== 'published') return true
 
+  const currentCode = Number(currentVersion.value?.version_code || 0)
+  const publishCode = Number(payload.version_code || 0)
+  const clientEffect = publishCode > currentCode
+    ? '会成为新的最高编码，低于该编码的客户端会提示更新'
+    : '不高于当前生效编码，已升级客户端可能不会再次弹窗'
+  const notes = payload.notes || '未填写'
+
   try {
     await ElMessageBox.confirm(
-      `发布后将立即影响 Windows 客户端的在线更新弹窗。\n\n版本号：${payload.version || '未填写'}\n版本编码：${payload.version_code || '-'}\n更新标题：${payload.title || '未填写'}\n下载地址：${payload.download_url || '未填写'}\n\n是否继续发布？`,
-      '确认发布',
+      `发布后将立即影响 Windows 客户端的在线更新弹窗，请核对完整信息。\n\n应用：${selectedAppName.value}\n平台：Windows\n版本号：${payload.version || '未填写'}\n版本编码：${payload.version_code || '-'}\n发布状态：${statusText(payload.status)}\n更新标题：${payload.title || '未填写'}\n更新说明：${notes}\n下载地址：${payload.download_url || '未填写'}\n地址类型：${urlTypeText(payload.url_type)}\n按钮文案：${payload.button_text || '立即下载'}\n强制更新：${payload.force_update ? '是' : '否'}\n客户端弹窗：${clientEffect}\n\n确认发布吗？`,
+      '发布确认明细',
       {
         type: 'warning',
         confirmButtonText: '确认发布',
@@ -671,6 +770,7 @@ async function saveVersion(statusOverride) {
       ElMessage.success('版本已保存')
     }
     editingVersion.value = null
+    createDialogVisible.value = false
     await loadVersions()
   } catch (error) {
     console.error('保存版本失败:', error)
@@ -697,16 +797,7 @@ async function publishDraft(row) {
       return
     }
     if (!(await confirmLowVersionPublish(payload, row.id))) return
-
-    await ElMessageBox.confirm(
-      '发布后将立即影响 Windows 客户端的在线更新弹窗，是否继续？',
-      '确认发布',
-      {
-        type: 'warning',
-        confirmButtonText: '立即发布',
-        cancelButtonText: '取消'
-      }
-    )
+    if (!(await confirmDialogPublish(payload))) return
     await updateAppVersion(appId, row.id, payload)
     ElMessage.success('版本已发布')
     selectedVersion.value = row
@@ -745,6 +836,38 @@ async function archiveVersion(row) {
     if (error !== 'cancel' && error !== 'close') {
       console.error('下架版本失败:', error)
       ElMessage.error('下架版本失败')
+    }
+  } finally {
+    rowActionLoading.value = ''
+  }
+}
+
+async function deleteVersion(row) {
+  const appId = selectedAppId.value
+  if (!appId || rowActionLoading.value) return
+
+  rowActionLoading.value = `delete:${row.id}`
+  try {
+    await ElMessageBox.confirm(
+      `删除后该版本将从版本历史中移除，不能再用于客户端更新判断。\n\n版本号：${row.version || '未填写'}\n版本编码：${row.version_code || '-'}\n发布状态：${statusText(row.status)}\n\n是否继续删除？`,
+      '确认删除版本',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger'
+      }
+    )
+    await deleteAppVersion(appId, row.id)
+    ElMessage.success('版本已删除')
+    if (selectedVersion.value?.id === row.id) {
+      selectedVersion.value = null
+    }
+    await loadVersions()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      console.error('删除版本失败:', error)
+      ElMessage.error('删除版本失败')
     }
   } finally {
     rowActionLoading.value = ''
@@ -1209,6 +1332,42 @@ onMounted(async () => {
 }
 
 .workspace-actions :deep(.el-button) {
+  margin-left: 0;
+}
+
+.dialog-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid #d9e7ff;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.dialog-intro strong {
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 760;
+}
+
+.dialog-intro span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.release-form--dialog {
+  margin-bottom: 0;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.dialog-actions :deep(.el-button) {
   margin-left: 0;
 }
 

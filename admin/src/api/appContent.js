@@ -46,3 +46,10 @@ export function updateAppVersion(appId, versionId, data) {
     data
   })
 }
+
+export function deleteAppVersion(appId, versionId) {
+  return request({
+    url: `/admin/apps/${appId}/updates/${versionId}`,
+    method: 'delete'
+  })
+}

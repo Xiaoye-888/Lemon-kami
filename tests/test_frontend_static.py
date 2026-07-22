@@ -62,11 +62,19 @@ def test_app_versions_workspace_publish_requires_explicit_windows_confirmation()
     source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
 
     assert "保存草稿" in source
-    assert "发布版本" in source
+    assert "检查并发布" in source
     assert "@click=\"saveVersion('draft')\"" in source
     assert "@click=\"saveVersion('published')\"" in source
     assert "const pendingSaveStatus = ref('')" in source
     assert "async function confirmDialogPublish(payload)" in source
+    assert "发布确认明细" in source
+    assert "应用：" in source
+    assert "平台：Windows" in source
+    assert "发布状态：" in source
+    assert "更新说明：" in source
+    assert "地址类型：" in source
+    assert "按钮文案：" in source
+    assert "客户端弹窗：" in source
 
     save_source = source.split("async function saveVersion", 1)[1].split("async function publishDraft", 1)[0]
     assert "if (!(await confirmDialogPublish(payload))) return" in save_source
@@ -74,7 +82,7 @@ def test_app_versions_workspace_publish_requires_explicit_windows_confirmation()
     assert "updateAppVersion(selectedAppId.value, editingVersion.value.id, payload)" in save_source
 
     publish_source = source.split("async function publishDraft", 1)[1].split("async function archiveVersion", 1)[0]
-    assert "confirmDialogPublish" not in publish_source
+    assert "if (!(await confirmDialogPublish(payload))) return" in publish_source
 
 
 def test_app_versions_current_effective_order_matches_sdk_release_selection():
@@ -99,17 +107,26 @@ def test_app_versions_row_actions_write_immediately_and_guard_duplicates():
     assert "const rowActionLoading = ref('')" in source
     assert ':disabled="!selectedAppId || Boolean(rowActionLoading)"' in source
     assert '@click.stop="openEdit(row)"' in source
-    assert '@click.stop="copyAsNewVersion(row, row.status === \'archived\')"' in source
+    assert '@click.stop="deleteVersion(row)"' in source
+    assert "deleteAppVersion(appId, row.id)" in source
+    assert "rowActionLoading.value = `delete:${row.id}`" in source
+    assert "确认删除版本" in source
+    assert "删除" in source
+    assert "copyAsNewVersion" not in source
+    assert "复制新版本" not in source
+    assert "复制为回退包" not in source
     assert ':disabled="Boolean(rowActionLoading)"' in source
     assert ':disabled="!selectedAppId || saving || Boolean(rowActionLoading)"' in source
     assert ':loading="rowActionLoading === `publish:${row.id}`"' in source
     assert ':loading="rowActionLoading === `archive:${row.id}`"' in source
+    assert ':loading="rowActionLoading === `delete:${row.id}`"' in source
 
     publish_source = source.split("async function publishDraft", 1)[1].split("async function archiveVersion", 1)[0]
     assert "const appId = selectedAppId.value" in publish_source
     assert "versionPayloadFromVersion(row, 'published')" in publish_source
     assert "updateAppVersion(appId, row.id, payload)" in publish_source
     assert "confirmLowVersionPublish(payload, row.id)" in publish_source
+    assert "confirmDialogPublish(payload)" in publish_source
     assert "rowActionLoading.value = `publish:${row.id}`" in publish_source
     assert "openEdit(row)" not in publish_source
 
@@ -145,17 +162,18 @@ def test_app_versions_has_quick_publish_and_history_actions():
 
     assert "currentVersion" in source
     assert "effectiveState" in source
-    assert "copyAsNewVersion" in source
-    assert "复制新版本" in source
-    assert '@click.stop="copyAsNewVersion(row, row.status === \'archived\')"' in source
-    assert "复制为回退包" in source
     assert "客户端判断" in source
-    assert "完整新增版本" in source
+    assert "新增完整版本" in source
+    assert "完整版本信息" in source
+    assert "createDialogVisible" in source
     assert '@click.stop="publishDraft(row)"' in source
     assert '@click.stop="archiveVersion(row)"' in source
+    assert '@click.stop="deleteVersion(row)"' in source
     assert "快捷发布" in source
     assert "检查并发布" in source
     assert "弹窗预览" in source
+    assert "复制新版本" not in source
+    assert "复制为回退包" not in source
 
     assert "发布工作区" not in source
     assert ">发布版本<" not in source
@@ -204,12 +222,18 @@ def test_app_versions_release_console_is_chinese_and_directly_editable():
         'v-model="form.version_code"',
         'v-model="form.status"',
         'v-model="form.title"',
+        'v-model="form.notes"',
         'v-model="form.button_text"',
         'v-model="form.download_url"',
         'v-model="form.url_type"',
         'v-model="form.force_update"',
     ):
         assert binding in workspace_source
+
+    dialog_source = source.split('<el-dialog', 1)[1].split('</el-dialog>', 1)[0]
+    assert "完整版本信息" in dialog_source
+    assert "@click=\"saveVersion('draft')\"" in dialog_source
+    assert "@click=\"saveVersion('published')\"" in dialog_source
 
     assert "保存草稿" in source
     assert "检查并发布" in source

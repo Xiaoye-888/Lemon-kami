@@ -1307,6 +1307,39 @@ async def update_app_version(
     return {"success": True, "message": "版本更新已保存", "data": version_payload(version)}
 
 
+@router.delete("/apps/{app_id}/updates/{version_id}", summary="删除版本")
+async def delete_app_version(
+    app_id: str,
+    version_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _get_manageable_app(session, app_id, current_user)
+    version = session.exec(
+        select(AppVersion).where(AppVersion.id == version_id, AppVersion.app_id == app_id)
+    ).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="版本不存在")
+
+    version_info = {
+        "version_id": version.id,
+        "version": version.version,
+        "version_code": version.version_code,
+        "status": version.status,
+    }
+    session.delete(version)
+    session.commit()
+    log_admin_action(
+        session=session,
+        username=current_user.get("sub"),
+        event_type="app_version_delete",
+        app_id=app_id,
+        payload=version_info,
+        message=f"用户 {current_user.get('sub')} 删除了版本 {version_info['version']}",
+    )
+    return {"success": True, "message": "版本已删除"}
+
+
 @router.post("/interfaces", summary="新增接口")
 async def create_interface(
     payload: InterfaceCreateRequest,
