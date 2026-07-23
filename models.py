@@ -99,6 +99,28 @@ class UserQuotaTransactionType(str, Enum):
     refund = "refund"
 
 
+class RechargeOrderStatus(str, Enum):
+    pending_payment = "pending_payment"
+    pending_review = "pending_review"
+    approved = "approved"
+    rejected = "rejected"
+    canceled = "canceled"
+    expired = "expired"
+    abnormal = "abnormal"
+
+
+class RechargeChannel(str, Enum):
+    wechat = "wechat"
+    alipay = "alipay"
+    bank = "bank"
+    other = "other"
+
+
+class RechargeMode(str, Enum):
+    fixed = "fixed"
+    custom = "custom"
+
+
 class KamiStatus(str, Enum):
     unused = "unused"
     active = "active"
@@ -300,6 +322,79 @@ class UserAppAuthorization(SQLModel, table=True):
     granted_by: str = Field(max_length=255, description="Granting admin username")
     remark: Optional[str] = Field(default=None, description="Remark")
     created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Grant time")
+
+
+class RechargePaymentChannel(SQLModel, table=True):
+    __tablename__ = "recharge_payment_channels"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    channel: RechargeChannel = Field(unique=True, index=True, description="Payment channel")
+    display_name: str = Field(max_length=64, description="Display name")
+    qr_code_url: Optional[str] = Field(default=None, description="Payment QR code URL")
+    account_name: Optional[str] = Field(default=None, max_length=128, description="Collection account name")
+    enabled: bool = Field(default=True, index=True, description="Whether channel is enabled")
+    sort_order: int = Field(default=0, index=True, description="Display order")
+    remark: Optional[str] = Field(default=None, description="Remark")
+    created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Created time")
+    updated_at: datetime = Field(default_factory=get_now_naive, description="Updated time")
+
+
+class RechargeOption(SQLModel, table=True):
+    __tablename__ = "recharge_options"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    amount_cents: int = Field(unique=True, index=True, description="Recharge amount in cents")
+    credit_quota: int = Field(description="Issue quota credited after approval")
+    label: Optional[str] = Field(default=None, max_length=64, description="Display label")
+    enabled: bool = Field(default=True, index=True, description="Whether option is enabled")
+    sort_order: int = Field(default=0, index=True, description="Display order")
+    remark: Optional[str] = Field(default=None, description="Remark")
+    created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Created time")
+    updated_at: datetime = Field(default_factory=get_now_naive, description="Updated time")
+
+
+class RechargeBonusRule(SQLModel, table=True):
+    __tablename__ = "recharge_bonus_rules"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    threshold_amount_cents: int = Field(index=True, description="Custom amount threshold in cents")
+    bonus_quota: int = Field(description="Bonus issue quota")
+    enabled: bool = Field(default=True, index=True, description="Whether rule is enabled")
+    sort_order: int = Field(default=0, index=True, description="Display order")
+    remark: Optional[str] = Field(default=None, description="Remark")
+    created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Created time")
+    updated_at: datetime = Field(default_factory=get_now_naive, description="Updated time")
+
+
+class RechargeOrder(SQLModel, table=True):
+    __tablename__ = "recharge_orders"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    order_no: str = Field(unique=True, index=True, max_length=64, description="Public order number")
+    user_id: int = Field(foreign_key="end_users.id", index=True, description="End-user ID")
+    username: Optional[str] = Field(default=None, max_length=64, index=True, description="End-user username")
+    mode: RechargeMode = Field(default=RechargeMode.custom, index=True, description="Recharge mode")
+    channel: RechargeChannel = Field(index=True, description="Payment channel")
+    amount_cents: int = Field(index=True, description="Submitted amount in cents")
+    base_quota: int = Field(default=0, description="Base issue quota")
+    bonus_quota: int = Field(default=0, description="Bonus issue quota")
+    credit_quota: int = Field(description="Total issue quota credited after approval")
+    option_id: Optional[int] = Field(default=None, foreign_key="recharge_options.id", index=True)
+    bonus_rule_id: Optional[int] = Field(default=None, foreign_key="recharge_bonus_rules.id", index=True)
+    status: RechargeOrderStatus = Field(default=RechargeOrderStatus.pending_review, index=True)
+    payment_snapshot_json: Optional[str] = Field(default=None, description="Payment channel snapshot")
+    preview_snapshot_json: Optional[str] = Field(default=None, description="Quota calculation snapshot")
+    proof_file_path: Optional[str] = Field(default=None, description="Stored payment proof path")
+    proof_file_name: Optional[str] = Field(default=None, max_length=255, description="Original proof file name")
+    proof_content_type: Optional[str] = Field(default=None, max_length=128, description="Proof content type")
+    user_remark: Optional[str] = Field(default=None, description="Merchant remark")
+    admin_remark: Optional[str] = Field(default=None, description="Admin review remark")
+    reject_reason: Optional[str] = Field(default=None, description="Reject reason")
+    reviewer: Optional[str] = Field(default=None, max_length=255, description="Admin reviewer")
+    reviewed_at: Optional[datetime] = Field(default=None, index=True, description="Review time")
+    quota_transaction_id: Optional[str] = Field(default=None, max_length=128, index=True)
+    created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Created time")
+    updated_at: datetime = Field(default_factory=get_now_naive, description="Updated time")
 
 
 class App(SQLModel, table=True):

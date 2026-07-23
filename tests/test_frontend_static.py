@@ -305,14 +305,14 @@ def test_application_menu_groups_info_notice_and_versions():
     layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
     router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")
 
-    assert '<el-sub-menu index="/apps">' in layout
-    assert '<span>应用管理</span>' in layout
-    assert 'index="/apps/info"' in layout
-    assert '<span>应用信息</span>' in layout
-    assert 'index="/apps/notices"' in layout
-    assert '<span>公告管理</span>' in layout
-    assert 'index="/apps/versions"' in layout
-    assert '<span>版本更新</span>' in layout
+    assert "index: '/admin/apps'" in layout
+    assert "label: '应用管理'" in layout
+    assert "index: '/admin/apps/info'" in layout
+    assert "label: '应用信息'" in layout
+    assert "index: '/admin/apps/notices'" in layout
+    assert "label: '公告管理'" in layout
+    assert "index: '/admin/apps/versions'" in layout
+    assert "label: '版本更新'" in layout
     assert "path: 'apps/info'" in router
     assert "path: 'apps/notices'" in router
     assert "path: 'apps/versions'" in router
@@ -328,3 +328,51 @@ def test_notice_and_version_pages_are_not_configured_in_app_interfaces():
     assert "兼容下载地址" not in interfaces_source
     assert "公告标题" not in interfaces_source
     assert "应用公告" not in interfaces_source
+
+
+def test_commercial_shared_login_and_role_routes_are_present():
+    store = (PROJECT_ROOT / "admin/src/stores/user.js").read_text(encoding="utf-8")
+    router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")
+    login = (PROJECT_ROOT / "admin/src/views/Login.vue").read_text(encoding="utf-8")
+
+    assert "sharedLogin" in store
+    assert "role = ref" in store
+    assert "localStorage.setItem('role'" in store
+    assert "res.redirect" in store
+    assert "管理员 / 商户共用登录" in login
+    assert "使用管理员或商户账号登录" in login
+    assert "path: '/admin'" in router
+    assert "path: '/merchant'" in router
+    assert "MerchantDashboard" in router
+    assert "AdminRechargeOrders" in router
+
+
+def test_commercial_admin_and_merchant_navigation_entries_are_visible():
+    layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
+
+    assert "商业版后台" in layout
+    assert "商户控制台" in layout
+    assert "充值订单" in layout
+    assert "充值配置" in layout
+    assert "发卡额度流水" in layout
+    assert "我的订单" in layout
+    assert "批次管理" in layout
+    assert "我的卡密" in layout
+
+
+def test_commercial_recharge_pages_expose_order_review_and_upload_flow():
+    admin_orders = (PROJECT_ROOT / "admin/src/views/AdminRechargeOrders.vue").read_text(encoding="utf-8")
+    admin_settings = (PROJECT_ROOT / "admin/src/views/AdminRechargeSettings.vue").read_text(encoding="utf-8")
+    merchant_recharge = (PROJECT_ROOT / "admin/src/views/MerchantRecharge.vue").read_text(encoding="utf-8")
+
+    assert "approveRechargeOrder" in admin_orders
+    assert "rejectRechargeOrder" in admin_orders
+    assert "pending_review" in admin_orders
+    assert "支付凭证" in admin_orders
+    assert "savePaymentChannel" in admin_settings
+    assert "saveRechargeOption" in admin_settings
+    assert "saveBonusRule" in admin_settings
+    assert "paymentChannels" in merchant_recharge
+    assert "proof_image_data_url" in merchant_recharge
+    assert 'type="file"' in merchant_recharge
+    assert "customPreview" in merchant_recharge

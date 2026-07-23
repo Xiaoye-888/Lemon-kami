@@ -1,16 +1,14 @@
 <template>
   <el-container class="layout">
-    <el-aside
-      :width="collapsed ? '72px' : '228px'"
-      :class="['layout__aside', { 'is-collapsed': collapsed }]"
-    >
-      <div :class="['logo', { 'is-small': collapsed }]">
+    <el-aside :width="collapsed ? '72px' : '236px'" class="layout__aside">
+      <div class="logo" :class="{ 'is-small': collapsed }">
         <img class="logo__img" :src="`${publicBase}static/brand-logo.png`" width="40" height="40" alt="" />
         <div v-show="!collapsed" class="logo__text">
-          <span class="logo__name">小柠檬网络验证</span>
+          <span class="logo__name">{{ shellTitle }}</span>
           <span class="logo__hint">Lemon Kami</span>
         </div>
       </div>
+
       <el-menu
         :default-active="activeMenu"
         :collapse="collapsed"
@@ -19,76 +17,22 @@
         :unique-opened="true"
         class="side-menu"
       >
-        <el-menu-item index="/dashboard">
-          <el-icon><DataAnalysis /></el-icon>
-          <span>运营总览</span>
-        </el-menu-item>
-        <el-sub-menu index="/apps">
-          <template #title>
-            <el-icon><Setting /></el-icon>
-            <span>应用管理</span>
-          </template>
-          <el-menu-item index="/apps/info">
-            <el-icon><Setting /></el-icon>
-            <span>应用信息</span>
+        <template v-for="item in menuItems" :key="item.index">
+          <el-sub-menu v-if="item.children" :index="item.index">
+            <template #title>
+              <el-icon><component :is="item.icon" /></el-icon>
+              <span>{{ item.label }}</span>
+            </template>
+            <el-menu-item v-for="child in item.children" :key="child.index" :index="child.index">
+              <el-icon><component :is="child.icon" /></el-icon>
+              <span>{{ child.label }}</span>
+            </el-menu-item>
+          </el-sub-menu>
+          <el-menu-item v-else :index="item.index">
+            <el-icon><component :is="item.icon" /></el-icon>
+            <span>{{ item.label }}</span>
           </el-menu-item>
-          <el-menu-item index="/apps/notices">
-            <el-icon><Document /></el-icon>
-            <span>公告管理</span>
-          </el-menu-item>
-          <el-menu-item index="/apps/versions">
-            <el-icon><UploadFilled /></el-icon>
-            <span>版本更新</span>
-          </el-menu-item>
-        </el-sub-menu>
-        <el-sub-menu index="/kamis">
-          <template #title>
-            <el-icon><Key /></el-icon>
-            <span>卡密管理</span>
-          </template>
-          <el-menu-item index="/kamis/batches">
-            <el-icon><Document /></el-icon>
-            <span>批次管理</span>
-          </el-menu-item>
-          <el-menu-item index="/kamis/list">
-            <el-icon><Key /></el-icon>
-            <span>卡密列表</span>
-          </el-menu-item>
-        </el-sub-menu>
-        <el-menu-item index="/devices">
-          <el-icon><Monitor /></el-icon>
-          <span>设备管理</span>
-        </el-menu-item>
-        <el-menu-item index="/logs">
-          <el-icon><Document /></el-icon>
-          <span>事件日志</span>
-        </el-menu-item>
-        <el-menu-item index="/users">
-          <el-icon><UserFilled /></el-icon>
-          <span>账号管理</span>
-        </el-menu-item>
-        <el-menu-item index="/end-users">
-          <el-icon><User /></el-icon>
-          <span>用户授权</span>
-        </el-menu-item>
-        <el-menu-item index="/docs/api">
-          <el-icon><Document /></el-icon>
-          <span>接口文档</span>
-        </el-menu-item>
-        <el-sub-menu index="/interfaces">
-          <template #title>
-            <el-icon><Connection /></el-icon>
-            <span>接口管理</span>
-          </template>
-          <el-menu-item index="/interfaces/new">
-            <el-icon><Setting /></el-icon>
-            <span>新增接口</span>
-          </el-menu-item>
-          <el-menu-item index="/interfaces/list">
-            <el-icon><Document /></el-icon>
-            <span>接口列表</span>
-          </el-menu-item>
-        </el-sub-menu>
+        </template>
       </el-menu>
     </el-aside>
 
@@ -105,6 +49,7 @@
           <h4 class="page-title">{{ currentTitle }}</h4>
         </div>
         <div class="layout__header-right">
+          <el-tag effect="plain" round>{{ roleLabel }}</el-tag>
           <el-button
             class="yz-no-burst"
             :icon="isDark ? Sunny : Moon"
@@ -118,7 +63,7 @@
               <el-avatar :size="32" class="user-avatar">
                 <el-icon><User /></el-icon>
               </el-avatar>
-              <span class="user-name">{{ userStore.userInfo?.username || '管理员' }}</span>
+              <span class="user-name">{{ userStore.userInfo?.username || roleLabel }}</span>
               <el-icon class="el-icon--right"><ArrowDown /></el-icon>
             </span>
             <template #dropdown>
@@ -148,39 +93,106 @@
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import {
-  Setting,
+  ArrowDown,
+  Box,
+  Coin,
+  Connection,
+  CreditCard,
+  DataAnalysis,
+  Document,
+  Expand,
+  Fold,
   Key,
   Monitor,
-  Document,
+  Moon,
+  Setting,
+  SwitchButton,
+  Sunny,
+  Tickets,
   User,
   UserFilled,
-  ArrowDown,
-  SwitchButton,
-  Fold,
-  Expand,
-  Moon,
-  Sunny,
-  Connection,
-  DataAnalysis,
-  UploadFilled
+  Wallet
 } from '@element-plus/icons-vue'
-import { useUserStore } from '../stores/user'
 import { useThemeStore } from '../stores/theme'
+import { useUserStore } from '../stores/user'
 
 const publicBase = import.meta.env.BASE_URL
 const route = useRoute()
 const userStore = useUserStore()
 const themeStore = useThemeStore()
-
 const collapsed = ref(false)
+
+const isMerchant = computed(() => userStore.role === 'merchant' || route.path.startsWith('/merchant'))
+const shellTitle = computed(() => (isMerchant.value ? '商户控制台' : '商业版后台'))
+const roleLabel = computed(() => (isMerchant.value ? '商户账号' : '管理员账号'))
 const activeMenu = computed(() => route.path)
-const currentTitle = computed(() => route.meta?.title || '')
+const currentTitle = computed(() => route.meta?.title || shellTitle.value)
 const isDark = computed(() => themeStore.isDark)
 
+const adminMenuItems = [
+  { index: '/admin/dashboard', label: '运营总览', icon: DataAnalysis },
+  { index: '/admin/commercial', label: '商业版后台', icon: Wallet },
+  {
+    index: '/admin/commercial-ops',
+    label: '充值与额度',
+    icon: CreditCard,
+    children: [
+      { index: '/admin/commercial/recharge-orders', label: '充值订单', icon: Tickets },
+      { index: '/admin/commercial/recharge-settings', label: '充值配置', icon: Setting },
+      { index: '/admin/commercial', label: '发卡额度流水', icon: Coin }
+    ]
+  },
+  {
+    index: '/admin/apps',
+    label: '应用管理',
+    icon: Setting,
+    children: [
+      { index: '/admin/apps/info', label: '应用信息', icon: Setting },
+      { index: '/admin/apps/notices', label: '公告管理', icon: Document },
+      { index: '/admin/apps/versions', label: '版本更新', icon: Tickets }
+    ]
+  },
+  {
+    index: '/admin/kamis',
+    label: '卡密管理',
+    icon: Key,
+    children: [
+      { index: '/admin/kamis/batches', label: '批次管理', icon: Box },
+      { index: '/admin/kamis/list', label: '卡密列表', icon: Key }
+    ]
+  },
+  { index: '/admin/devices', label: '设备管理', icon: Monitor },
+  { index: '/admin/logs', label: '审计日志', icon: Document },
+  { index: '/admin/users', label: '账号管理', icon: UserFilled },
+  { index: '/admin/end-users', label: '用户管理', icon: User },
+  {
+    index: '/admin/interfaces',
+    label: '接口管理',
+    icon: Connection,
+    children: [
+      { index: '/admin/interfaces/new', label: '新增接口', icon: Setting },
+      { index: '/admin/interfaces/list', label: '接口列表', icon: Document }
+    ]
+  },
+  { index: '/docs/api', label: '接口文档', icon: Document }
+]
+
+const merchantMenuItems = [
+  { index: '/merchant/dashboard', label: '商户控制台', icon: DataAnalysis },
+  { index: '/merchant/recharge', label: '充值发卡额度', icon: Wallet },
+  { index: '/merchant/orders', label: '我的订单', icon: Tickets },
+  { index: '/merchant/transactions', label: '发卡额度流水', icon: Coin },
+  { index: '/merchant/apps', label: '我的应用', icon: Setting },
+  { index: '/merchant/batches', label: '批次管理', icon: Box },
+  { index: '/merchant/cards', label: '我的卡密', icon: Key },
+  { index: '/merchant/devices', label: '设备记录', icon: Monitor },
+  { index: '/merchant/account', label: '账号设置', icon: User }
+]
+
+const menuItems = computed(() => (isMerchant.value ? merchantMenuItems : adminMenuItems))
+
 const handleCommand = (command) => {
-  if (command === 'logout') {
-    userStore.logout()
-  }
+  if (command === 'logout') userStore.logout()
 }
 </script>
 
@@ -192,66 +204,12 @@ const handleCommand = (command) => {
 }
 
 .layout__aside {
-  position: relative;
   display: flex;
   flex-direction: column;
-  background:
-    linear-gradient(160deg, rgba(255, 255, 255, 0.88), rgba(242, 248, 255, 0.72)),
-    rgba(255, 255, 255, 0.76);
-  border-right: 1px solid rgba(188, 214, 242, 0.66);
+  background: rgba(255, 255, 255, 0.92);
+  border-right: 1px solid #dbeafe;
   box-shadow: 10px 0 28px rgba(30, 64, 105, 0.08);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.layout__aside::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(255, 255, 255, 0.22) 42%, rgba(235, 246, 255, 0.34)),
-    radial-gradient(circle at 22px 22px, rgba(47, 128, 237, 0.08), transparent 120px);
-}
-
-.layout__aside > * {
-  position: relative;
-  z-index: 1;
-}
-
-:deep(.side-menu) {
-  flex: 1;
-  border-right: none;
-  --el-menu-bg-color: transparent;
-  --el-menu-text-color: #475569;
-  --el-menu-active-color: #2f80ed;
-  --el-menu-hover-bg-color: rgba(241, 247, 255, 0.76);
-  padding: 8px 10px 24px;
-}
-
-:deep(.side-menu.el-menu--collapse) {
-  padding: 8px 6px;
-}
-
-:deep(.side-menu .el-menu-item) {
-  border-radius: 10px;
-  margin: 4px 0;
-  transition: background 0.35s, transform 0.3s, color 0.3s;
-  height: 46px;
-}
-
-:deep(.side-menu .el-menu-item:hover) {
-  background: rgba(241, 247, 255, 0.78) !important;
-}
-
-:deep(.side-menu .el-menu-item.is-active) {
-  background: rgba(234, 244, 255, 0.92) !important;
-  color: #2f80ed !important;
-  font-weight: 600;
-  box-shadow: inset 3px 0 0 #2f80ed, 0 10px 22px rgba(47, 128, 237, 0.1);
+  transition: width 0.25s ease;
 }
 
 .logo {
@@ -261,10 +219,7 @@ const handleCommand = (command) => {
   align-items: center;
   gap: 10px;
   padding: 0 14px 0 12px;
-  color: #0f172a;
-  background: rgba(255, 255, 255, 0.54);
-  border-bottom: 1px solid rgba(188, 214, 242, 0.56);
-  flex-shrink: 0;
+  border-bottom: 1px solid #dbeafe;
 }
 
 .logo.is-small {
@@ -274,96 +229,73 @@ const handleCommand = (command) => {
 
 .logo__img {
   border-radius: 12px;
-  flex-shrink: 0;
   background: #fef9c3;
   box-shadow: 0 6px 16px rgba(202, 138, 4, 0.16);
+  flex-shrink: 0;
 }
 
 .logo__text {
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  overflow: hidden;
 }
 
 .logo__name {
   font-size: 17px;
-  font-weight: 700;
+  font-weight: 800;
   line-height: 1.2;
-  letter-spacing: 0;
+  color: #0f172a;
   white-space: nowrap;
-  text-shadow: none;
 }
 
 .logo__hint {
-  font-size: 11px;
-  opacity: 0.8;
   margin-top: 2px;
+  font-size: 11px;
+  color: #64748b;
 }
 
-html.dark .layout__aside {
-  background:
-    linear-gradient(160deg, rgba(15, 23, 42, 0.88), rgba(30, 41, 59, 0.78)),
-    rgba(15, 23, 42, 0.76);
-  border-right-color: rgba(71, 85, 105, 0.72);
-  box-shadow: 10px 0 28px rgba(0, 0, 0, 0.18);
+:deep(.side-menu) {
+  flex: 1;
+  border-right: none;
+  --el-menu-bg-color: transparent;
+  --el-menu-text-color: #475569;
+  --el-menu-active-color: #2f80ed;
+  --el-menu-hover-bg-color: #eff6ff;
+  padding: 8px 10px 24px;
 }
 
-html.dark .layout__aside::before {
-  background:
-    linear-gradient(180deg, rgba(30, 41, 59, 0.58), rgba(15, 23, 42, 0.26)),
-    radial-gradient(circle at 22px 22px, rgba(56, 189, 248, 0.1), transparent 120px);
+:deep(.side-menu .el-menu-item),
+:deep(.side-menu .el-sub-menu__title) {
+  height: 44px;
+  border-radius: 8px;
+  margin: 3px 0;
 }
 
-html.dark .logo {
-  color: #e5e7eb;
-  background: rgba(15, 23, 42, 0.52);
-  border-bottom-color: rgba(71, 85, 105, 0.72);
-}
-
-html.dark :deep(.side-menu) {
-  --el-menu-text-color: #cbd5e1;
-  --el-menu-active-color: #60a5fa;
-  --el-menu-hover-bg-color: rgba(51, 65, 85, 0.78);
-}
-
-html.dark :deep(.side-menu .el-menu-item:hover) {
-  background: rgba(51, 65, 85, 0.78) !important;
-}
-
-html.dark :deep(.side-menu .el-menu-item.is-active) {
-  background: rgba(30, 64, 105, 0.78) !important;
-  color: #93c5fd !important;
-  box-shadow: inset 3px 0 0 #60a5fa, 0 10px 22px rgba(15, 23, 42, 0.22);
+:deep(.side-menu .el-menu-item.is-active) {
+  background: #eaf4ff !important;
+  color: #1d4ed8 !important;
+  font-weight: 700;
+  box-shadow: inset 3px 0 0 #2f80ed;
 }
 
 .layout__main {
-  flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
   height: 100%;
 }
 
 .layout__header {
-  background: rgba(255, 255, 255, 0.86);
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 16px 0 8px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  background: rgba(255, 255, 255, 0.9);
+  border-bottom: 1px solid #e2e8f0;
   backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  z-index: 2;
-  flex-shrink: 0;
 }
 
-html.dark .layout__header {
-  background: var(--el-bg-color-overlay, #1e293b);
-  border-color: #334155;
-}
-
-.layout__header-left {
+.layout__header-left,
+.layout__header-right,
+.user-pill {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -372,96 +304,62 @@ html.dark .layout__header {
 
 .btn-fold {
   font-size: 18px;
-  color: var(--el-text-color-regular);
-  padding: 8px 10px;
-  border-radius: 10px;
-  transition: background 0.3s;
-}
-.btn-fold:hover {
-  background: var(--el-fill-color-light, #f3f4f6);
-}
-
-html.dark .btn-fold:hover {
-  background: #334155;
+  border-radius: 8px;
 }
 
 .page-title {
   margin: 0;
   font-size: 17px;
-  font-weight: 600;
-  color: var(--el-text-color-primary, #1f2937);
-  white-space: nowrap;
+  font-weight: 700;
+  color: #0f172a;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.layout__header-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .user-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
   padding: 6px 10px 6px 4px;
-  border-radius: 12px;
+  border-radius: 8px;
   cursor: pointer;
-  color: var(--el-text-color-primary);
-  font-weight: 500;
-  font-size: 14px;
-  transition: background 0.3s, box-shadow 0.3s;
+  color: #0f172a;
+  font-weight: 600;
 }
+
 .user-pill:hover {
-  background: var(--el-fill-color-light, #f3f4f6);
-}
-html.dark .user-pill:hover {
-  background: #334155;
+  background: #f1f5f9;
 }
 
 .user-avatar {
   background: linear-gradient(135deg, #2f80ed, #38bdf8) !important;
-  color: #fff !important;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .user-name {
-  max-width: 120px;
+  max-width: 128px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .main-content {
-  padding: 20px 24px 28px;
+  height: calc(100vh - 64px);
   overflow: auto;
-  flex: 1;
-  min-height: 0;
-  background: linear-gradient(
-    160deg,
-    #eaf6ff 0%,
-    #f4faff 28%,
-    #f8fbff 62%,
-    #ffffff 100%
-  );
-  background-attachment: local;
-}
-html.dark .main-content {
-  background: linear-gradient(180deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
-  background-attachment: local;
+  padding: 20px 24px 28px;
+  background: linear-gradient(160deg, #eaf6ff 0%, #f8fbff 56%, #ffffff 100%);
 }
 
-:deep(.main-content .el-button--primary:not(.is-link)) {
-  background: linear-gradient(135deg, #2f80ed, #38bdf8) !important;
-  border: none;
+html.dark .layout__aside,
+html.dark .layout__header {
+  background: #111827;
+  border-color: #334155;
 }
-:deep(.main-content .el-button--primary.is-plain:not(.is-link)) {
-  background: var(--el-color-primary-light-8) !important;
-  color: #1d4ed8;
-  border: 1px solid #9fc8fb;
+
+html.dark .main-content {
+  background: #0f172a;
+}
+
+html.dark .logo__name,
+html.dark .page-title,
+html.dark .user-pill {
+  color: #e5e7eb;
 }
 </style>

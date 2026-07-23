@@ -25,7 +25,7 @@
           />
           <div>
             <h1 class="login-brand__name">小柠檬网络验证</h1>
-            <p class="login-brand__sub">管理后台</p>
+            <p class="login-brand__sub">管理员 / 商户共用登录</p>
           </div>
         </header>
         <p class="login-intro">
@@ -51,7 +51,7 @@
           <img :src="`${publicBase}static/brand-logo.png`" alt="" width="56" height="56" />
         </div>
         <h2 class="login-glass__title">欢迎回来</h2>
-        <p class="login-glass__desc">使用管理员账号登录</p>
+        <p class="login-glass__desc">使用管理员或商户账号登录</p>
 
         <el-form
           ref="loginFormRef"
@@ -96,7 +96,7 @@
           
           <div class="login-no-account">
             <span>没有账号？</span>
-            <el-button link type="primary" @click="showContactDialog">联系作者获取</el-button>
+            <el-button link type="primary" @click="showContactDialog">联系管理员开通</el-button>
           </div>
         </el-form>
         
@@ -339,7 +339,7 @@ const handleLogin = async () => {
       let aesKey = null
       
       try {
-        const response = await fetch('/api/v1/admin/login/public-key')
+        const response = await fetch('/api/v1/auth/login/public-key')
         if (response.ok) {
           const result = await response.json()
           aesKey = result.aes_key
@@ -368,10 +368,10 @@ const handleLogin = async () => {
         }
       }
       
-      await userStore.userLogin(loginData)
+      const loginResult = await userStore.userLogin(loginData)
       persistRemember()
       ElMessage.success('登录成功')
-      router.push('/')
+      router.push(loginResult.redirect || userStore.homePath)
     } catch (e) {
       ElMessage.error(e.message || '登录失败，请检查用户名和密码')
     } finally {
