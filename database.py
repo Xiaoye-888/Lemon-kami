@@ -5,6 +5,16 @@ import time
 import sys
 import logging
 
+_session_init = Session.__init__
+
+
+def _session_init_no_expire(self, *args, **kwargs):
+    kwargs.setdefault("expire_on_commit", False)
+    _session_init(self, *args, **kwargs)
+
+
+Session.__init__ = _session_init_no_expire
+
 # 配置日志
 logger = logging.getLogger(__name__)
 
@@ -233,6 +243,7 @@ def _ensure_points_schema():
                 "max_bind_devices": "ALTER TABLE kamis ADD COLUMN max_bind_devices INT DEFAULT 1",
                 "authorization_owner": "ALTER TABLE kamis ADD COLUMN authorization_owner VARCHAR(32) DEFAULT 'device'",
                 "user_bind_mode": "ALTER TABLE kamis ADD COLUMN user_bind_mode VARCHAR(32) DEFAULT 'none'",
+                "created_by_user_id": "ALTER TABLE kamis ADD COLUMN created_by_user_id INT DEFAULT NULL",
                 "created_at": "ALTER TABLE kamis ADD COLUMN created_at DATETIME DEFAULT NULL",
             }
             columns = {
@@ -243,6 +254,13 @@ def _ensure_points_schema():
                 if column not in columns:
                     conn.execute(text(ddl))
                     conn.commit()
+            indexes = {
+                row[2]
+                for row in conn.execute(text("SHOW INDEX FROM kamis")).fetchall()
+            }
+            if "idx_created_by_user_id" not in indexes:
+                conn.execute(text("CREATE INDEX idx_created_by_user_id ON kamis (created_by_user_id)"))
+                conn.commit()
             conn.execute(text("""
                 UPDATE kamis
                 SET max_bind_devices = CASE
@@ -264,6 +282,7 @@ def _ensure_points_schema():
             }
             extra_columns = {
                 "created_by": "ALTER TABLE apps ADD COLUMN created_by VARCHAR(255) DEFAULT NULL",
+                "owner_user_id": "ALTER TABLE apps ADD COLUMN owner_user_id INT DEFAULT NULL",
                 "created_at": "ALTER TABLE apps ADD COLUMN created_at DATETIME DEFAULT NULL",
                 "signature_required": "ALTER TABLE apps ADD COLUMN signature_required BOOLEAN DEFAULT TRUE",
                 "nonce_required": "ALTER TABLE apps ADD COLUMN nonce_required BOOLEAN DEFAULT TRUE",
@@ -280,6 +299,13 @@ def _ensure_points_schema():
                 if column not in columns:
                     conn.execute(text(ddl))
                     conn.commit()
+            indexes = {
+                row[2]
+                for row in conn.execute(text("SHOW INDEX FROM apps")).fetchall()
+            }
+            if "idx_owner_user_id" not in indexes:
+                conn.execute(text("CREATE INDEX idx_owner_user_id ON apps (owner_user_id)"))
+                conn.commit()
 
         if "api_interfaces" not in existing_tables:
             conn.execute(text("""
@@ -526,6 +552,7 @@ def _ensure_sqlite_schema():
             }
             extra_columns = {
                 "created_by": "VARCHAR(255) DEFAULT NULL",
+                "owner_user_id": "INTEGER DEFAULT NULL",
                 "created_at": "DATETIME DEFAULT NULL",
                 "signature_required": "BOOLEAN DEFAULT 1",
                 "nonce_required": "BOOLEAN DEFAULT 1",
@@ -541,6 +568,7 @@ def _ensure_sqlite_schema():
             for column, ddl in extra_columns.items():
                 if column not in columns:
                     conn.execute(text(f"ALTER TABLE apps ADD COLUMN {column} {ddl}"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_apps_owner_user_id ON apps (owner_user_id)"))
             conn.commit()
         if "api_interfaces" in tables:
             columns = {
@@ -589,6 +617,7 @@ def _ensure_sqlite_schema():
                 "max_bind_devices": "INTEGER DEFAULT 1",
                 "authorization_owner": "VARCHAR(32) DEFAULT 'device'",
                 "user_bind_mode": "VARCHAR(32) DEFAULT 'none'",
+                "created_by_user_id": "INTEGER DEFAULT NULL",
                 "created_at": "DATETIME DEFAULT NULL",
             }
             for column, ddl in extra_columns.items():
@@ -599,6 +628,7 @@ def _ensure_sqlite_schema():
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_machine_bind_mode ON kamis (machine_bind_mode)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_authorization_owner ON kamis (authorization_owner)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_user_bind_mode ON kamis (user_bind_mode)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_created_by_user_id ON kamis (created_by_user_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_created_at ON kamis (created_at)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_code_expires_at ON kamis (code_expires_at)"))
             conn.execute(text("""
@@ -749,6 +779,7 @@ def init_db():
                         rsa_private_key TEXT NOT NULL,
                         status INT DEFAULT 1,
                         created_by VARCHAR(255),
+                        owner_user_id INT DEFAULT NULL,
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                         signature_required BOOLEAN DEFAULT TRUE,
                         nonce_required BOOLEAN DEFAULT TRUE,
@@ -760,7 +791,9 @@ def init_db():
                         unbind_deduct_times INT DEFAULT 0,
                         ip_lock_enabled BOOLEAN DEFAULT FALSE,
                         api_call_count INT DEFAULT 0,
-                        INDEX idx_app_id (app_id)
+                        INDEX idx_app_id (app_id),
+                        INDEX idx_owner_user_id (owner_user_id),
+                        FOREIGN KEY (owner_user_id) REFERENCES end_users(id) ON DELETE SET NULL
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='应用表'
                 """))
                 conn.commit()
@@ -801,6 +834,7 @@ def init_db():
                         batch_no VARCHAR(64),
                         points_valid_days INT,
                         redeemed_by_user_id INT,
+                        created_by_user_id INT DEFAULT NULL,
                         redeemed_at DATETIME,
                         INDEX idx_app_id (app_id),
                         INDEX idx_kami_code (kami_code),
@@ -810,8 +844,10 @@ def init_db():
                         INDEX idx_machine_bind_mode (machine_bind_mode),
                         INDEX idx_authorization_owner (authorization_owner),
                         INDEX idx_user_bind_mode (user_bind_mode),
+                        INDEX idx_created_by_user_id (created_by_user_id),
                         INDEX idx_created_at (created_at),
-                        FOREIGN KEY (app_id) REFERENCES apps(app_id) ON DELETE CASCADE
+                        FOREIGN KEY (app_id) REFERENCES apps(app_id) ON DELETE CASCADE,
+                        FOREIGN KEY (created_by_user_id) REFERENCES end_users(id) ON DELETE SET NULL
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='卡密表'
                 """))
                 conn.commit()

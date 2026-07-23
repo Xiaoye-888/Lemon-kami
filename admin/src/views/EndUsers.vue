@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="end-users-container">
     <el-row :gutter="12" class="stats-row">
       <el-col :span="4" v-for="item in statItems" :key="item.label">
@@ -12,9 +12,9 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>用户授权</span>
+          <span>鐢ㄦ埛鎺堟潈</span>
           <div class="header-actions">
-            <el-button @click="handleExportUsers">导出用户</el-button>
+            <el-button @click="handleExportUsers">瀵煎嚭鐢ㄦ埛</el-button>
             <el-button
               type="danger"
               plain
@@ -22,20 +22,20 @@
               :loading="deletingUsers"
               @click="handleDeleteSelectedUsers"
             >
-              删除用户
+              鍒犻櫎鐢ㄦ埛
             </el-button>
-            <el-button type="primary" @click="loadData">刷新</el-button>
+            <el-button type="primary" @click="loadData">鍒锋柊</el-button>
           </div>
         </div>
       </template>
 
       <el-form :inline="true" :model="queryParams" class="filter-form">
-        <el-form-item label="应用">
+        <el-form-item label="搴旂敤">
           <el-select
             v-model="queryParams.app_id"
             clearable
             filterable
-            placeholder="全部应用"
+            placeholder="鍏ㄩ儴搴旂敤"
             style="width: 220px"
             @change="handleAppChange"
           >
@@ -47,17 +47,17 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="关键字">
-          <el-input v-model="queryParams.keyword" clearable placeholder="用户名/邮箱" />
+        <el-form-item label="关键词">
+          <el-input v-model="queryParams.keyword" clearable placeholder="鐢ㄦ埛鍚?閭" />
         </el-form-item>
         <el-form-item label="状态">
-          <el-select v-model="queryParams.status" clearable placeholder="全部" style="width: 120px">
-            <el-option label="启用" :value="1" />
-            <el-option label="禁用" :value="0" />
+          <el-select v-model="queryParams.status" clearable placeholder="鍏ㄩ儴" style="width: 120px">
+            <el-option label="鍚敤" :value="1" />
+            <el-option label="绂佺敤" :value="0" />
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="loadUsers">查询</el-button>
+          <el-button type="primary" @click="loadUsers">鏌ヨ</el-button>
         </el-form-item>
       </el-form>
 
@@ -71,35 +71,37 @@
         <el-table-column type="selection" width="48" />
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="username" label="用户名" min-width="140" />
-        <el-table-column prop="email" label="邮箱" min-width="180" />
-        <el-table-column prop="time_authorization" label="时间余额" width="170" />
-        <el-table-column prop="times_remaining" label="次数余额" width="110" />
-        <el-table-column prop="points_remaining" label="积分余额" width="110" />
+        <el-table-column prop="email" label="閭" min-width="180" />
+        <el-table-column prop="time_authorization" label="鏃堕棿浣欓" width="170" />
+        <el-table-column prop="times_remaining" label="娆℃暟浣欓" width="110" />
+        <el-table-column prop="points_remaining" label="绉垎浣欓" width="110" />
         <el-table-column prop="status" label="状态" width="90">
           <template #default="{ row }">
             <el-tag :type="row.status === 1 ? 'success' : 'danger'">
-              {{ row.status === 1 ? '启用' : '禁用' }}
+              {{ row.status === 1 ? '鍚敤' : '绂佺敤' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="注册时间" width="180">
+        <el-table-column prop="created_at" label="娉ㄥ唽鏃堕棿" width="180">
           <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
         </el-table-column>
         <el-table-column prop="last_login" label="最近登录" width="180">
           <template #default="{ row }">{{ formatOptionalTime(row.last_login) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="330" fixed="right">
+        <el-table-column label="鎿嶄綔" width="330" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" type="primary" plain @click="showGrantAuthorizationDialog(row)">分配授权</el-button>
-            <el-button size="small" @click="showUserKamisDialog(row)">授权明细</el-button>
+            <el-button size="small" type="primary" plain @click="showQuotaDialog(row)">额度管理</el-button>
+            <el-button size="small" type="success" plain @click="showAppAuthorizationDialog(row)">应用授权</el-button>
+            <el-button size="small" type="primary" plain @click="showGrantAuthorizationDialog(row)">鍒嗛厤鎺堟潈</el-button>
+            <el-button size="small" @click="showUserKamisDialog(row)">鎺堟潈鏄庣粏</el-button>
             <el-button
               size="small"
               :type="row.status === 1 ? 'warning' : 'success'"
               @click="toggleStatus(row)"
             >
-              {{ row.status === 1 ? '禁用' : '启用' }}
+              {{ row.status === 1 ? '绂佺敤' : '鍚敤' }}
             </el-button>
-            <el-button size="small" @click="showResetPasswordDialog(row)">重置密码</el-button>
+            <el-button size="small" @click="showResetPasswordDialog(row)">閲嶇疆瀵嗙爜</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -118,7 +120,7 @@
 
     <el-dialog v-model="resetPasswordVisible" title="重置普通用户密码" width="420px">
       <el-form :model="resetPasswordForm" label-width="90px">
-        <el-form-item label="用户">
+        <el-form-item label="鐢ㄦ埛">
           <span>{{ resetPasswordForm.username }}</span>
         </el-form-item>
         <el-form-item label="新密码" required>
@@ -126,66 +128,66 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="resetPasswordVisible = false">取消</el-button>
-        <el-button type="primary" :loading="resettingPassword" @click="handleResetPassword">确定</el-button>
+        <el-button @click="resetPasswordVisible = false">鍙栨秷</el-button>
+        <el-button type="primary" :loading="resettingPassword" @click="handleResetPassword">纭畾</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="grantAuthVisible" title="分配用户授权" width="560px">
+    <el-dialog v-model="grantAuthVisible" title="鍒嗛厤鐢ㄦ埛鎺堟潈" width="560px">
       <el-form :model="grantForm" label-width="110px">
-        <el-form-item label="用户">
+        <el-form-item label="鐢ㄦ埛">
           <span>{{ grantForm.username }}</span>
         </el-form-item>
-        <el-form-item label="应用" required>
-          <el-select v-model="grantForm.app_id" filterable placeholder="选择应用" style="width: 100%">
+        <el-form-item label="搴旂敤" required>
+          <el-select v-model="grantForm.app_id" filterable placeholder="閫夋嫨搴旂敤" style="width: 100%">
             <el-option v-for="app in apps" :key="app.app_id" :label="app.name" :value="app.app_id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="授权类型" required>
+        <el-form-item label="鎺堟潈绫诲瀷" required>
           <el-select v-model="grantForm.benefit_type" style="width: 100%">
-            <el-option label="时间授权" value="time" />
-            <el-option label="次数授权" value="times" />
-            <el-option label="积分授权" value="points" />
+            <el-option label="鏃堕棿鎺堟潈" value="time" />
+            <el-option label="娆℃暟鎺堟潈" value="times" />
+            <el-option label="绉垎鎺堟潈" value="points" />
           </el-select>
         </el-form-item>
         <template v-if="grantForm.benefit_type === 'time'">
-          <el-form-item label="永久授权">
+          <el-form-item label="姘镐箙鎺堟潈">
             <el-switch v-model="grantForm.is_lifetime" />
           </el-form-item>
-          <el-form-item v-if="!grantForm.is_lifetime" label="授权天数" required>
+          <el-form-item v-if="!grantForm.is_lifetime" label="鎺堟潈澶╂暟" required>
             <el-input-number v-model="grantForm.days" :min="1" :max="36500" style="width: 100%" />
           </el-form-item>
         </template>
-        <el-form-item v-else :label="grantForm.benefit_type === 'times' ? '授权次数' : '授权积分'" required>
+        <el-form-item v-else :label="grantForm.benefit_type === 'times' ? '鎺堟潈娆℃暟' : '鎺堟潈绉垎'" required>
           <el-input-number v-model="grantForm.amount" :min="1" :max="100000000" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="来源卡密">
-          <el-input v-model="grantForm.source_kami_code" clearable placeholder="可选，用于追溯来源卡密" />
+        <el-form-item label="鏉ユ簮鍗″瘑">
+          <el-input v-model="grantForm.source_kami_code" clearable placeholder="鍙€夛紝鐢ㄤ簬杩芥函鏉ユ簮鍗″瘑" />
         </el-form-item>
-        <el-form-item label="备注">
+        <el-form-item label="澶囨敞">
           <el-input v-model="grantForm.remark" type="textarea" :rows="2" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="grantAuthVisible = false">取消</el-button>
-        <el-button type="primary" :loading="grantingAuthorization" @click="handleGrantAuthorization">确认分配</el-button>
+        <el-button @click="grantAuthVisible = false">鍙栨秷</el-button>
+        <el-button type="primary" :loading="grantingAuthorization" @click="handleGrantAuthorization">纭鍒嗛厤</el-button>
       </template>
     </el-dialog>
 
     <el-dialog v-model="userKamisVisible" :title="`${currentUser?.username || '用户'}的授权明细`" width="1120px">
       <el-table :data="userKamis" v-loading="userKamisLoading" border stripe>
-        <el-table-column prop="kami_code" label="卡密" min-width="190" show-overflow-tooltip />
-        <el-table-column label="类型" width="100">
+        <el-table-column prop="kami_code" label="鍗″瘑" min-width="190" show-overflow-tooltip />
+        <el-table-column label="绫诲瀷" width="100">
           <template #default="{ row }">{{ getTypeText(row.kami_type) }}</template>
         </el-table-column>
-        <el-table-column prop="batch_no" label="批次" min-width="130" show-overflow-tooltip />
+        <el-table-column prop="batch_no" label="鎵规" min-width="130" show-overflow-tooltip />
         <el-table-column label="状态" width="90">
           <template #default="{ row }">{{ getStatusText(row.status) }}</template>
         </el-table-column>
-        <el-table-column label="绑定关系" width="120">
+        <el-table-column label="缁戝畾鍏崇郴" width="120">
           <template #default="{ row }">{{ row.binding_relation || '-' }}</template>
         </el-table-column>
-        <el-table-column label="权益配置" width="130">
+        <el-table-column label="鏉冪泭閰嶇疆" width="130">
           <template #default="{ row }">{{ getCardQuotaText(row) }}</template>
         </el-table-column>
         <el-table-column label="剩余/有效期" width="160">
@@ -196,22 +198,83 @@
             {{ row.machine_bind_mode_text || getMachineBindModeText(row.machine_bind_mode, row.max_bind_devices) }}
           </template>
         </el-table-column>
-        <el-table-column label="绑定设备" min-width="150" show-overflow-tooltip>
+        <el-table-column label="缁戝畾璁惧" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ getBoundDeviceText(row) }}</template>
         </el-table-column>
-        <el-table-column label="兑换时间" width="170">
+        <el-table-column label="鍏戞崲鏃堕棿" width="170">
           <template #default="{ row }">{{ formatOptionalTime(row.redeemed_at) }}</template>
         </el-table-column>
-        <el-table-column label="最近核销" width="170">
+        <el-table-column label="鏈€杩戞牳閿€" width="170">
           <template #default="{ row }">{{ formatOptionalTime(row.last_consume_at) }}</template>
         </el-table-column>
         <el-table-column label="最近验证" width="170">
           <template #default="{ row }">{{ formatOptionalTime(row.last_verify_at) }}</template>
         </el-table-column>
-        <el-table-column label="授权来源" min-width="160" show-overflow-tooltip>
+        <el-table-column label="鎺堟潈鏉ユ簮" min-width="160" show-overflow-tooltip>
           <template #default="{ row }">{{ getLotSummary(row.authorization_lots) }}</template>
         </el-table-column>
       </el-table>
+    </el-dialog>
+    <el-dialog v-model="quotaVisible" :title="`额度管理 - ${quotaForm.username || '用户'}`" width="720px">
+      <div v-loading="quotaLoading">
+        <el-descriptions v-if="quotaSummary" :column="2" border>
+          <el-descriptions-item label="用户">{{ quotaSummary.username || quotaForm.username }}</el-descriptions-item>
+          <el-descriptions-item label="额度账户ID">{{ quotaSummary.quota_account_id || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="建站额度">{{ quotaSummary.app_create_balance ?? 0 }}</el-descriptions-item>
+          <el-descriptions-item label="发卡额度">{{ quotaSummary.kami_issue_balance ?? 0 }}</el-descriptions-item>
+          <el-descriptions-item label="充值额度">{{ quotaSummary.recharge_balance ?? 0 }}</el-descriptions-item>
+          <el-descriptions-item label="更新时间">{{ formatOptionalTime(quotaSummary.updated_at) }}</el-descriptions-item>
+        </el-descriptions>
+        <el-divider />
+        <el-form :model="quotaForm" label-width="100px">
+          <el-form-item label="额度类型" required>
+            <el-select v-model="quotaForm.quota_type" style="width: 100%">
+              <el-option label="建站额度" value="app_create" />
+              <el-option label="发卡额度" value="kami_issue" />
+              <el-option label="充值额度" value="recharge" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="发放数量" required>
+            <el-input-number v-model="quotaForm.amount" :min="1" :max="100000000" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="备注">
+            <el-input v-model="quotaForm.remark" type="textarea" :rows="2" />
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <el-button @click="quotaVisible = false">取消</el-button>
+        <el-button type="primary" :loading="quotaSaving" @click="handleGrantUserQuota">确认发放</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="appAuthVisible" :title="`应用授权 - ${appAuthForm.username || '用户'}`" width="760px">
+      <div v-loading="appAuthLoading">
+        <el-table :data="appAuthorizations" border stripe height="260">
+          <el-table-column prop="app_name" label="应用名称" min-width="160" show-overflow-tooltip />
+          <el-table-column prop="app_id" label="App ID" min-width="170" show-overflow-tooltip />
+          <el-table-column prop="granted_by" label="授权人" width="120" />
+          <el-table-column prop="created_at" label="授权时间" width="180">
+            <template #default="{ row }">{{ formatOptionalTime(row.created_at) }}</template>
+          </el-table-column>
+          <el-table-column prop="remark" label="备注" min-width="160" show-overflow-tooltip />
+        </el-table>
+        <el-divider />
+        <el-form :model="appAuthForm" label-width="100px">
+          <el-form-item label="授权应用" required>
+            <el-select v-model="appAuthForm.app_id" filterable placeholder="选择应用" style="width: 100%">
+              <el-option v-for="app in apps" :key="app.app_id" :label="app.name" :value="app.app_id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="备注">
+            <el-input v-model="appAuthForm.remark" type="textarea" :rows="2" />
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <el-button @click="appAuthVisible = false">取消</el-button>
+        <el-button type="primary" :loading="appAuthSaving" @click="handleGrantUserAppAuthorization">确认授权</el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -222,10 +285,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   deleteEndUsers,
   exportEndUsers,
+  getEndUserAppAuthorizations,
+  getEndUserQuotas,
   getEndUserKamis,
   getEndUsers,
   getEndUserStats,
   grantAuthorization,
+  grantEndUserAppAuthorization,
+  grantEndUserQuota,
   resetEndUserPassword,
   updateEndUserStatus
 } from '../api/points'
@@ -243,12 +310,20 @@ const resettingPassword = ref(false)
 const grantingAuthorization = ref(false)
 const deletingUsers = ref(false)
 const userKamisLoading = ref(false)
+const quotaLoading = ref(false)
+const quotaSaving = ref(false)
+const appAuthLoading = ref(false)
+const appAuthSaving = ref(false)
 const resetPasswordVisible = ref(false)
 const grantAuthVisible = ref(false)
 const userKamisVisible = ref(false)
+const quotaVisible = ref(false)
+const appAuthVisible = ref(false)
 const users = ref([])
 const selectedUsers = ref([])
 const userKamis = ref([])
+const quotaSummary = ref(null)
+const appAuthorizations = ref([])
 const apps = ref([])
 const currentUser = ref(null)
 const total = ref(0)
@@ -290,14 +365,29 @@ const grantForm = reactive({
   remark: ''
 })
 
+const quotaForm = reactive({
+  user_id: null,
+  username: '',
+  quota_type: 'app_create',
+  amount: 1,
+  remark: ''
+})
+
+const appAuthForm = reactive({
+  user_id: null,
+  username: '',
+  app_id: '',
+  remark: ''
+})
+
 const statItems = computed(() => [
-  { label: '用户总数', value: stats.value.total },
-  { label: '今日新增', value: stats.value.today_new },
-  { label: '启用用户', value: stats.value.active },
-  { label: '禁用用户', value: stats.value.disabled },
+  { label: '鐢ㄦ埛鎬绘暟', value: stats.value.total },
+  { label: '浠婃棩鏂板', value: stats.value.today_new },
+  { label: '鍚敤鐢ㄦ埛', value: stats.value.active },
+  { label: '绂佺敤鐢ㄦ埛', value: stats.value.disabled },
   { label: '有授权用户', value: stats.value.with_authorization ?? stats.value.with_balance },
   {
-    label: '次数/积分余额',
+    label: '娆℃暟/绉垎浣欓',
     value: `${stats.value.total_authorized_times ?? 0} / ${stats.value.total_authorized_points ?? stats.value.total_balance ?? 0}`
   }
 ])
@@ -371,7 +461,7 @@ const handleSelectionChange = (selection) => {
 
 const handleDeleteSelectedUsers = async () => {
   if (!selectedUsers.value.length) {
-    ElMessage.warning('请先选择要删除的用户')
+    ElMessage.warning('璇峰厛閫夋嫨瑕佸垹闄ょ殑鐢ㄦ埛')
     return
   }
   const count = selectedUsers.value.length
@@ -381,8 +471,8 @@ const handleDeleteSelectedUsers = async () => {
       '永久删除用户',
       {
         type: 'warning',
-        confirmButtonText: '永久删除',
-        cancelButtonText: '取消',
+        confirmButtonText: '姘镐箙鍒犻櫎',
+        cancelButtonText: '鍙栨秷',
         confirmButtonClass: 'el-button--danger'
       }
     )
@@ -390,7 +480,7 @@ const handleDeleteSelectedUsers = async () => {
     await deleteEndUsers({
       user_ids: selectedUsers.value.map((item) => item.id)
     })
-    ElMessage.success('用户及关联数据已删除')
+    ElMessage.success('鐢ㄦ埛鍙婂叧鑱旀暟鎹凡鍒犻櫎')
     await loadData()
   } catch (error) {
     if (error !== 'cancel') console.error(error)
@@ -422,15 +512,15 @@ const showGrantAuthorizationDialog = (row) => {
 
 const handleGrantAuthorization = async () => {
   if (!grantForm.app_id) {
-    ElMessage.warning('请选择应用')
+    ElMessage.warning('璇烽€夋嫨搴旂敤')
     return
   }
   if (grantForm.benefit_type === 'time' && !grantForm.is_lifetime && !grantForm.days) {
-    ElMessage.warning('请填写授权天数')
+      ElMessage.warning('请填写授权天数')
     return
   }
   if (grantForm.benefit_type !== 'time' && !grantForm.amount) {
-    ElMessage.warning('请填写授权数量')
+      ElMessage.warning('请填写授权数量')
     return
   }
   grantingAuthorization.value = true
@@ -454,6 +544,95 @@ const handleGrantAuthorization = async () => {
     await loadData()
   } finally {
     grantingAuthorization.value = false
+  }
+}
+
+const getQuotaTypeLabel = (quotaType) => {
+  const typeMap = {
+    app_create: '寤虹珯棰濆害',
+    kami_issue: '鍙戝崱棰濆害',
+    recharge: '充值额度',
+  }
+  return typeMap[quotaType] || quotaType
+}
+
+const loadUserQuota = async (userId) => {
+  quotaLoading.value = true
+  try {
+    const res = await getEndUserQuotas(userId)
+    quotaSummary.value = res.data || null
+  } finally {
+    quotaLoading.value = false
+  }
+}
+
+const showQuotaDialog = async (row) => {
+  currentUser.value = row
+  quotaForm.user_id = row.id
+  quotaForm.username = row.username
+  quotaForm.quota_type = 'app_create'
+  quotaForm.amount = 1
+  quotaForm.remark = ''
+  quotaVisible.value = true
+  await loadUserQuota(row.id)
+}
+
+const handleGrantUserQuota = async () => {
+  if (!quotaForm.amount || quotaForm.amount <= 0) {
+    ElMessage.warning('请输入正数额度')
+    return
+  }
+  quotaSaving.value = true
+  try {
+    await grantEndUserQuota(quotaForm.user_id, {
+      quota_type: quotaForm.quota_type,
+      amount: quotaForm.amount,
+      remark: quotaForm.remark || null
+    })
+    ElMessage.success('额度已发放')
+    await loadUserQuota(quotaForm.user_id)
+    await loadUsers()
+  } finally {
+    quotaSaving.value = false
+  }
+}
+
+const loadUserAppAuthorizations = async (userId) => {
+  appAuthLoading.value = true
+  try {
+    const res = await getEndUserAppAuthorizations(userId)
+    appAuthorizations.value = res.data || []
+  } finally {
+    appAuthLoading.value = false
+  }
+}
+
+const showAppAuthorizationDialog = async (row) => {
+  currentUser.value = row
+  appAuthForm.user_id = row.id
+  appAuthForm.username = row.username
+  appAuthForm.app_id = queryParams.app_id || apps.value[0]?.app_id || ''
+  appAuthForm.remark = ''
+  appAuthVisible.value = true
+  await loadUserAppAuthorizations(row.id)
+}
+
+const handleGrantUserAppAuthorization = async () => {
+  if (!appAuthForm.app_id) {
+    ElMessage.warning('璇烽€夋嫨搴旂敤')
+    return
+  }
+  appAuthSaving.value = true
+  try {
+    await grantEndUserAppAuthorization(appAuthForm.user_id, {
+      app_id: appAuthForm.app_id,
+      remark: appAuthForm.remark || null
+    })
+    ElMessage.success('应用授权已发放')
+    await loadUserAppAuthorizations(appAuthForm.user_id)
+    await loadUsers()
+  } finally {
+    appAuthSaving.value = false
   }
 }
 
@@ -488,11 +667,11 @@ const handleResetPassword = async () => {
 
 const toggleStatus = async (row) => {
   const nextStatus = row.status === 1 ? 0 : 1
-  const action = nextStatus === 1 ? '启用' : '禁用'
+  const action = nextStatus === 1 ? '鍚敤' : '绂佺敤'
   try {
     await ElMessageBox.confirm(`确定要${action}该用户吗？`, '提示', { type: 'warning' })
     await updateEndUserStatus(row.id, nextStatus)
-    ElMessage.success(`${action}成功`)
+    ElMessage.success(`${action}鎴愬姛`)
     await loadData()
   } catch (error) {
     if (error !== 'cancel') console.error(error)
@@ -502,20 +681,20 @@ const toggleStatus = async (row) => {
 const formatOptionalTime = (value) => (value ? formatBeijingTime(value) : '-')
 
 const getCardQuotaText = (row) => {
-  if (row.kami_type === 'points') return `${row.points_amount || 0}积分`
+  if (row.kami_type === 'points') return `${row.points_amount || 0}绉垎`
   if (row.kami_type === 'times') return `${row.times_total || 0}次`
   return getValidityText(row)
 }
 
 const getRemainingBenefitText = (row) => {
-  if (row.kami_type === 'points') return `${row.point_source_remaining ?? row.points_remaining ?? row.point_remaining_balance ?? row.points_amount ?? 0}积分`
+  if (row.kami_type === 'points') return `${row.point_source_remaining ?? row.points_remaining ?? row.point_remaining_balance ?? row.points_amount ?? 0}绉垎`
   if (row.kami_type === 'times') return `${row.times_remaining ?? 0}次`
-  if (row.kami_type === 'lifetime') return '永久'
+  if (row.kami_type === 'lifetime') return '姘镐箙'
   return row.expire_time ? formatBeijingTime(row.expire_time) : getValidityText(row)
 }
 
 const getBoundDeviceText = (row) => {
-  if (row?.authorization_owner === 'user' || row?.binding_relation === '用户授权') return '-'
+  if (row?.authorization_owner === 'user' || row?.binding_relation === '鐢ㄦ埛鎺堟潈') return '-'
   if (row?.bind_uuid) return row.bind_uuid
   if (row?.device_bind_count) return `${row.device_bind_count} 台设备`
   return '-'
@@ -525,11 +704,11 @@ const getLotSummary = (lots = []) => {
   if (!lots.length) return '-'
   return lots
     .map((lot) => {
-      const typeMap = { time: '时间', times: '次数', points: '积分' }
+      const typeMap = { time: '鏃堕棿', times: '娆℃暟', points: '绉垎' }
       const type = typeMap[lot.benefit_type] || lot.benefit_type
       return `${type}:${lot.amount_remaining}/${lot.amount_total}`
     })
-    .join('；')
+    .join('，')
 }
 
 onMounted(async () => {
@@ -574,3 +753,5 @@ onMounted(async () => {
   align-items: center;
 }
 </style>
+
+

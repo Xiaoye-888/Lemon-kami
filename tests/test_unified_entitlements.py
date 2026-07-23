@@ -38,6 +38,9 @@ from models import (
     UserBindMode,
     UserPointAccount,
     UserPointLot,
+    UserQuotaAccount,
+    UserQuotaTransaction,
+    UserAppAuthorization,
     get_now_naive,
 )
 from point_service import PointServiceError, consume_points, get_points_balance_summary, redeem_points_kami
@@ -169,6 +172,292 @@ def test_notice_and_update_check_are_separate_sdk_surfaces():
         )
         assert current_version_response.status_code == 200
         assert current_version_response.json()["data"] == {"has_update": False}
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_can_grant_user_quota_and_user_can_create_apps_with_it():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        user = EndUser(username="agent-owner", password_hash="hash", app_id=None)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        user_token = routes_user.create_user_access_token(user)
+        user_id = user.id
+
+    try:
+        grant_response = client.post(
+            f"/api/v1/admin/end-users/{user_id}/quotas/grant",
+            json={
+                "quota_type": "app_create",
+                "amount": 2,
+                "remark": "seed app quota",
+            },
+        )
+        assert grant_response.status_code == 200
+        assert grant_response.json()["data"]["app_create_balance"] == 2
+
+        quota_response = client.get(f"/api/v1/admin/end-users/{user_id}/quotas")
+        assert quota_response.status_code == 200
+        quota_data = quota_response.json()["data"]
+        assert quota_data["app_create_balance"] == 2
+        assert quota_data["kami_issue_balance"] == 0
+        assert quota_data["recharge_balance"] == 0
+
+        create_response = client.post(
+            "/api/v1/user/apps",
+            headers={"Authorization": f"Bearer {user_token}"},
+            json={"name": "Agent Console"},
+        )
+        assert create_response.status_code == 200
+        created_app = create_response.json()["data"]
+        assert created_app["name"] == "Agent Console"
+        assert created_app["owner_user_id"] == user_id
+        assert created_app["created_by"] == "agent-owner"
+
+        user_quota_response = client.get(
+            "/api/v1/user/quotas",
+            headers={"Authorization": f"Bearer {user_token}"},
+        )
+        assert user_quota_response.status_code == 200
+        user_quota = user_quota_response.json()["data"]
+        assert user_quota["app_create_balance"] == 1
+
+        apps_response = client.get(
+            "/api/v1/user/apps",
+            headers={"Authorization": f"Bearer {user_token}"},
+        )
+        assert apps_response.status_code == 200
+        apps = apps_response.json()["data"]
+        assert any(item["app_id"] == created_app["app_id"] for item in apps)
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_app_authorization_grant_makes_app_visible_to_end_user():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(
+            App(
+                app_id="app_shared",
+                name="Shared App",
+                app_secret="secret-shared",
+                rsa_public_key="public",
+                rsa_private_key="private",
+                created_by="admin",
+            )
+        )
+        user = EndUser(username="authorized-user", password_hash="hash")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        user_token = routes_user.create_user_access_token(user)
+        user_id = user.id
+
+    try:
+        grant_response = client.post(
+            f"/api/v1/admin/end-users/{user_id}/app-authorizations",
+            json={"app_id": "app_shared", "remark": "allow management"},
+        )
+        assert grant_response.status_code == 200
+        assert grant_response.json()["data"]["app_id"] == "app_shared"
+
+        list_response = client.get(f"/api/v1/admin/end-users/{user_id}/app-authorizations")
+        assert list_response.status_code == 200
+        assert list_response.json()["data"][0]["app_id"] == "app_shared"
+
+        visible_response = client.get(
+            "/api/v1/user/apps",
+            headers={"Authorization": f"Bearer {user_token}"},
+        )
+        assert visible_response.status_code == 200
+        assert any(item["app_id"] == "app_shared" for item in visible_response.json()["data"])
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_user_can_issue_kamis_by_consuming_issue_quota_and_list_them():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        user = EndUser(username="issuer", password_hash="hash")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        app = App(
+            app_id="app_issuer",
+            name="Issuer App",
+            app_secret="secret-issuer",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by="issuer",
+            owner_user_id=user.id,
+        )
+        session.add(app)
+        session.commit()
+        user_token = routes_user.create_user_access_token(user)
+        user_id = user.id
+
+    try:
+        grant_response = client.post(
+            f"/api/v1/admin/end-users/{user_id}/quotas/grant",
+            json={"quota_type": "kami_issue", "amount": 3, "remark": "seed kami quota"},
+        )
+        assert grant_response.status_code == 200
+        assert grant_response.json()["data"]["kami_issue_balance"] == 3
+
+        issue_response = client.post(
+            "/api/v1/user/apps/app_issuer/kamis/batch",
+            headers={"Authorization": f"Bearer {user_token}"},
+            json={
+                "kami_type": "points",
+                "count": 2,
+                "points_amount": 50,
+                "points_valid_days": 30,
+                "batch_no": "AGENT-001",
+                "code_prefix": "AG",
+                "code_length": 8,
+                "charset": "upper_numeric",
+            },
+        )
+        assert issue_response.status_code == 200
+        issue_data = issue_response.json()["data"]
+        assert issue_data["count"] == 2
+        assert len(issue_data["codes"]) == 2
+
+        quota_response = client.get(
+            "/api/v1/user/quotas",
+            headers={"Authorization": f"Bearer {user_token}"},
+        )
+        assert quota_response.status_code == 200
+        assert quota_response.json()["data"]["kami_issue_balance"] == 1
+
+        kamis_response = client.get(
+            "/api/v1/user/apps/app_issuer/kamis",
+            headers={"Authorization": f"Bearer {user_token}"},
+        )
+        assert kamis_response.status_code == 200
+        kamis = kamis_response.json()["data"]
+        assert len(kamis) == 2
+        assert {item["kami_code"] for item in kamis} == set(issue_data["codes"])
+
+        with Session(engine) as session:
+            rows = session.exec(
+                select(Kami).where(Kami.app_id == "app_issuer", Kami.created_by_user_id == user_id)
+            ).all()
+            assert len(rows) == 2
+            assert all(row.redeemed_by_user_id is None for row in rows)
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_delete_end_users_removes_user_quota_app_authorizations_and_owned_apps():
+    engine = make_engine_with_foreign_keys()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        user = EndUser(username="delete-agent", password_hash="hash")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+        quota_account = UserQuotaAccount(
+            user_id=user.id,
+            app_create_balance=2,
+            kami_issue_balance=3,
+            recharge_balance=5,
+        )
+        session.add(quota_account)
+        session.commit()
+        session.refresh(quota_account)
+
+        session.add(
+            UserQuotaTransaction(
+                transaction_id="uq_tx_1",
+                account_id=quota_account.id,
+                quota_type="app_create",
+                transaction_type="grant",
+                amount=2,
+                balance_after=2,
+            )
+        )
+        session.add(
+            UserAppAuthorization(
+                app_id="app_owned",
+                user_id=user.id,
+                username=user.username,
+                granted_by="admin",
+            )
+        )
+        session.add(
+            App(
+                app_id="app_owned",
+                name="Owned App",
+                app_secret="secret-owned",
+                rsa_public_key="public",
+                rsa_private_key="private",
+                created_by=user.username,
+                owner_user_id=user.id,
+            )
+        )
+        session.commit()
+        session.add(
+            Kami(
+                app_id="app_owned",
+                kami_code="OWNED-001",
+                kami_type=KamiType.points,
+                status=KamiStatus.unused,
+                points_amount=50,
+                created_by_user_id=user.id,
+            )
+        )
+        session.commit()
+        user_id = user.id
+
+    try:
+        response = client.post("/api/v1/admin/end-users/delete", json={"user_ids": [user_id]})
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["deleted_users"] == 1
+        assert data["deleted_user_quota_accounts"] == 1
+        assert data["deleted_user_app_authorizations"] == 1
+        assert data["deleted_user_owned_apps"] == 1
+        assert data["deleted_user_owned_kamis"] == 1
+
+        with Session(engine) as session:
+            assert session.get(EndUser, user_id) is None
+            assert session.exec(select(UserQuotaAccount).where(UserQuotaAccount.user_id == user_id)).all() == []
+            assert session.exec(
+                select(UserQuotaTransaction).where(UserQuotaTransaction.account_id == quota_account.id)
+            ).all() == []
+            assert session.exec(select(UserAppAuthorization).where(UserAppAuthorization.user_id == user_id)).all() == []
+            assert session.exec(select(App).where(App.owner_user_id == user_id)).all() == []
+            assert session.exec(select(Kami).where(Kami.created_by_user_id == user_id)).all() == []
     finally:
         fastapi_app.dependency_overrides.clear()
 

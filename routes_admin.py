@@ -42,6 +42,11 @@ from models import (
     UserPointLot,
     PointTransaction,
     PointTransactionType,
+    UserQuotaAccount,
+    UserQuotaTransaction,
+    UserQuotaTransactionType,
+    UserQuotaType,
+    UserAppAuthorization,
     AuthorizationBenefitType,
     KamiType,
     KamiStatus,
@@ -94,6 +99,17 @@ from authorization_service import (
     grant_points,
     grant_time,
     grant_times,
+)
+from user_quota_service import (
+    create_user_app,
+    grant_app_authorization,
+    grant_user_quota,
+    get_or_create_user_quota_account,
+    get_user_visible_apps,
+    issue_user_kamis,
+    list_user_issued_kamis,
+    user_can_manage_app,
+    user_quota_summary,
 )
 from interface_docs_service import (
     dump_json as _dump_json,
@@ -278,6 +294,54 @@ def _backfill_legacy_points_for_users(
         )
 
 
+def _select_user_quota_accounts(
+    session: Session,
+    users: list[EndUser],
+) -> list[UserQuotaAccount]:
+    user_ids = [user.id for user in users if user.id is not None]
+    if not user_ids:
+        return []
+    return session.exec(
+        select(UserQuotaAccount).where(UserQuotaAccount.user_id.in_(user_ids))
+    ).all()
+
+
+def _user_quota_summary(account_or_accounts) -> dict:
+    accounts = account_or_accounts or []
+    if not isinstance(accounts, list):
+        accounts = [accounts]
+    if not accounts:
+        return {
+            "quota_account_id": None,
+            "app_create_balance": 0,
+            "kami_issue_balance": 0,
+            "recharge_balance": 0,
+            "total_app_create_granted": 0,
+            "total_kami_issue_granted": 0,
+            "total_recharge_granted": 0,
+        }
+    if len(accounts) == 1:
+        account = accounts[0]
+        return {
+            "quota_account_id": account.id,
+            "app_create_balance": account.app_create_balance,
+            "kami_issue_balance": account.kami_issue_balance,
+            "recharge_balance": account.recharge_balance,
+            "total_app_create_granted": account.total_app_create_granted,
+            "total_kami_issue_granted": account.total_kami_issue_granted,
+            "total_recharge_granted": account.total_recharge_granted,
+        }
+    return {
+        "quota_account_id": None,
+        "app_create_balance": sum(account.app_create_balance for account in accounts),
+        "kami_issue_balance": sum(account.kami_issue_balance for account in accounts),
+        "recharge_balance": sum(account.recharge_balance for account in accounts),
+        "total_app_create_granted": sum(account.total_app_create_granted for account in accounts),
+        "total_kami_issue_granted": sum(account.total_kami_issue_granted for account in accounts),
+        "total_recharge_granted": sum(account.total_recharge_granted for account in accounts),
+    }
+
+
 def _legacy_times_remaining_by_user(
     session: Session,
     user_ids: list[int],
@@ -414,6 +478,19 @@ class AuthorizationGrantRequest(BaseModel):
     days: Optional[int] = PydanticField(None, gt=0)
     is_lifetime: bool = False
     source_kami_code: Optional[str] = PydanticField(None, max_length=255)
+    remark: Optional[str] = None
+
+
+class UserQuotaGrantRequest(BaseModel):
+    quota_type: str = PydanticField(..., pattern="^(app_create|kami_issue|recharge)$")
+    amount: int = PydanticField(..., gt=0)
+    biz_id: Optional[str] = PydanticField(None, max_length=128)
+    remark: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class UserAppAuthorizationGrantRequest(BaseModel):
+    app_id: str = PydanticField(..., max_length=64)
     remark: Optional[str] = None
 
 
@@ -4722,6 +4799,10 @@ async def list_end_users(
     if user_ids:
         authorization_accounts = _select_user_authorization_accounts(session, users, app_id)
         authorization_map = _authorization_accounts_by_user_id(users, authorization_accounts)
+    quota_accounts = _select_user_quota_accounts(session, users)
+    quota_map: dict[int, list[UserQuotaAccount]] = {}
+    for account in quota_accounts:
+        quota_map.setdefault(account.user_id, []).append(account)
     legacy_times_by_user = _legacy_times_remaining_by_user(
         session,
         [user_id for user_id in user_ids if user_id is not None],
@@ -4733,6 +4814,7 @@ async def list_end_users(
         authorization_summary = _authorization_summary_payload(authorization_map.get(user.id))
         authorization_summary["times_remaining"] += legacy_times_by_user.get(user.id, 0)
         points_balance = _authorization_points_balance(authorization_map.get(user.id))
+        quota_summary = _user_quota_summary(quota_map.get(user.id, []))
         return {
             "id": user.id,
             "app_id": user.app_id or app_id,
@@ -4744,6 +4826,7 @@ async def list_end_users(
             "balance": points_balance,
             "total_recharged": points_balance,
             "total_consumed": 0,
+            **quota_summary,
             "created_at": to_api_beijing_iso(user.created_at, naive="civil"),
             "last_login": to_api_beijing_iso(user.last_login, naive="civil")
             if user.last_login

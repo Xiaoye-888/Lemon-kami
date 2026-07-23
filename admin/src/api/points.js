@@ -57,6 +57,36 @@ export function grantAuthorization(data) {
   })
 }
 
+export function getEndUserQuotas(userId) {
+  return request({
+    url: `/admin/end-users/${userId}/quotas`,
+    method: 'get'
+  })
+}
+
+export function grantEndUserQuota(userId, data) {
+  return request({
+    url: `/admin/end-users/${userId}/quotas/grant`,
+    method: 'post',
+    data
+  })
+}
+
+export function getEndUserAppAuthorizations(userId) {
+  return request({
+    url: `/admin/end-users/${userId}/app-authorizations`,
+    method: 'get'
+  })
+}
+
+export function grantEndUserAppAuthorization(userId, data) {
+  return request({
+    url: `/admin/end-users/${userId}/app-authorizations`,
+    method: 'post',
+    data
+  })
+}
+
 export function getEndUserKamis(userId, params) {
   return request({
     url: `/admin/end-users/${userId}/kamis`,

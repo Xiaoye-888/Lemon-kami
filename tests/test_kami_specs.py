@@ -23,6 +23,7 @@ from models import (
     KamiStatus,
     KamiType,
     MachineBindMode,
+    UserAppAuthorization,
     UserBindMode,
 )
 from point_service import PointServiceError, redeem_points_kami
@@ -682,12 +683,23 @@ def test_delete_app_cleans_app_scoped_child_rows_before_parent_rows():
             username="app-delete-user",
             points_balance=100,
         )
+        user = EndUser(app_id="app_demo", username="app-delete-user", password_hash="hash")
+        session.add(user)
         session.add(batch)
         session.add(account)
         session.add(AppInterfaceConfig(app_id="app_demo", interface_id=interface.id, enabled=True))
         session.commit()
+        session.refresh(user)
         session.refresh(batch)
         session.refresh(account)
+        session.add(
+            UserAppAuthorization(
+                app_id="app_demo",
+                user_id=user.id,
+                username=user.username,
+                granted_by="admin",
+            )
+        )
         session.add(
             Kami(
                 app_id="app_demo",
@@ -762,6 +774,9 @@ def test_delete_app_cleans_app_scoped_child_rows_before_parent_rows():
             assert session.exec(select(Kami).where(Kami.kami_code == "APPDEL001")).first() is None
             assert session.exec(
                 select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code == "APPDEL001")
+            ).all() == []
+            assert session.exec(
+                select(UserAppAuthorization).where(UserAppAuthorization.app_id == "app_demo")
             ).all() == []
             stale_logs = session.exec(
                 select(EventLog).where(EventLog.kami_code == "APPDEL001")

@@ -25,6 +25,15 @@ from models import (
     Kami,
     get_now,
 )
+from user_quota_service import (
+    create_user_app,
+    get_or_create_user_quota_account,
+    get_user_visible_apps,
+    issue_user_kamis,
+    list_user_issued_kamis,
+    user_can_manage_app,
+    user_quota_summary,
+)
 from point_service import (
     PointServiceError,
     consume_points,
@@ -63,6 +72,24 @@ class ConsumeRequest(BaseModel):
     uuid: Optional[str] = None
     device_uuid: Optional[str] = None
     fingerprint: Optional[str] = None
+
+
+class UserAppCreateRequest(BaseModel):
+    name: str = PydanticField(min_length=1, max_length=255)
+
+
+class UserKamiIssueRequest(BaseModel):
+    kami_type: str = PydanticField(min_length=1, max_length=32)
+    count: int = PydanticField(gt=0, le=1000)
+    batch_no: Optional[str] = PydanticField(None, max_length=64)
+    code_prefix: Optional[str] = PydanticField(None, max_length=32)
+    code_length: int = PydanticField(16, ge=4, le=64)
+    charset: str = PydanticField("upper_numeric", max_length=32)
+    points_amount: Optional[int] = PydanticField(None, gt=0)
+    points_valid_days: Optional[int] = PydanticField(None, ge=1)
+    times_total: Optional[int] = PydanticField(None, gt=0)
+    time_value: Optional[int] = PydanticField(None, gt=0)
+    time_unit: Optional[str] = PydanticField(None, max_length=32)
 
 
 def create_user_access_token(user: EndUser) -> str:
@@ -293,6 +320,142 @@ async def get_me(
 ):
     require_app_interface_enabled(session, current_user.app_id, "user.me")
     return {"success": True, "data": _user_data(current_user)}
+
+
+@router.get("/quotas", summary="Get current user quotas")
+async def get_user_quotas(
+    current_user: EndUser = Depends(get_current_end_user),
+    session: Session = Depends(get_session),
+):
+    account = get_or_create_user_quota_account(session, current_user.id, current_user.username)
+    session.commit()
+    return {"success": True, "data": user_quota_summary(account)}
+
+
+@router.get("/apps", summary="List current user apps")
+async def list_user_apps(
+    current_user: EndUser = Depends(get_current_end_user),
+    session: Session = Depends(get_session),
+):
+    apps = get_user_visible_apps(session, current_user)
+    session.commit()
+    return {
+        "success": True,
+        "data": [
+            {
+                "id": app.id,
+                "app_id": app.app_id,
+                "name": app.name,
+                "app_secret": app.app_secret,
+                "created_by": app.created_by,
+                "owner_user_id": app.owner_user_id,
+                "created_at": to_api_beijing_iso(app.created_at, naive="civil") if app.created_at else None,
+                "status": app.status,
+                "is_owned": app.owner_user_id == current_user.id,
+            }
+            for app in apps
+        ],
+    }
+
+
+@router.post("/apps", summary="Create user app")
+async def create_user_app_route(
+    payload: UserAppCreateRequest,
+    current_user: EndUser = Depends(get_current_end_user),
+    session: Session = Depends(get_session),
+):
+    try:
+        app, quota_result = create_user_app(session, current_user, payload.name.strip())
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    session.commit()
+    session.refresh(app)
+    return {
+        "success": True,
+        "message": "create app success",
+        "data": {
+            "id": app.id,
+            "app_id": app.app_id,
+            "name": app.name,
+            "app_secret": app.app_secret,
+            "rsa_public_key": app.rsa_public_key,
+            "owner_user_id": app.owner_user_id,
+            "created_by": app.created_by,
+            "created_at": to_api_beijing_iso(app.created_at, naive="civil") if app.created_at else None,
+            "status": app.status,
+            "quota": quota_result,
+        },
+    }
+
+
+@router.post("/apps/{app_id}/kamis/batch", summary="Issue user kamis")
+async def issue_user_kamis_route(
+    app_id: str,
+    payload: UserKamiIssueRequest,
+    current_user: EndUser = Depends(get_current_end_user),
+    session: Session = Depends(get_session),
+):
+    app = session.exec(select(App).where(App.app_id == app_id)).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="App not found")
+    if not user_can_manage_app(session, current_user, app_id):
+        raise HTTPException(status_code=403, detail="No permission to manage this app")
+
+    try:
+        result = issue_user_kamis(
+            session,
+            current_user,
+            app,
+            kami_type=payload.kami_type,
+            count=payload.count,
+            batch_no=payload.batch_no,
+            code_prefix=payload.code_prefix,
+            code_length=payload.code_length,
+            charset=payload.charset,
+            points_amount=payload.points_amount,
+            points_valid_days=payload.points_valid_days,
+            times_total=payload.times_total,
+            time_value=payload.time_value,
+            time_unit=payload.time_unit,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    session.commit()
+    return {"success": True, "message": "issue success", "data": result}
+
+
+@router.get("/apps/{app_id}/kamis", summary="List user issued kamis")
+async def list_user_kamis_route(
+    app_id: str,
+    current_user: EndUser = Depends(get_current_end_user),
+    session: Session = Depends(get_session),
+):
+    if not user_can_manage_app(session, current_user, app_id):
+        raise HTTPException(status_code=403, detail="No permission to manage this app")
+    kamis = list_user_issued_kamis(session, current_user, app_id)
+    session.commit()
+    return {
+        "success": True,
+        "data": [
+            {
+                "id": kami.id,
+                "app_id": kami.app_id,
+                "kami_code": kami.kami_code,
+                "kami_type": kami.kami_type.value if hasattr(kami.kami_type, "value") else kami.kami_type,
+                "status": kami.status.value if hasattr(kami.status, "value") else kami.status,
+                "batch_no": kami.batch_no,
+                "points_amount": kami.points_amount,
+                "points_valid_days": kami.points_valid_days,
+                "times_total": kami.times_total,
+                "times_remaining": kami.times_remaining,
+                "time_value": kami.time_value,
+                "time_unit": kami.time_unit,
+                "created_by_user_id": kami.created_by_user_id,
+                "created_at": to_api_beijing_iso(kami.created_at, naive="civil") if kami.created_at else None,
+            }
+            for kami in kamis
+        ],
+    }
 
 
 @router.get("/points/balance", summary="Get current points balance")

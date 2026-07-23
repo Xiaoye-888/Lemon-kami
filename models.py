@@ -70,6 +70,20 @@ class AuthorizationTransactionType(str, Enum):
     refund = "refund"
 
 
+class UserQuotaType(str, Enum):
+    app_create = "app_create"
+    kami_issue = "kami_issue"
+    recharge = "recharge"
+
+
+class UserQuotaTransactionType(str, Enum):
+    grant = "grant"
+    consume = "consume"
+    adjust = "adjust"
+    expire = "expire"
+    refund = "refund"
+
+
 class KamiStatus(str, Enum):
     unused = "unused"
     active = "active"
@@ -218,6 +232,61 @@ class AuthorizationTransaction(SQLModel, table=True):
     created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Created time")
 
 
+class UserQuotaAccount(SQLModel, table=True):
+    __tablename__ = "user_quota_accounts"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="end_users.id", unique=True, index=True, description="End-user ID")
+    username: Optional[str] = Field(default=None, max_length=64, index=True, description="End-user username")
+    app_create_balance: int = Field(default=0, description="Remaining app creation quota")
+    kami_issue_balance: int = Field(default=0, description="Remaining kami issue quota")
+    recharge_balance: int = Field(default=0, description="Remaining recharge quota")
+    total_app_create_granted: int = Field(default=0, description="Total granted app creation quota")
+    total_kami_issue_granted: int = Field(default=0, description="Total granted kami issue quota")
+    total_recharge_granted: int = Field(default=0, description="Total granted recharge quota")
+    status: int = Field(default=1, index=True, description="1 active, 0 disabled")
+    created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Created time")
+    updated_at: datetime = Field(default_factory=get_now_naive, description="Updated time")
+
+
+class UserQuotaTransaction(SQLModel, table=True):
+    __tablename__ = "user_quota_transactions"
+    __table_args__ = (
+        UniqueConstraint("account_id", "quota_type", "transaction_type", "biz_id", name="uk_user_quota_tx_account_type_biz"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    transaction_id: str = Field(unique=True, index=True, description="Public transaction ID")
+    account_id: int = Field(foreign_key="user_quota_accounts.id", index=True, description="Quota account ID")
+    user_id: Optional[int] = Field(default=None, foreign_key="end_users.id", index=True, description="End-user ID")
+    username: Optional[str] = Field(default=None, max_length=64, index=True, description="End-user username")
+    quota_type: UserQuotaType = Field(index=True, description="Quota type")
+    transaction_type: UserQuotaTransactionType = Field(index=True, description="Transaction type")
+    amount: int = Field(description="Signed quota delta")
+    balance_before: Optional[int] = Field(default=None, description="Balance before transaction")
+    balance_after: int = Field(description="Balance after transaction")
+    biz_id: Optional[str] = Field(default=None, max_length=128, index=True, description="Business idempotency key")
+    operator: Optional[str] = Field(default=None, max_length=255, description="Admin or user operator")
+    remark: Optional[str] = Field(default=None, description="Remark")
+    metadata_json: Optional[str] = Field(default=None, description="JSON metadata")
+    created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Created time")
+
+
+class UserAppAuthorization(SQLModel, table=True):
+    __tablename__ = "user_app_authorizations"
+    __table_args__ = (
+        UniqueConstraint("app_id", "user_id", name="uk_user_app_authorization"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    app_id: str = Field(max_length=64, foreign_key="apps.app_id", index=True, description="App ID")
+    user_id: int = Field(foreign_key="end_users.id", index=True, description="End-user ID")
+    username: Optional[str] = Field(default=None, max_length=64, index=True, description="End-user username")
+    granted_by: str = Field(max_length=255, description="Granting admin username")
+    remark: Optional[str] = Field(default=None, description="Remark")
+    created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Grant time")
+
+
 class App(SQLModel, table=True):
     __tablename__ = "apps"
 
@@ -229,6 +298,7 @@ class App(SQLModel, table=True):
     rsa_private_key: str = Field(description="平台RSA私钥")
     status: int = Field(default=1, description="启停状态：1启用，0禁用")
     created_by: Optional[str] = Field(default=None, description="创建人用户名")
+    owner_user_id: Optional[int] = Field(default=None, foreign_key="end_users.id", index=True, description="Owning end-user ID")
     created_at: datetime = Field(default_factory=get_now_naive, description="创建时间")
     signature_required: bool = Field(default=True, description="Require signed SDK requests")
     nonce_required: bool = Field(default=True, description="Require nonce replay protection")
@@ -382,6 +452,7 @@ class Kami(SQLModel, table=True):
     points_valid_days: Optional[int] = Field(default=None, description="Points validity days after redeem")
     redeemed_by_user_id: Optional[int] = Field(default=None, index=True, description="Redeeming end-user ID")
     redeemed_at: Optional[datetime] = Field(default=None, description="Redeemed time")
+    created_by_user_id: Optional[int] = Field(default=None, foreign_key="end_users.id", index=True, description="Card issuer end-user ID")
     time_value: Optional[int] = Field(default=None, description="Time-card duration value")
     time_unit: Optional[str] = Field(default=None, max_length=32, description="Time-card duration unit")
     times_total: Optional[int] = Field(default=None, description="Total allowed uses for times cards")

@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from database import init_db
 from routes_sdk import router as sdk_router
+from routes_admin_advanced import router as admin_advanced_router
 from routes_admin import router as admin_router
 from routes_user import router as user_router
 from routes_docs import router as docs_router
@@ -136,6 +137,7 @@ app_logger.info(f"✅ SDK download endpoint configured")
 
 # 注册路由
 app.include_router(sdk_router)
+app.include_router(admin_advanced_router)
 app.include_router(admin_router)
 app.include_router(user_router)
 app.include_router(docs_router)
