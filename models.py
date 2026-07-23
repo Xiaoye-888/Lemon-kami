@@ -3,7 +3,7 @@ from typing import Optional, List
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from enum import Enum
-from sqlalchemy import Column, String, Text, UniqueConstraint
+from sqlalchemy import Column, ForeignKey, String, Text, TypeDecorator, UniqueConstraint
 
 # 中国时区
 CST = ZoneInfo("Asia/Shanghai")
@@ -16,6 +16,20 @@ def get_now():
 def get_now_naive():
     """获取当前中国时间（naive，不带时区信息，用于存入数据库）"""
     return datetime.now(CST).replace(tzinfo=None)
+
+
+class AppIdType(TypeDecorator):
+    impl = String(64)
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "mysql":
+            return dialect.type_descriptor(String(64, collation="utf8mb4_unicode_ci"))
+        return dialect.type_descriptor(String(64))
+
+
+def app_id_fk_column():
+    return Column(AppIdType(), ForeignKey("apps.app_id"), nullable=False, index=True)
 
 
 class KamiType(str, Enum):
@@ -279,7 +293,7 @@ class UserAppAuthorization(SQLModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    app_id: str = Field(max_length=64, foreign_key="apps.app_id", index=True, description="App ID")
+    app_id: str = Field(sa_column=app_id_fk_column(), description="App ID")
     user_id: int = Field(foreign_key="end_users.id", index=True, description="End-user ID")
     username: Optional[str] = Field(default=None, max_length=64, index=True, description="End-user username")
     granted_by: str = Field(max_length=255, description="Granting admin username")
@@ -402,7 +416,7 @@ class KamiSpec(SQLModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    app_id: str = Field(max_length=64, foreign_key="apps.app_id", index=True, description="App ID")
+    app_id: str = Field(sa_column=app_id_fk_column(), description="App ID")
     spec_key: str = Field(max_length=255, index=True, description="Deterministic specification identity")
     spec_name: str = Field(max_length=128, index=True, description="Specification display name")
     spec_group: KamiSpecGroup = Field(default=KamiSpecGroup.custom, index=True, description="common/custom")
@@ -440,7 +454,7 @@ class Kami(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     spec_id: Optional[int] = Field(default=None, foreign_key="kami_specs.id", index=True)
-    app_id: str = Field(max_length=64, foreign_key="apps.app_id", index=True, description="所属应用ID")
+    app_id: str = Field(sa_column=app_id_fk_column(), description="所属应用ID")
     kami_code: str = Field(unique=True, index=True, description="卡密代码")
     kami_type: KamiType = Field(description="卡密类型")
     status: KamiStatus = Field(default=KamiStatus.unused, description="卡密状态")
@@ -500,7 +514,7 @@ class KamiBatch(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     spec_id: Optional[int] = Field(default=None, foreign_key="kami_specs.id", index=True)
-    app_id: str = Field(max_length=64, foreign_key="apps.app_id", index=True, description="App ID")
+    app_id: str = Field(sa_column=app_id_fk_column(), description="App ID")
     batch_no: str = Field(max_length=64, index=True, description="Batch number")
     kami_type: KamiType = Field(index=True, description="Kami type")
     points_amount: Optional[int] = Field(default=None, description="Points face value")
@@ -553,7 +567,7 @@ class KamiDeviceBinding(SQLModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    app_id: str = Field(max_length=64, foreign_key="apps.app_id", index=True, description="所属应用ID")
+    app_id: str = Field(sa_column=app_id_fk_column(), description="所属应用ID")
     kami_code: str = Field(foreign_key="kamis.kami_code", index=True, description="卡密代码")
     device_uuid: str = Field(index=True, description="设备UUID")
     fingerprint: str = Field(index=True, description="设备指纹")
@@ -566,7 +580,7 @@ class Device(SQLModel, table=True):
     __tablename__ = "devices"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    app_id: str = Field(max_length=64, foreign_key="apps.app_id", index=True, description="所属应用ID")
+    app_id: str = Field(sa_column=app_id_fk_column(), description="所属应用ID")
     uuid: str = Field(index=True, description="设备UUID")
     fingerprint: str = Field(description="硬件特征码")
     last_ip: Optional[str] = Field(default=None, description="最后登录IP")
@@ -603,7 +617,7 @@ class AppAuthorization(SQLModel, table=True):
     __tablename__ = "app_authorizations"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    app_id: str = Field(max_length=64, foreign_key="apps.app_id", index=True, description="应用ID")
+    app_id: str = Field(sa_column=app_id_fk_column(), description="应用ID")
     username: str = Field(index=True, description="被授权的用户名")
     granted_by: str = Field(description="授权人用户名")
     created_at: datetime = Field(default_factory=get_now_naive, description="授权时间")
@@ -643,7 +657,7 @@ class AppInterfaceConfig(SQLModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    app_id: str = Field(max_length=64, foreign_key="apps.app_id", index=True, description="App ID")
+    app_id: str = Field(sa_column=app_id_fk_column(), description="App ID")
     interface_id: int = Field(foreign_key="api_interfaces.id", index=True, description="API interface ID")
     enabled: bool = Field(default=False, index=True, description="Whether interface is enabled for app")
     quota_limit: Optional[int] = Field(default=None, description="Optional call quota")

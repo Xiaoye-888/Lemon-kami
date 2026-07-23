@@ -64,6 +64,46 @@ def _release_mysql_init_lock(conn) -> None:
         logger.exception("Failed to release database init lock")
 
 
+def _ensure_end_users_schema():
+    """Create the end_users table early so MySQL foreign keys can reference it during bootstrap."""
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        result = conn.execute(text("SHOW TABLES"))
+        existing_tables = [row[0] for row in result.fetchall()]
+
+        if "end_users" not in existing_tables:
+            conn.execute(text("""
+                CREATE TABLE end_users (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    app_id VARCHAR(64),
+                    username VARCHAR(64) NOT NULL UNIQUE,
+                    password_hash VARCHAR(255) NOT NULL,
+                    email VARCHAR(255),
+                    phone VARCHAR(64),
+                    status INT DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    last_login DATETIME,
+                    INDEX idx_app_id (app_id),
+                    INDEX idx_username (username),
+                    INDEX idx_email (email),
+                    INDEX idx_status (status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='End users'
+            """))
+            conn.commit()
+            return
+
+        columns = {
+            row[0]
+            for row in conn.execute(text("SHOW COLUMNS FROM end_users")).fetchall()
+        }
+        if "app_id" not in columns:
+            conn.execute(text("ALTER TABLE end_users ADD COLUMN app_id VARCHAR(64) DEFAULT NULL"))
+            conn.commit()
+            conn.execute(text("CREATE INDEX idx_end_users_app_id ON end_users (app_id)"))
+            conn.commit()
+
+
 def _ensure_points_schema():
     """Create points-system tables and columns for existing databases."""
     from sqlalchemy import text
@@ -390,7 +430,7 @@ def _ensure_points_schema():
             conn.execute(text("""
                 CREATE TABLE app_interface_configs (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    app_id VARCHAR(64) NOT NULL,
+                    app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
                     interface_id INT NOT NULL,
                     enabled BOOLEAN DEFAULT FALSE,
                     quota_limit INT DEFAULT NULL,
@@ -414,7 +454,7 @@ def _ensure_points_schema():
             conn.execute(text("""
                 CREATE TABLE kami_specs (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    app_id VARCHAR(64) NOT NULL,
+                    app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
                     spec_key VARCHAR(255) NOT NULL,
                     spec_name VARCHAR(128) NOT NULL,
                     spec_group VARCHAR(32) DEFAULT 'custom',
@@ -450,7 +490,7 @@ def _ensure_points_schema():
                 CREATE TABLE kami_batches (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     spec_id INT DEFAULT NULL,
-                    app_id VARCHAR(64) NOT NULL,
+                    app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
                     batch_no VARCHAR(64) NOT NULL,
                     kami_type ENUM('hour', 'day', 'week', 'month', 'quarter', 'year', 'lifetime', 'points', 'times') NOT NULL,
                     points_amount INT DEFAULT NULL,
@@ -765,6 +805,8 @@ def _init_db_unlocked():
     
     # 等待数据库就绪
     wait_for_db()
+
+    _ensure_end_users_schema()
     
     # 检查表是否已存在
     with engine.connect() as conn:
@@ -812,7 +854,7 @@ def _init_db_unlocked():
                 conn.execute(text("""
                     CREATE TABLE apps (
                         id INT AUTO_INCREMENT PRIMARY KEY,
-                        app_id VARCHAR(64) NOT NULL UNIQUE,
+                        app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL UNIQUE,
                         name VARCHAR(255) NOT NULL,
                         app_secret VARCHAR(255) NOT NULL,
                         rsa_public_key TEXT NOT NULL,
@@ -845,7 +887,7 @@ def _init_db_unlocked():
                 conn.execute(text("""
                     CREATE TABLE kamis (
                         id INT AUTO_INCREMENT PRIMARY KEY,
-                        app_id VARCHAR(64) NOT NULL,
+                        app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
                         kami_code VARCHAR(255) NOT NULL UNIQUE,
                         kami_type ENUM('hour', 'day', 'week', 'month', 'quarter', 'year', 'lifetime', 'points', 'times') NOT NULL,
                         status ENUM('unused', 'active', 'frozen') DEFAULT 'unused',
@@ -899,7 +941,7 @@ def _init_db_unlocked():
                 conn.execute(text("""
                     CREATE TABLE devices (
                         id INT AUTO_INCREMENT PRIMARY KEY,
-                        app_id VARCHAR(64) NOT NULL,
+                        app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
                         uuid VARCHAR(255) NOT NULL,
                         fingerprint TEXT NOT NULL,
                         last_ip VARCHAR(255),
@@ -917,7 +959,7 @@ def _init_db_unlocked():
                 conn.execute(text("""
                     CREATE TABLE kami_device_bindings (
                         id INT AUTO_INCREMENT PRIMARY KEY,
-                        app_id VARCHAR(64) NOT NULL,
+                        app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
                         kami_code VARCHAR(255) NOT NULL,
                         device_uuid VARCHAR(255) NOT NULL,
                         fingerprint VARCHAR(255) NOT NULL,
@@ -942,7 +984,7 @@ def _init_db_unlocked():
                 conn.execute(text("""
                     CREATE TABLE event_logs (
                         id INT AUTO_INCREMENT PRIMARY KEY,
-                        app_id VARCHAR(64),
+                        app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
                         kami_code VARCHAR(255),
                         event_type VARCHAR(255) NOT NULL,
                         ip_address VARCHAR(255),
@@ -968,7 +1010,7 @@ def _init_db_unlocked():
                 conn.execute(text("""
                     CREATE TABLE app_authorizations (
                         id INT AUTO_INCREMENT PRIMARY KEY,
-                        app_id VARCHAR(64) NOT NULL,
+                        app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
                         username VARCHAR(255) NOT NULL,
                         granted_by VARCHAR(255) NOT NULL,
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
