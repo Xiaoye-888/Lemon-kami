@@ -44,9 +44,29 @@
         <el-table-column prop="updated_at" label="更新时间" width="180">
           <template #default="{ row }">{{ formatBeijingTime(row.updated_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="100" fixed="right">
+        <el-table-column label="操作" width="170" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" type="primary" plain @click="openEdit(row)">编辑</el-button>
+            <div class="action-group">
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                :disabled="Boolean(rowActionLoading)"
+                @click.stop="openEdit(row)"
+              >
+                编辑
+              </el-button>
+              <el-button
+                size="small"
+                type="danger"
+                plain
+                :loading="rowActionLoading === `delete:${row.id}`"
+                :disabled="Boolean(rowActionLoading)"
+                @click.stop="deleteNotice(row)"
+              >
+                删除
+              </el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -87,10 +107,10 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { getApps } from '../api/admin'
-import { createAppNotice, getAppNotices, updateAppNotice } from '../api/appContent'
+import { createAppNotice, deleteAppNotice, getAppNotices, updateAppNotice } from '../api/appContent'
 import { formatBeijingTime } from '../utils/datetime'
 
 const apps = ref([])
@@ -98,6 +118,7 @@ const notices = ref([])
 const selectedAppId = ref('')
 const loading = ref(false)
 const saving = ref(false)
+const rowActionLoading = ref('')
 const dialogVisible = ref(false)
 const editingNotice = ref(null)
 
@@ -196,6 +217,39 @@ const saveNotice = async () => {
   }
 }
 
+const deleteNotice = async (row) => {
+  const appId = selectedAppId.value
+  if (!appId || rowActionLoading.value) return
+
+  rowActionLoading.value = `delete:${row.id}`
+  try {
+    await ElMessageBox.confirm(
+      `删除后该公告将不再展示给客户端。\n\n公告标题：${row.title || '未填写'}\n公告级别：${noticeLevelText(row.level)}\n启用状态：${row.enabled ? '启用' : '停用'}\n\n是否继续删除？`,
+      '确认删除公告',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger'
+      }
+    )
+    await deleteAppNotice(appId, row.id)
+    ElMessage.success('公告已删除')
+    if (editingNotice.value?.id === row.id) {
+      dialogVisible.value = false
+      editingNotice.value = null
+    }
+    await loadNotices()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      console.error('删除公告失败:', error)
+      ElMessage.error('删除公告失败')
+    }
+  } finally {
+    rowActionLoading.value = ''
+  }
+}
+
 onMounted(async () => {
   await loadApps()
   await loadNotices()
@@ -222,5 +276,11 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.action-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

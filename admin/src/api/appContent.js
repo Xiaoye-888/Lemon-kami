@@ -23,6 +23,13 @@ export function updateAppNotice(appId, noticeId, data) {
   })
 }
 
+export function deleteAppNotice(appId, noticeId) {
+  return request({
+    url: `/admin/apps/${appId}/notices/${noticeId}`,
+    method: 'delete'
+  })
+}
+
 export function getAppVersions(appId, params) {
   return request({
     url: `/admin/apps/${appId}/updates`,

@@ -219,6 +219,14 @@ def test_admin_notice_and_version_management_records_history_and_validates_force
         assert len(notices) == 1
         assert notices[0]["title"] == "系统公告"
 
+        delete_notice_response = client.delete(f"/api/v1/admin/apps/app_demo/notices/{notices[0]['id']}")
+        assert delete_notice_response.status_code == 200
+        assert delete_notice_response.json()["success"] is True
+
+        empty_notices_response = client.get("/api/v1/admin/apps/app_demo/notices")
+        assert empty_notices_response.status_code == 200
+        assert empty_notices_response.json()["data"]["items"] == []
+
         invalid_update_response = client.post(
             "/api/v1/admin/apps/app_demo/updates",
             json={

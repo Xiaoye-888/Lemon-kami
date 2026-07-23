@@ -138,6 +138,22 @@ def test_app_versions_row_actions_write_immediately_and_guard_duplicates():
     assert "openEdit(row)" not in archive_source
 
 
+def test_app_notices_can_be_deleted_with_explicit_confirmation():
+    source = (PROJECT_ROOT / "admin/src/views/AppNotices.vue").read_text(encoding="utf-8")
+    api_source = (PROJECT_ROOT / "admin/src/api/appContent.js").read_text(encoding="utf-8")
+
+    assert "deleteAppNotice" in api_source
+    assert "method: 'delete'" in api_source
+    assert "deleteAppNotice" in source
+    assert "const rowActionLoading = ref('')" in source
+    assert '@click.stop="deleteNotice(row)"' in source
+    assert ':loading="rowActionLoading === `delete:${row.id}`"' in source
+    assert "rowActionLoading.value = `delete:${row.id}`" in source
+    assert "确认删除公告" in source
+    assert "deleteAppNotice(appId, row.id)" in source
+    assert "公告已删除" in source
+
+
 def test_app_versions_header_removes_default_title_and_copy_check_entry():
     source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
 

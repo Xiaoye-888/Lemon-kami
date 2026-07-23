@@ -1177,6 +1177,39 @@ async def update_app_notice(
     return {"success": True, "message": "公告已更新", "data": notice_payload(notice)}
 
 
+@router.delete("/apps/{app_id}/notices/{notice_id}", summary="删除公告")
+async def delete_app_notice(
+    app_id: str,
+    notice_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _get_manageable_app(session, app_id, current_user)
+    notice = session.exec(
+        select(AppNotice).where(AppNotice.id == notice_id, AppNotice.app_id == app_id)
+    ).first()
+    if not notice:
+        raise HTTPException(status_code=404, detail="公告不存在")
+
+    notice_info = {
+        "notice_id": notice.id,
+        "title": notice.title,
+        "revision": notice.revision,
+        "enabled": notice.enabled,
+    }
+    session.delete(notice)
+    session.commit()
+    log_admin_action(
+        session=session,
+        username=current_user.get("sub"),
+        event_type="app_notice_delete",
+        app_id=app_id,
+        payload=notice_info,
+        message=f"用户 {current_user.get('sub')} 删除了公告 {notice_info['title']}",
+    )
+    return {"success": True, "message": "公告已删除"}
+
+
 def _validate_version_payload(payload: AppVersionRequest) -> None:
     status = normalize_update_status(payload.status)
     if payload.force_update and status == "published" and not payload.download_url:
