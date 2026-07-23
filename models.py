@@ -7,6 +7,7 @@ from sqlalchemy import Column, ForeignKey, String, Text, TypeDecorator, UniqueCo
 
 # 中国时区
 CST = ZoneInfo("Asia/Shanghai")
+MYSQL_APP_ID_COLLATION = "utf8mb4_unicode_ci"
 
 def get_now():
     """获取当前中国时间（带时区）"""
@@ -20,11 +21,11 @@ def get_now_naive():
 
 class AppIdType(TypeDecorator):
     impl = String(64)
-    cache_ok = True
+    cache_ok = False
 
     def load_dialect_impl(self, dialect):
         if dialect.name == "mysql":
-            return dialect.type_descriptor(String(64, collation="utf8mb4_unicode_ci"))
+            return dialect.type_descriptor(String(64, collation=MYSQL_APP_ID_COLLATION))
         return dialect.type_descriptor(String(64))
 
 

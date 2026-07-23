@@ -104,6 +104,36 @@ def _ensure_end_users_schema():
             conn.commit()
 
 
+def _ensure_mysql_apps_app_id_collation():
+    """Align the app_id collation used by new MySQL tables with the existing apps table."""
+    from sqlalchemy import text
+    import models
+
+    with engine.connect() as conn:
+        result = conn.execute(text("SHOW TABLES"))
+        existing_tables = {row[0] for row in result.fetchall()}
+        if "apps" not in existing_tables:
+            return
+
+        columns = {
+            row[0]: row[2]
+            for row in conn.execute(text("SHOW FULL COLUMNS FROM apps")).fetchall()
+        }
+        collation = columns.get("app_id")
+        if collation:
+            models.MYSQL_APP_ID_COLLATION = collation
+            debug_print(f"Detected existing apps.app_id collation: {collation}")
+
+
+def _mysql_app_id_column(nullable: bool = False) -> str:
+    from models import MYSQL_APP_ID_COLLATION
+
+    column = f"VARCHAR(64) CHARACTER SET utf8mb4 COLLATE {MYSQL_APP_ID_COLLATION}"
+    if not nullable:
+        column += " NOT NULL"
+    return column
+
+
 def _ensure_points_schema():
     """Create points-system tables and columns for existing databases."""
     from sqlalchemy import text
@@ -427,10 +457,10 @@ def _ensure_points_schema():
                     conn.commit()
 
         if "app_interface_configs" not in existing_tables:
-            conn.execute(text("""
+            conn.execute(text(f"""
                 CREATE TABLE app_interface_configs (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+                    app_id {_mysql_app_id_column()},
                     interface_id INT NOT NULL,
                     enabled BOOLEAN DEFAULT FALSE,
                     quota_limit INT DEFAULT NULL,
@@ -451,10 +481,10 @@ def _ensure_points_schema():
             conn.commit()
 
         if "kami_specs" not in existing_tables:
-            conn.execute(text("""
+            conn.execute(text(f"""
                 CREATE TABLE kami_specs (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+                    app_id {_mysql_app_id_column()},
                     spec_key VARCHAR(255) NOT NULL,
                     spec_name VARCHAR(128) NOT NULL,
                     spec_group VARCHAR(32) DEFAULT 'custom',
@@ -486,11 +516,11 @@ def _ensure_points_schema():
             conn.commit()
 
         if "kami_batches" not in existing_tables:
-            conn.execute(text("""
+            conn.execute(text(f"""
                 CREATE TABLE kami_batches (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     spec_id INT DEFAULT NULL,
-                    app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+                    app_id {_mysql_app_id_column()},
                     batch_no VARCHAR(64) NOT NULL,
                     kami_type ENUM('hour', 'day', 'week', 'month', 'quarter', 'year', 'lifetime', 'points', 'times') NOT NULL,
                     points_amount INT DEFAULT NULL,
@@ -568,7 +598,7 @@ def _ensure_points_schema():
             conn.execute(text(f"""
                 CREATE TABLE kami_device_bindings (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    app_id VARCHAR({app_id_length}) NOT NULL,
+                    app_id {_mysql_app_id_column()},
                     kami_code VARCHAR({kami_code_length}) NOT NULL,
                     device_uuid VARCHAR(255) NOT NULL,
                     fingerprint VARCHAR(255) NOT NULL,
@@ -790,6 +820,7 @@ def _init_db_unlocked():
     """初始化数据库表"""
     import sys
     from models import SQLModel, AdminUser
+    import models
     from sqlalchemy import text
 
     if engine.dialect.name == "sqlite":
@@ -807,6 +838,8 @@ def _init_db_unlocked():
     wait_for_db()
 
     _ensure_end_users_schema()
+    _ensure_mysql_apps_app_id_collation()
+    debug_print(f"Using MySQL app_id collation: {models.MYSQL_APP_ID_COLLATION}")
     
     # 检查表是否已存在
     with engine.connect() as conn:
@@ -851,10 +884,10 @@ def _init_db_unlocked():
             
             # 2. 创建 apps 表（app_id 使用 VARCHAR(64)）
             if 'apps' not in existing_tables:
-                conn.execute(text("""
+                conn.execute(text(f"""
                     CREATE TABLE apps (
                         id INT AUTO_INCREMENT PRIMARY KEY,
-                        app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL UNIQUE,
+                        app_id {_mysql_app_id_column()} UNIQUE,
                         name VARCHAR(255) NOT NULL,
                         app_secret VARCHAR(255) NOT NULL,
                         rsa_public_key TEXT NOT NULL,
@@ -884,10 +917,10 @@ def _init_db_unlocked():
             
             # 3. 创建 kamis 表
             if 'kamis' not in existing_tables:
-                conn.execute(text("""
+                conn.execute(text(f"""
                     CREATE TABLE kamis (
                         id INT AUTO_INCREMENT PRIMARY KEY,
-                        app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+                        app_id {_mysql_app_id_column()},
                         kami_code VARCHAR(255) NOT NULL UNIQUE,
                         kami_type ENUM('hour', 'day', 'week', 'month', 'quarter', 'year', 'lifetime', 'points', 'times') NOT NULL,
                         status ENUM('unused', 'active', 'frozen') DEFAULT 'unused',
@@ -938,10 +971,10 @@ def _init_db_unlocked():
             
             # 4. 创建 devices 表
             if 'devices' not in existing_tables:
-                conn.execute(text("""
+                conn.execute(text(f"""
                     CREATE TABLE devices (
                         id INT AUTO_INCREMENT PRIMARY KEY,
-                        app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+                        app_id {_mysql_app_id_column()},
                         uuid VARCHAR(255) NOT NULL,
                         fingerprint TEXT NOT NULL,
                         last_ip VARCHAR(255),
@@ -956,10 +989,10 @@ def _init_db_unlocked():
                 debug_print(msg)
 
             if 'kami_device_bindings' not in existing_tables:
-                conn.execute(text("""
+                conn.execute(text(f"""
                     CREATE TABLE kami_device_bindings (
                         id INT AUTO_INCREMENT PRIMARY KEY,
-                        app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+                        app_id {_mysql_app_id_column()},
                         kami_code VARCHAR(255) NOT NULL,
                         device_uuid VARCHAR(255) NOT NULL,
                         fingerprint VARCHAR(255) NOT NULL,
@@ -981,10 +1014,10 @@ def _init_db_unlocked():
             
             # 5. 创建 event_logs 表
             if 'event_logs' not in existing_tables:
-                conn.execute(text("""
+                conn.execute(text(f"""
                     CREATE TABLE event_logs (
                         id INT AUTO_INCREMENT PRIMARY KEY,
-                        app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+                        app_id {_mysql_app_id_column(nullable=True)},
                         kami_code VARCHAR(255),
                         event_type VARCHAR(255) NOT NULL,
                         ip_address VARCHAR(255),
@@ -1007,10 +1040,10 @@ def _init_db_unlocked():
             
             # 6. 创建 app_authorizations 表（app_id 同样使用 VARCHAR(64)）
             if 'app_authorizations' not in existing_tables:
-                conn.execute(text("""
+                conn.execute(text(f"""
                     CREATE TABLE app_authorizations (
                         id INT AUTO_INCREMENT PRIMARY KEY,
-                        app_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+                        app_id {_mysql_app_id_column()},
                         username VARCHAR(255) NOT NULL,
                         granted_by VARCHAR(255) NOT NULL,
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
