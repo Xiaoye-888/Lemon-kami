@@ -40,6 +40,28 @@ else:
     })
 
 engine = create_engine(settings.DATABASE_URL, **engine_kwargs)
+_INIT_DB_LOCK_NAME = "lemon_kami:init_db"
+
+
+def _acquire_mysql_init_lock(conn, timeout_seconds: int = 300) -> None:
+    from sqlalchemy import text
+
+    result = conn.execute(
+        text("SELECT GET_LOCK(:lock_name, :timeout)"),
+        {"lock_name": _INIT_DB_LOCK_NAME, "timeout": timeout_seconds},
+    )
+    lock_status = result.scalar()
+    if lock_status != 1:
+        raise RuntimeError(f"Failed to acquire database init lock: {lock_status}")
+
+
+def _release_mysql_init_lock(conn) -> None:
+    from sqlalchemy import text
+
+    try:
+        conn.execute(text("SELECT RELEASE_LOCK(:lock_name)"), {"lock_name": _INIT_DB_LOCK_NAME})
+    except Exception:
+        logger.exception("Failed to release database init lock")
 
 
 def _ensure_points_schema():
@@ -707,6 +729,24 @@ def wait_for_db(max_retries=30, retry_interval=2):
 
 
 def init_db():
+    """初始化数据库表（MySQL 下用 advisory lock 串行化多 worker 启动）"""
+    if engine.dialect.name == "sqlite":
+        return _init_db_unlocked()
+
+    wait_for_db()
+
+    lock_conn = engine.connect()
+    try:
+        _acquire_mysql_init_lock(lock_conn)
+        return _init_db_unlocked()
+    finally:
+        try:
+            _release_mysql_init_lock(lock_conn)
+        finally:
+            lock_conn.close()
+
+
+def _init_db_unlocked():
     """初始化数据库表"""
     import sys
     from models import SQLModel, AdminUser
