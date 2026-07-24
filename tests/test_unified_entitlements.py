@@ -176,6 +176,25 @@ def test_notice_and_update_check_are_separate_sdk_surfaces():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_missing_app_notice_and_update_check_do_not_create_event_logs():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_sdk.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    try:
+        notice_response = client.get("/api/v1/sdk/apps/deleted_app/notice")
+        update_response = client.get("/api/v1/sdk/apps/deleted_app/updates/check")
+
+        assert notice_response.status_code == 404
+        assert update_response.status_code == 404
+        with Session(engine) as session:
+            assert session.exec(select(EventLog)).all() == []
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_admin_can_grant_user_quota_and_user_can_create_apps_without_app_create_consumption():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

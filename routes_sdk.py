@@ -1194,8 +1194,7 @@ async def get_app_notice(
     client_ip = _client_ip_from_request(request)
     user_agent = request.headers.get("user-agent", "")
     app = session.exec(select(App).where(App.app_id == app_id)).first()
-    if not app:
-        _record_event_log(session, app_id, None, "notice", client_ip, None, user_agent, status=0, message="应用不存在")
+    if app is None:
         raise HTTPException(status_code=404, detail="App not found")
     if app.status != 1:
         _record_event_log(session, app_id, None, "notice", client_ip, None, user_agent, status=0, message="应用已禁用")
@@ -1230,8 +1229,7 @@ async def check_app_update(
     client_ip = _client_ip_from_request(request)
     user_agent = request.headers.get("user-agent", "")
     app = session.exec(select(App).where(App.app_id == app_id)).first()
-    if not app:
-        _record_event_log(session, app_id, None, "update_check", client_ip, None, user_agent, status=0, message="应用不存在")
+    if app is None:
         raise HTTPException(status_code=404, detail="App not found")
     if app.status != 1:
         _record_event_log(session, app_id, None, "update_check", client_ip, None, user_agent, status=0, message="应用已禁用")
