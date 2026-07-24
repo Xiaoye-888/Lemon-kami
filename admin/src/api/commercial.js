@@ -46,6 +46,14 @@ export function getRechargeOrders(params) {
   })
 }
 
+export function getCommercialMerchants(params) {
+  return request({
+    url: '/admin/commercial/merchants',
+    method: 'get',
+    params
+  })
+}
+
 export function approveRechargeOrder(orderNo, data = {}) {
   return request({
     url: `/admin/commercial/recharge-orders/${orderNo}/approve`,

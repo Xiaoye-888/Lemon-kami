@@ -128,9 +128,17 @@ def _spec_payload(spec: KamiSpec) -> dict:
     }
 
 
+async def get_current_merchant(
+    current_user: EndUser = Depends(routes_user.get_current_end_user),
+) -> EndUser:
+    if current_user.app_id is not None:
+        raise HTTPException(status_code=403, detail="application users cannot access merchant console")
+    return current_user
+
+
 @router.get("/me", summary="Get current merchant profile")
 async def get_merchant_me(
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
 ):
     return {
         "success": True,
@@ -151,7 +159,7 @@ async def get_merchant_me(
 
 @router.get("/quotas", summary="Get merchant quota summary")
 async def get_merchant_quotas(
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     data = merchant_quota_summary(session, current_user)
@@ -163,7 +171,7 @@ async def get_merchant_quotas(
 async def list_merchant_quota_transactions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     return {
@@ -179,7 +187,7 @@ async def list_merchant_quota_transactions(
 
 @router.get("/recharge/config", summary="Get merchant recharge config")
 async def get_merchant_recharge_config(
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     return {"success": True, "data": recharge_config_payload(session, enabled_only=True)}
@@ -188,7 +196,7 @@ async def get_merchant_recharge_config(
 @router.post("/recharge/preview", summary="Preview merchant recharge")
 async def preview_merchant_recharge(
     payload: RechargePreviewRequest,
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     try:
@@ -206,7 +214,7 @@ async def preview_merchant_recharge(
 @router.post("/recharge/orders", summary="Create merchant recharge order")
 async def create_merchant_recharge_order(
     payload: RechargeOrderCreateRequest,
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     try:
@@ -232,7 +240,7 @@ async def list_merchant_recharge_orders(
     status: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     statement = select(RechargeOrder).where(RechargeOrder.user_id == current_user.id)
@@ -260,7 +268,7 @@ async def list_merchant_recharge_orders(
 @router.get("/recharge/orders/{order_no}", summary="Get merchant recharge order detail")
 async def get_merchant_recharge_order(
     order_no: str,
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     order = get_recharge_order_or_404(session, order_no)
@@ -272,7 +280,7 @@ async def get_merchant_recharge_order(
 @router.get("/recharge/orders/{order_no}/proof", summary="Get merchant recharge proof")
 async def get_merchant_recharge_proof(
     order_no: str,
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     order = get_recharge_order_or_404(session, order_no)
@@ -285,7 +293,7 @@ async def get_merchant_recharge_proof(
 
 @router.get("/apps", summary="List merchant apps")
 async def list_merchant_apps(
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     apps = get_user_visible_apps(session, current_user)
@@ -295,7 +303,7 @@ async def list_merchant_apps(
 @router.post("/apps", summary="Create merchant self-owned app")
 async def create_merchant_app(
     payload: MerchantAppCreateRequest,
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     try:
@@ -314,7 +322,7 @@ async def create_merchant_app(
 @router.get("/apps/{app_id}/specs", summary="List specs for a merchant app")
 async def list_merchant_app_specs(
     app_id: str,
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     if not user_can_manage_app(session, current_user, app_id):
@@ -331,7 +339,7 @@ async def list_merchant_app_specs(
 async def issue_merchant_kamis(
     app_id: str,
     payload: MerchantKamiIssueRequest,
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     app = session.exec(select(App).where(App.app_id == app_id)).first()
@@ -412,7 +420,7 @@ async def issue_merchant_kamis(
 @router.get("/apps/{app_id}/kamis", summary="List merchant issued kamis")
 async def list_merchant_kamis(
     app_id: str,
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     if not user_can_manage_app(session, current_user, app_id):
@@ -446,7 +454,7 @@ async def list_merchant_kamis(
 @router.get("/apps/{app_id}/batches", summary="List merchant issued batches")
 async def list_merchant_batches(
     app_id: str,
-    current_user: EndUser = Depends(routes_user.get_current_end_user),
+    current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     if not user_can_manage_app(session, current_user, app_id):

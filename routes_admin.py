@@ -4656,7 +4656,7 @@ def _end_user_filter_conditions(
     status: Optional[int] = None,
     app_id: Optional[str] = None,
 ):
-    conditions = []
+    conditions = [EndUser.app_id.is_not(None)]
     if keyword:
         conditions.append(
             or_(

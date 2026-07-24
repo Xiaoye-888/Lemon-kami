@@ -39,7 +39,6 @@ const numberText = (value) => Number(value || 0).toLocaleString('zh-CN')
 
 const metrics = computed(() => [
   { label: '发卡额度', value: numberText(quotas.value.kami_issue_balance) },
-  { label: '建站额度', value: numberText(quotas.value.app_create_balance) },
   { label: '累计发卡额度', value: numberText(quotas.value.total_kami_issue_granted) },
   { label: '账户状态', value: quotas.value.status === 0 ? '停用' : '正常' }
 ])

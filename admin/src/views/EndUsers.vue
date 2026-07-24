@@ -88,10 +88,8 @@
         <el-table-column prop="last_login" label="最近登录" width="180">
           <template #default="{ row }">{{ formatOptionalTime(row.last_login) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="330" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" type="primary" plain @click="showQuotaDialog(row)">额度管理</el-button>
-            <el-button size="small" type="success" plain @click="showAppAuthorizationDialog(row)">应用授权</el-button>
             <el-button size="small" type="primary" plain @click="showGrantAuthorizationDialog(row)">分配授权</el-button>
             <el-button size="small" @click="showUserKamisDialog(row)">授权明细</el-button>
             <el-button
@@ -215,67 +213,6 @@
         </el-table-column>
       </el-table>
     </el-dialog>
-    <el-dialog v-model="quotaVisible" :title="`额度管理 - ${quotaForm.username || '用户'}`" width="720px">
-      <div v-loading="quotaLoading">
-        <el-descriptions v-if="quotaSummary" :column="2" border>
-          <el-descriptions-item label="用户">{{ quotaSummary.username || quotaForm.username }}</el-descriptions-item>
-          <el-descriptions-item label="额度账户ID">{{ quotaSummary.quota_account_id || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="建站额度">{{ quotaSummary.app_create_balance ?? 0 }}</el-descriptions-item>
-          <el-descriptions-item label="发卡额度">{{ quotaSummary.kami_issue_balance ?? 0 }}</el-descriptions-item>
-          <el-descriptions-item label="充值额度">{{ quotaSummary.recharge_balance ?? 0 }}</el-descriptions-item>
-          <el-descriptions-item label="更新时间">{{ formatOptionalTime(quotaSummary.updated_at) }}</el-descriptions-item>
-        </el-descriptions>
-        <el-divider />
-        <el-form :model="quotaForm" label-width="100px">
-          <el-form-item label="额度类型" required>
-            <el-select v-model="quotaForm.quota_type" style="width: 100%">
-              <el-option label="建站额度" value="app_create" />
-              <el-option label="发卡额度" value="kami_issue" />
-              <el-option label="充值额度" value="recharge" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="发放数量" required>
-            <el-input-number v-model="quotaForm.amount" :min="1" :max="100000000" style="width: 100%" />
-          </el-form-item>
-          <el-form-item label="备注">
-            <el-input v-model="quotaForm.remark" type="textarea" :rows="2" />
-          </el-form-item>
-        </el-form>
-      </div>
-      <template #footer>
-        <el-button @click="quotaVisible = false">取消</el-button>
-        <el-button type="primary" :loading="quotaSaving" @click="handleGrantUserQuota">确认发放</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="appAuthVisible" :title="`应用授权 - ${appAuthForm.username || '用户'}`" width="760px">
-      <div v-loading="appAuthLoading">
-        <el-table :data="appAuthorizations" border stripe height="260">
-          <el-table-column prop="app_name" label="应用名称" min-width="160" show-overflow-tooltip />
-          <el-table-column prop="app_id" label="App ID" min-width="170" show-overflow-tooltip />
-          <el-table-column prop="granted_by" label="授权人" width="120" />
-          <el-table-column prop="created_at" label="授权时间" width="180">
-            <template #default="{ row }">{{ formatOptionalTime(row.created_at) }}</template>
-          </el-table-column>
-          <el-table-column prop="remark" label="备注" min-width="160" show-overflow-tooltip />
-        </el-table>
-        <el-divider />
-        <el-form :model="appAuthForm" label-width="100px">
-          <el-form-item label="授权应用" required>
-            <el-select v-model="appAuthForm.app_id" filterable placeholder="选择应用" style="width: 100%">
-              <el-option v-for="app in apps" :key="app.app_id" :label="app.name" :value="app.app_id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="备注">
-            <el-input v-model="appAuthForm.remark" type="textarea" :rows="2" />
-          </el-form-item>
-        </el-form>
-      </div>
-      <template #footer>
-        <el-button @click="appAuthVisible = false">取消</el-button>
-        <el-button type="primary" :loading="appAuthSaving" @click="handleGrantUserAppAuthorization">确认授权</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -285,14 +222,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   deleteEndUsers,
   exportEndUsers,
-  getEndUserAppAuthorizations,
-  getEndUserQuotas,
   getEndUserKamis,
   getEndUsers,
   getEndUserStats,
   grantAuthorization,
-  grantEndUserAppAuthorization,
-  grantEndUserQuota,
   resetEndUserPassword,
   updateEndUserStatus
 } from '../api/points'
@@ -310,20 +243,12 @@ const resettingPassword = ref(false)
 const grantingAuthorization = ref(false)
 const deletingUsers = ref(false)
 const userKamisLoading = ref(false)
-const quotaLoading = ref(false)
-const quotaSaving = ref(false)
-const appAuthLoading = ref(false)
-const appAuthSaving = ref(false)
 const resetPasswordVisible = ref(false)
 const grantAuthVisible = ref(false)
 const userKamisVisible = ref(false)
-const quotaVisible = ref(false)
-const appAuthVisible = ref(false)
 const users = ref([])
 const selectedUsers = ref([])
 const userKamis = ref([])
-const quotaSummary = ref(null)
-const appAuthorizations = ref([])
 const apps = ref([])
 const currentUser = ref(null)
 const total = ref(0)
@@ -362,21 +287,6 @@ const grantForm = reactive({
   days: 30,
   is_lifetime: false,
   source_kami_code: '',
-  remark: ''
-})
-
-const quotaForm = reactive({
-  user_id: null,
-  username: '',
-  quota_type: 'app_create',
-  amount: 1,
-  remark: ''
-})
-
-const appAuthForm = reactive({
-  user_id: null,
-  username: '',
-  app_id: '',
   remark: ''
 })
 
@@ -544,95 +454,6 @@ const handleGrantAuthorization = async () => {
     await loadData()
   } finally {
     grantingAuthorization.value = false
-  }
-}
-
-const getQuotaTypeLabel = (quotaType) => {
-  const typeMap = {
-    app_create: '建站额度',
-    kami_issue: '发卡额度',
-    recharge: '充值额度',
-  }
-  return typeMap[quotaType] || quotaType
-}
-
-const loadUserQuota = async (userId) => {
-  quotaLoading.value = true
-  try {
-    const res = await getEndUserQuotas(userId)
-    quotaSummary.value = res.data || null
-  } finally {
-    quotaLoading.value = false
-  }
-}
-
-const showQuotaDialog = async (row) => {
-  currentUser.value = row
-  quotaForm.user_id = row.id
-  quotaForm.username = row.username
-  quotaForm.quota_type = 'app_create'
-  quotaForm.amount = 1
-  quotaForm.remark = ''
-  quotaVisible.value = true
-  await loadUserQuota(row.id)
-}
-
-const handleGrantUserQuota = async () => {
-  if (!quotaForm.amount || quotaForm.amount <= 0) {
-    ElMessage.warning('请输入正数额度')
-    return
-  }
-  quotaSaving.value = true
-  try {
-    await grantEndUserQuota(quotaForm.user_id, {
-      quota_type: quotaForm.quota_type,
-      amount: quotaForm.amount,
-      remark: quotaForm.remark || null
-    })
-    ElMessage.success('额度已发放')
-    await loadUserQuota(quotaForm.user_id)
-    await loadUsers()
-  } finally {
-    quotaSaving.value = false
-  }
-}
-
-const loadUserAppAuthorizations = async (userId) => {
-  appAuthLoading.value = true
-  try {
-    const res = await getEndUserAppAuthorizations(userId)
-    appAuthorizations.value = res.data || []
-  } finally {
-    appAuthLoading.value = false
-  }
-}
-
-const showAppAuthorizationDialog = async (row) => {
-  currentUser.value = row
-  appAuthForm.user_id = row.id
-  appAuthForm.username = row.username
-  appAuthForm.app_id = queryParams.app_id || apps.value[0]?.app_id || ''
-  appAuthForm.remark = ''
-  appAuthVisible.value = true
-  await loadUserAppAuthorizations(row.id)
-}
-
-const handleGrantUserAppAuthorization = async () => {
-  if (!appAuthForm.app_id) {
-    ElMessage.warning('请选择应用')
-    return
-  }
-  appAuthSaving.value = true
-  try {
-    await grantEndUserAppAuthorization(appAuthForm.user_id, {
-      app_id: appAuthForm.app_id,
-      remark: appAuthForm.remark || null
-    })
-    ElMessage.success('应用授权已发放')
-    await loadUserAppAuthorizations(appAuthForm.user_id)
-    await loadUsers()
-  } finally {
-    appAuthSaving.value = false
   }
 }
 

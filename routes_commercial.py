@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field as PydanticField
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 import routes_admin
@@ -24,11 +25,14 @@ from commercial_service import (
     user_quota_transactions_payload,
 )
 from database import get_session
+from datetime_utils import to_api_beijing_iso
 from models import (
+    EndUser,
     RechargeBonusRule,
     RechargeOrder,
     RechargeOrderStatus,
     RechargePaymentChannel,
+    UserQuotaAccount,
 )
 
 
@@ -70,6 +74,67 @@ class OrderReviewRequest(BaseModel):
 
 def _require_admin(current_user: dict) -> None:
     routes_admin._require_admin(current_user)
+
+
+def _merchant_user_payload(user: EndUser, account: Optional[UserQuotaAccount]) -> dict:
+    return {
+        "id": user.id,
+        "app_id": user.app_id,
+        "username": user.username,
+        "email": user.email,
+        "phone": user.phone,
+        "status": user.status,
+        "kami_issue_balance": account.kami_issue_balance if account else 0,
+        "total_kami_issue_granted": account.total_kami_issue_granted if account else 0,
+        "created_at": to_api_beijing_iso(user.created_at, naive="civil"),
+        "last_login": to_api_beijing_iso(user.last_login, naive="civil") if user.last_login else None,
+    }
+
+
+@router.get("/merchants", summary="List merchant/card issuer users")
+async def list_merchants(
+    keyword: Optional[str] = Query(None),
+    status: Optional[int] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    statement = select(EndUser).where(EndUser.app_id.is_(None))
+    count_statement = select(EndUser).where(EndUser.app_id.is_(None))
+    conditions = []
+    if keyword:
+        conditions.append(or_(EndUser.username.contains(keyword), EndUser.email.contains(keyword)))
+    if status is not None:
+        conditions.append(EndUser.status == status)
+    if conditions:
+        statement = statement.where(*conditions)
+        count_statement = count_statement.where(*conditions)
+
+    merchants = session.exec(
+        statement.order_by(EndUser.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    total = len(session.exec(count_statement).all())
+    user_ids = [user.id for user in merchants if user.id is not None]
+    accounts = session.exec(
+        select(UserQuotaAccount).where(UserQuotaAccount.user_id.in_(user_ids))
+    ).all() if user_ids else []
+    account_map = {account.user_id: account for account in accounts}
+    return {
+        "success": True,
+        "data": {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "items": [
+                _merchant_user_payload(user, account_map.get(user.id))
+                for user in merchants
+            ],
+        },
+    }
 
 
 @router.get("/overview", summary="Commercial operations overview")

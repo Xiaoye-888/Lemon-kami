@@ -2,12 +2,12 @@ from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field as PydanticField
 from sqlmodel import Session, select
 
 import routes_admin
 import routes_user
-from auth_utils import verify_password
+from auth_utils import hash_password, verify_password
 from config import settings
 from database import get_session
 from datetime_utils import to_api_beijing_iso
@@ -23,6 +23,13 @@ class SharedLoginRequest(BaseModel):
     encrypted_data: Optional[str] = None
     iv: Optional[str] = None
     encrypted: bool = False
+
+
+class SharedMerchantRegisterRequest(BaseModel):
+    username: str = PydanticField(..., min_length=3, max_length=64)
+    password: str = PydanticField(..., min_length=6, max_length=128)
+    email: Optional[str] = None
+    phone: Optional[str] = None
 
 
 def _decode_login_payload(payload: SharedLoginRequest) -> tuple[str, str]:
@@ -41,6 +48,21 @@ def _decode_login_payload(payload: SharedLoginRequest) -> tuple[str, str]:
     if not username or not password:
         raise HTTPException(status_code=400, detail="缺少用户名或密码")
     return username, password
+
+
+def _merchant_user_info(user: EndUser) -> dict:
+    return {
+        "id": user.id,
+        "app_id": user.app_id,
+        "username": user.username,
+        "email": user.email,
+        "phone": user.phone,
+        "role": "merchant",
+        "status": user.status,
+        "last_login": to_api_beijing_iso(user.last_login, naive="civil")
+        if user.last_login
+        else None,
+    }
 
 
 @router.get("/login/public-key", summary="Get shared login AES key")
@@ -94,6 +116,8 @@ async def shared_login(
         }
 
     merchant = session.exec(select(EndUser).where(EndUser.username == username)).first()
+    if merchant and merchant.app_id is not None and verify_password(password, merchant.password_hash):
+        raise HTTPException(status_code=403, detail="application users cannot login to merchant console")
     if not merchant or not verify_password(password, merchant.password_hash):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     if merchant.status != 1:
@@ -120,4 +144,41 @@ async def shared_login(
             if merchant.last_login
             else None,
         },
+    }
+
+
+@router.post("/register", summary="Shared merchant register")
+async def shared_merchant_register(
+    payload: SharedMerchantRegisterRequest,
+    session: Session = Depends(get_session),
+):
+    username = payload.username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="username is required")
+    admin = session.exec(select(AdminUser).where(AdminUser.username == username)).first()
+    existing = session.exec(select(EndUser).where(EndUser.username == username)).first()
+    if admin or existing:
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+    merchant = EndUser(
+        app_id=None,
+        username=username,
+        password_hash=hash_password(payload.password),
+        email=payload.email,
+        phone=payload.phone,
+        status=1,
+        last_login=get_now().replace(tzinfo=None),
+    )
+    session.add(merchant)
+    session.commit()
+    session.refresh(merchant)
+    token = routes_user.create_user_access_token(merchant)
+    return {
+        "success": True,
+        "message": "register success",
+        "token": token,
+        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "role": "merchant",
+        "redirect": "/merchant/dashboard",
+        "user_info": _merchant_user_info(merchant),
     }

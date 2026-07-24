@@ -8,6 +8,14 @@ export function sharedLogin(data) {
   })
 }
 
+export function sharedRegister(data) {
+  return request({
+    url: '/auth/register',
+    method: 'post',
+    data
+  })
+}
+
 export function getSharedLoginKey() {
   return request({
     url: '/auth/login/public-key',

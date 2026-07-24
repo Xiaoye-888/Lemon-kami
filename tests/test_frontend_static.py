@@ -376,3 +376,37 @@ def test_commercial_recharge_pages_expose_order_review_and_upload_flow():
     assert "proof_image_data_url" in merchant_recharge
     assert 'type="file"' in merchant_recharge
     assert "customPreview" in merchant_recharge
+
+
+def test_commercial_phase1_corrections_keep_identity_and_quota_scope_clear():
+    auth_api = (PROJECT_ROOT / "admin/src/api/auth.js").read_text(encoding="utf-8")
+    store = (PROJECT_ROOT / "admin/src/stores/user.js").read_text(encoding="utf-8")
+    login = (PROJECT_ROOT / "admin/src/views/Login.vue").read_text(encoding="utf-8")
+    layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
+    router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")
+    end_users = (PROJECT_ROOT / "admin/src/views/EndUsers.vue").read_text(encoding="utf-8")
+    merchant_dashboard = (PROJECT_ROOT / "admin/src/views/MerchantDashboard.vue").read_text(encoding="utf-8")
+    admin_merchants = (PROJECT_ROOT / "admin/src/views/AdminMerchants.vue").read_text(encoding="utf-8")
+
+    assert "sharedRegister" in auth_api
+    assert "userRegister" in store
+    assert "registerVisible" in login
+    assert "registerForm" in login
+
+    assert "index: '/admin/commercial', label:" not in layout
+    assert "index: '/admin/commercial/quota-transactions'" in layout
+    assert "index: '/admin/commercial/merchants'" in layout
+    assert "path: 'commercial/quota-transactions'" in router
+    assert "path: 'commercial/merchants'" in router
+
+    assert "showQuotaDialog" not in end_users
+    assert "showAppAuthorizationDialog" not in end_users
+    assert "grantEndUserQuota" not in end_users
+    assert "grantEndUserAppAuthorization" not in end_users
+    assert "grantEndUserQuota" in admin_merchants
+    assert "grantEndUserAppAuthorization" in admin_merchants
+    assert "quota_type: 'kami_issue'" in admin_merchants
+    assert "app_create" not in admin_merchants
+    assert "recharge_balance" not in admin_merchants
+    assert "app_create_balance" not in merchant_dashboard
+    assert "recharge_balance" not in merchant_dashboard

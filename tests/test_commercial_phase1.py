@@ -103,6 +103,141 @@ def test_shared_login_routes_admin_and_merchant_roles():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_shared_register_creates_merchant_and_blocks_application_user_console_access():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_auth.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        admin = AdminUser(
+            username="taken-admin",
+            password_hash=hash_password("admin-pass"),
+            is_admin=True,
+            status=1,
+        )
+        app = App(
+            app_id="app_usage",
+            name="Usage App",
+            app_secret="secret-usage",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by="admin",
+        )
+        application_user = EndUser(
+            app_id="app_usage",
+            username="usage-user",
+            password_hash=hash_password("usage-pass"),
+            status=1,
+        )
+        session.add(admin)
+        session.add(app)
+        session.add(application_user)
+        session.commit()
+        session.refresh(application_user)
+        application_user_token = routes_user.create_user_access_token(application_user)
+
+    try:
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "merchant-new",
+                "password": "merchant-pass",
+                "email": "merchant@example.com",
+                "phone": "13800000000",
+            },
+        )
+        assert register_response.status_code == 200
+        register_data = register_response.json()
+        assert register_data["success"] is True
+        assert register_data["role"] == "merchant"
+        assert register_data["redirect"] == "/merchant/dashboard"
+        assert register_data["user_info"]["username"] == "merchant-new"
+        assert register_data["user_info"]["app_id"] is None
+
+        with Session(engine) as session:
+            merchant = session.exec(
+                select(EndUser).where(EndUser.username == "merchant-new")
+            ).one()
+            assert merchant.app_id is None
+
+        duplicate_admin_response = client.post(
+            "/api/v1/auth/register",
+            json={"username": "taken-admin", "password": "merchant-pass"},
+        )
+        assert duplicate_admin_response.status_code == 400
+
+        application_login_response = client.post(
+            "/api/v1/auth/login",
+            json={"username": "usage-user", "password": "usage-pass"},
+        )
+        assert application_login_response.status_code == 403
+
+        merchant_api_response = client.get(
+            "/api/v1/merchant/quotas",
+            headers=auth_headers(application_user_token),
+        )
+        assert merchant_api_response.status_code == 403
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_application_users_and_commercial_merchants_are_listed_separately():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        app = App(
+            app_id="app_usage",
+            name="Usage App",
+            app_secret="secret-usage",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by="admin",
+        )
+        merchant = EndUser(username="merchant-only", password_hash=hash_password("secret123"), status=1)
+        usage_user = EndUser(
+            app_id="app_usage",
+            username="usage-only",
+            password_hash=hash_password("secret123"),
+            status=1,
+        )
+        session.add(app)
+        session.add(merchant)
+        session.add(usage_user)
+        session.commit()
+
+    try:
+        end_users_response = client.get("/api/v1/admin/end-users")
+        assert end_users_response.status_code == 200
+        end_user_items = end_users_response.json()["data"]["items"]
+        assert [item["username"] for item in end_user_items] == ["usage-only"]
+
+        stats_response = client.get("/api/v1/admin/end-users/stats")
+        assert stats_response.status_code == 200
+        assert stats_response.json()["data"]["total"] == 1
+
+        merchants_response = client.get("/api/v1/admin/commercial/merchants")
+        assert merchants_response.status_code == 200
+        merchant_items = merchants_response.json()["data"]["items"]
+        assert [item["username"] for item in merchant_items] == ["merchant-only"]
+        assert merchant_items[0]["app_id"] is None
+        assert "app_create_balance" not in merchant_items[0]
+        assert "recharge_balance" not in merchant_items[0]
+        assert "kami_issue_balance" in merchant_items[0]
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_manual_recharge_order_review_credits_issue_quota_and_transactions():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

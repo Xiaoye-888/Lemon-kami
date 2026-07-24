@@ -97,6 +97,7 @@
           <div class="login-no-account">
             <span>没有账号？</span>
             <el-button link type="primary" @click="showContactDialog">联系管理员开通</el-button>
+            <el-button link type="primary" @click="registerVisible = true">注册发卡用户</el-button>
           </div>
         </el-form>
         
@@ -173,6 +174,32 @@
         <el-button type="primary" @click="contactVisible = false">我知道了</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="registerVisible"
+      title="注册发卡用户"
+      width="460px"
+      :close-on-click-modal="false"
+    >
+      <el-form :model="registerForm" label-width="90px">
+        <el-form-item label="用户名" required>
+          <el-input v-model="registerForm.username" maxlength="64" placeholder="请输入用户名" />
+        </el-form-item>
+        <el-form-item label="密码" required>
+          <el-input v-model="registerForm.password" type="password" show-password placeholder="至少 6 位" />
+        </el-form-item>
+        <el-form-item label="邮箱">
+          <el-input v-model="registerForm.email" placeholder="可选" />
+        </el-form-item>
+        <el-form-item label="手机号">
+          <el-input v-model="registerForm.phone" placeholder="可选" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="registerVisible = false">取消</el-button>
+        <el-button type="primary" :loading="registering" @click="handleRegister">注册并进入后台</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -213,6 +240,8 @@ const loading = ref(false)
 const rememberMe = ref(true)
 const loginBgUrl = ref('')
 const contactVisible = ref(false)
+const registerVisible = ref(false)
+const registering = ref(false)
 
 /** Vite 下只有 public/ 内资源会原样提供到根路径，请使用 public/static/login_bg.png */
 const publicBase = import.meta.env.BASE_URL
@@ -297,6 +326,13 @@ const loginForm = reactive({
   password: ''
 })
 
+const registerForm = reactive({
+  username: '',
+  password: '',
+  email: '',
+  phone: ''
+})
+
 const rules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [
@@ -378,6 +414,34 @@ const handleLogin = async () => {
       loading.value = false
     }
   })
+}
+
+const handleRegister = async () => {
+  if (!registerForm.username || !registerForm.password) {
+    ElMessage.warning('请填写用户名和密码')
+    return
+  }
+  if (registerForm.password.length < 6) {
+    ElMessage.warning('密码至少 6 位')
+    return
+  }
+
+  registering.value = true
+  try {
+    const result = await userStore.userRegister({
+      username: registerForm.username,
+      password: registerForm.password,
+      email: registerForm.email || null,
+      phone: registerForm.phone || null
+    })
+    registerVisible.value = false
+    ElMessage.success('注册成功')
+    router.push(result.redirect || userStore.homePath)
+  } catch (e) {
+    ElMessage.error(e.message || '注册失败，请检查账号信息')
+  } finally {
+    registering.value = false
+  }
 }
 
 const onForgot = () => {

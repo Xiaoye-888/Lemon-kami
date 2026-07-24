@@ -29,7 +29,7 @@
       </el-card>
 
       <el-card shadow="never" class="panel">
-        <template #header>固定充值额度</template>
+        <template #header>固定充值档位</template>
         <el-form :model="optionForm" label-width="96px">
           <el-form-item label="充值金额">
             <el-input-number v-model="optionForm.amount" :min="1" :max="1000000" style="width: 100%" />
@@ -73,7 +73,7 @@
         </el-table>
       </el-card>
       <el-card shadow="never" class="panel">
-        <template #header>当前充值额度</template>
+        <template #header>当前充值档位</template>
         <el-table :data="config.options" size="small">
           <el-table-column prop="label" label="展示" />
           <el-table-column prop="credit_quota" label="到账额度" width="100" />
@@ -149,7 +149,7 @@ async function handleSaveRechargeOption() {
   savingOption.value = true
   try {
     await saveRechargeOption(optionForm)
-    ElMessage.success('固定充值额度已保存')
+    ElMessage.success('固定充值档位已保存')
     await loadConfig()
   } finally {
     savingOption.value = false
