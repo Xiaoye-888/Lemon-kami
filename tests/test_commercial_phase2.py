@@ -1,4 +1,4 @@
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, Session, create_engine, select
 
@@ -9,6 +9,7 @@ from models import (
     RechargeOrder,
     RechargeOrderStatus,
 )
+import database
 
 
 def make_engine():
@@ -26,6 +27,11 @@ def test_phase2_schema_creates_audit_backup_and_proof_columns():
     inspector = inspect(engine)
     assert "admin_audit_logs" in inspector.get_table_names()
     assert "ops_backup_records" in inspector.get_table_names()
+
+    backup_record_columns = {
+        column["name"]: column for column in inspector.get_columns("ops_backup_records")
+    }
+    assert backup_record_columns["created_by"]["nullable"] is False
 
     recharge_order_columns = {
         column["name"] for column in inspector.get_columns("recharge_orders")
@@ -54,10 +60,8 @@ def test_phase2_schema_creates_audit_backup_and_proof_columns():
         backup_record = OpsBackupRecord(
             backup_no="BACKUP-001",
             backup_type="manual",
-            status="completed",
             file_path="/app/backups/BACKUP-001.sql",
             file_name="BACKUP-001.sql",
-            file_size=128,
             table_counts_json='{"recharge_orders":1}',
             created_by="admin",
         )
@@ -83,4 +87,30 @@ def test_phase2_schema_creates_audit_backup_and_proof_columns():
 
         assert saved_audit_log.action == "approve"
         assert saved_backup_record.backup_no == "BACKUP-001"
+        assert saved_backup_record.status == "created"
+        assert saved_backup_record.file_size == 0
         assert saved_recharge_order.proof_file_deleted is True
+
+
+def test_phase2_schema_backfills_existing_sqlite_recharge_order_proof_columns(monkeypatch):
+    engine = make_engine()
+    with engine.connect() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE recharge_orders ("
+                "id INTEGER PRIMARY KEY, "
+                "order_no VARCHAR(64)"
+                ")"
+            )
+        )
+        conn.commit()
+
+    monkeypatch.setattr(database, "engine", engine)
+
+    database._ensure_phase2_recharge_order_schema()
+
+    recharge_order_columns = {
+        column["name"] for column in inspect(engine).get_columns("recharge_orders")
+    }
+    assert "proof_file_deleted" in recharge_order_columns
+    assert "proof_deleted_at" in recharge_order_columns
