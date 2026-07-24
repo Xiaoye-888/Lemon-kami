@@ -875,6 +875,52 @@ def test_admin_payment_channel_upload_saves_qrcode_and_replaces_old_file(tmp_pat
         fastapi_app.dependency_overrides.clear()
 
 
+def test_admin_payment_channel_qrcode_delete_clears_url_and_removes_uploaded_file(tmp_path, monkeypatch):
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    upload_root = tmp_path / "uploads" / "commercial"
+    qr_dir = upload_root / "payment-qrcodes"
+    qr_dir.mkdir(parents=True)
+    qr_path = qr_dir / "wechat_delete.png"
+    qr_path.write_bytes(b"old-qr")
+    monkeypatch.setattr(commercial_service, "UPLOAD_ROOT", upload_root)
+
+    with Session(engine) as session:
+        commercial_service.upsert_payment_channel(
+            session,
+            channel=RechargeChannel.wechat,
+            display_name="WeChat Pay",
+            qr_code_url="/api/v1/commercial/payment-qrcodes/wechat_delete.png",
+            enabled=True,
+            sort_order=1,
+        )
+        session.commit()
+
+    try:
+        response = client.delete("/api/v1/admin/commercial/payment-channels/wechat/qrcode")
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["channel"] == "wechat"
+        assert data["qr_code_url"] is None
+        assert data["deleted_file"] is True
+        assert not qr_path.exists()
+
+        with Session(engine) as session:
+            saved = session.exec(
+                select(RechargePaymentChannel).where(
+                    RechargePaymentChannel.channel == RechargeChannel.wechat
+                )
+            ).one()
+            assert saved.qr_code_url is None
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_merchant_recharge_order_upload_stores_proof_file(tmp_path, monkeypatch):
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

@@ -29,6 +29,17 @@
             <div v-if="qrPreviewUrl || channelForm.qr_code_url" class="qr-preview">
               <img :src="qrPreviewUrl || channelForm.qr_code_url" alt="payment QR code" />
             </div>
+            <div class="qr-actions">
+              <el-button
+                type="danger"
+                plain
+                :loading="deletingQr"
+                :disabled="savingChannel || deletingQr || (!channelForm.qr_code_file && !channelForm.qr_code_url)"
+                @click="handleDeleteQrCode"
+              >
+                删除二维码
+              </el-button>
+            </div>
           </el-form-item>
           <el-form-item label="收款备注">
             <el-input v-model="channelForm.remark" />
@@ -100,12 +111,13 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { getRechargeConfig, saveBonusRule, savePaymentChannelWithUpload, saveRechargeOption } from '../api/commercial'
+import { onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { deletePaymentChannelQrCode, getRechargeConfig, saveBonusRule, savePaymentChannelWithUpload, saveRechargeOption } from '../api/commercial'
 
 const loading = ref(false)
 const savingChannel = ref(false)
+const deletingQr = ref(false)
 const savingOption = ref(false)
 const savingBonus = ref(false)
 const config = ref({ channels: [], options: [], bonus_rules: [] })
@@ -144,6 +156,7 @@ async function loadConfig() {
   try {
     const res = await getRechargeConfig()
     config.value = res.data || { channels: [], options: [], bonus_rules: [] }
+    applySelectedChannelConfig()
   } finally {
     loading.value = false
   }
@@ -156,25 +169,37 @@ function clearQrPreview() {
   }
 }
 
+function clearQrSelection() {
+  channelForm.qr_code_file = null
+  if (qrFileInput.value) qrFileInput.value.value = ''
+  clearQrPreview()
+}
+
+function applySelectedChannelConfig() {
+  const current = (config.value.channels || []).find((item) => item.channel === channelForm.channel)
+  if (!current) return
+  channelForm.display_name = current.display_name || channelForm.display_name
+  channelForm.qr_code_url = current.qr_code_url || ''
+  channelForm.remark = current.remark || ''
+  channelForm.enabled = Boolean(current.enabled)
+  channelForm.sort_order = current.sort_order || 0
+  clearQrSelection()
+}
+
 function handleQrFile(event) {
   const file = event.target.files?.[0]
   if (!file) {
-    channelForm.qr_code_file = null
-    clearQrPreview()
+    clearQrSelection()
     return
   }
   if (!IMAGE_TYPES.has(file.type)) {
     ElMessage.error('请上传 PNG/JPG/WebP 图片')
-    event.target.value = ''
-    channelForm.qr_code_file = null
-    clearQrPreview()
+    clearQrSelection()
     return
   }
   if (file.size > MAX_QR_FILE_SIZE) {
     ElMessage.error('支付二维码不能超过 2MB')
-    event.target.value = ''
-    channelForm.qr_code_file = null
-    clearQrPreview()
+    clearQrSelection()
     return
   }
   channelForm.qr_code_file = file
@@ -203,13 +228,41 @@ async function handleSavePaymentChannel() {
   try {
     const res = await savePaymentChannelWithUpload(channelPayloadFormData())
     channelForm.qr_code_url = res.data?.qr_code_url || channelForm.qr_code_url
-    channelForm.qr_code_file = null
-    if (qrFileInput.value) qrFileInput.value.value = ''
-    clearQrPreview()
+    clearQrSelection()
     ElMessage.success('支付渠道已保存')
     await loadConfig()
   } finally {
     savingChannel.value = false
+  }
+}
+
+async function handleDeleteQrCode() {
+  if (channelForm.qr_code_file) {
+    clearQrSelection()
+    ElMessage.success('已清除待上传二维码')
+    return
+  }
+  if (!channelForm.qr_code_url) return
+
+  try {
+    await ElMessageBox.confirm(
+      '确定删除当前收款二维码吗？删除后用户充值页将不再显示该渠道二维码。',
+      '删除二维码',
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+
+  deletingQr.value = true
+  try {
+    const res = await deletePaymentChannelQrCode(channelForm.channel)
+    channelForm.qr_code_url = res.data?.qr_code_url || ''
+    clearQrSelection()
+    ElMessage.success('二维码已删除')
+    await loadConfig()
+  } finally {
+    deletingQr.value = false
   }
 }
 
@@ -234,6 +287,8 @@ async function handleSaveBonusRule() {
     savingBonus.value = false
   }
 }
+
+watch(() => channelForm.channel, applySelectedChannelConfig)
 
 onMounted(loadConfig)
 onUnmounted(clearQrPreview)
@@ -302,6 +357,10 @@ onUnmounted(clearQrPreview)
   max-width: 160px;
   max-height: 160px;
   object-fit: contain;
+}
+
+.qr-actions {
+  margin-top: 10px;
 }
 
 @media (max-width: 1180px) {

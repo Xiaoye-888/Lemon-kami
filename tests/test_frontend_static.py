@@ -401,7 +401,12 @@ def test_commercial_recharge_pages_expose_order_review_and_upload_flow():
     assert "pending_review" in admin_orders
     assert "支付凭证" in admin_orders
     assert "savePaymentChannelWithUpload" in commercial_api
+    assert "deletePaymentChannelQrCode" in commercial_api
     assert "savePaymentChannelWithUpload" in admin_settings
+    assert "deletePaymentChannelQrCode" in admin_settings
+    assert "handleDeleteQrCode" in admin_settings
+    assert "ElMessageBox" in admin_settings
+    assert "删除二维码" in admin_settings
     assert "qr_code_file" in admin_settings
     assert "saveRechargeOption" in admin_settings
     assert "saveBonusRule" in admin_settings

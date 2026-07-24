@@ -30,6 +30,13 @@ export function savePaymentChannelWithUpload(data) {
   })
 }
 
+export function deletePaymentChannelQrCode(channel) {
+  return request({
+    url: `/admin/commercial/payment-channels/${channel}/qrcode`,
+    method: 'delete'
+  })
+}
+
 export function saveRechargeOption(data) {
   return request({
     url: '/admin/commercial/recharge-options',

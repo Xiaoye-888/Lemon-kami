@@ -485,6 +485,24 @@ async def save_payment_qrcode_upload(upload: UploadFile, channel: str | Recharge
     return payment_qrcode_public_url(filename)
 
 
+def clear_payment_channel_qrcode(
+    session: Session,
+    channel: str | RechargeChannel,
+) -> tuple[RechargePaymentChannel, bool]:
+    channel_enum = normalize_recharge_channel(channel)
+    row = session.exec(
+        select(RechargePaymentChannel).where(RechargePaymentChannel.channel == channel_enum)
+    ).first()
+    if not row:
+        raise ValueError("payment channel not found")
+    deleted_file = delete_payment_qrcode_by_url_if_safe(row.qr_code_url)
+    row.qr_code_url = None
+    row.updated_at = get_now_naive()
+    session.add(row)
+    session.flush()
+    return row, deleted_file
+
+
 def _save_data_url_image(data_url: Optional[str], order_no: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
     if not data_url:
         return None, None, None

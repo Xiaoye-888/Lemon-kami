@@ -12,6 +12,7 @@ import routes_admin
 from commercial_service import (
     approve_recharge_order,
     calculate_recharge_preview,
+    clear_payment_channel_qrcode,
     create_bonus_rule,
     create_recharge_option,
     delete_payment_qrcode_by_url_if_safe,
@@ -267,6 +268,30 @@ async def save_payment_channel_with_upload(
         message=f"管理员 {current_user.get('sub')} 更新充值收款渠道 {channel}",
     )
     return {"success": True, "message": "payment channel saved", "data": payment_channel_payload(row)}
+
+
+@router.delete("/payment-channels/{channel}/qrcode", summary="Delete payment channel QR code")
+async def delete_payment_channel_qrcode(
+    channel: str,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    try:
+        row, deleted_file = clear_payment_channel_qrcode(session, channel)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    session.commit()
+    session.refresh(row)
+    payload = {**payment_channel_payload(row), "deleted_file": deleted_file}
+    routes_admin.log_admin_action(
+        session=session,
+        username=current_user.get("sub"),
+        event_type="commercial_payment_channel_qrcode_delete",
+        payload=payload,
+        message=f"管理员 {current_user.get('sub')} 删除充值收款渠道 {channel} 的二维码",
+    )
+    return {"success": True, "message": "payment QR code deleted", "data": payload}
 
 
 @router.post("/recharge-options", summary="Create or update fixed recharge option")
