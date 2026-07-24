@@ -478,6 +478,38 @@ def get_recharge_order_or_404(session: Session, order_no: str) -> RechargeOrder:
     return order
 
 
+def _delete_proof_file_if_safe(proof_file_path: Optional[str]) -> bool:
+    if not proof_file_path:
+        return False
+    path = Path(proof_file_path)
+    resolved_path = path.resolve(strict=False)
+    resolved_upload_root = UPLOAD_ROOT.resolve(strict=False)
+    if resolved_path != resolved_upload_root and resolved_upload_root not in resolved_path.parents:
+        return False
+    if not path.exists():
+        return False
+    path.unlink()
+    return True
+
+
+def delete_recharge_orders_for_users(session: Session, user_ids: list[int]) -> dict:
+    if not user_ids:
+        return {"deleted_recharge_orders": 0, "deleted_recharge_proofs": 0}
+    orders = session.exec(
+        select(RechargeOrder).where(RechargeOrder.user_id.in_(user_ids))
+    ).all()
+    deleted_proofs = 0
+    for order in orders:
+        if _delete_proof_file_if_safe(order.proof_file_path):
+            deleted_proofs += 1
+        session.delete(order)
+    session.flush()
+    return {
+        "deleted_recharge_orders": len(orders),
+        "deleted_recharge_proofs": deleted_proofs,
+    }
+
+
 def approve_recharge_order(
     session: Session,
     *,

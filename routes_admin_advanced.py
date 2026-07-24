@@ -6,6 +6,7 @@ from sqlalchemy import or_
 from sqlmodel import Session, select
 
 import routes_admin as legacy_admin
+from commercial_service import delete_recharge_orders_for_users
 from database import get_session
 from datetime_utils import to_api_beijing_iso
 from models import (
@@ -260,6 +261,8 @@ async def delete_end_users(
                 "deleted_user_app_authorizations": 0,
                 "deleted_user_owned_apps": 0,
                 "deleted_user_owned_kamis": 0,
+                "deleted_recharge_orders": 0,
+                "deleted_recharge_proofs": 0,
             },
         }
 
@@ -307,6 +310,9 @@ async def delete_end_users(
     for tx in user_quota_transactions:
         session.delete(tx)
     session.flush()
+
+    recharge_cleanup = delete_recharge_orders_for_users(session, found_user_ids)
+
     for account in user_quota_accounts:
         session.delete(account)
     session.flush()
@@ -327,6 +333,7 @@ async def delete_end_users(
             "deleted_user_app_authorizations": len(user_app_authorizations),
             "deleted_user_owned_apps": deleted_app_count,
             "deleted_user_owned_kamis": len(user_created_kamis),
+            **recharge_cleanup,
         }
     )
     result["data"] = deleted_counts

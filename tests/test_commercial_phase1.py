@@ -5,6 +5,7 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, Session, create_engine, select
 
 import routes_admin
+import commercial_service
 import routes_auth
 import routes_commercial
 import routes_merchant
@@ -18,10 +19,15 @@ from models import (
     EndUser,
     Kami,
     KamiDeviceBinding,
+    RechargeChannel,
+    RechargeMode,
+    RechargeOrder,
+    RechargeOrderStatus,
     KamiSpec,
     UserAppAuthorization,
     UserQuotaAccount,
     UserQuotaTransaction,
+    UserQuotaTransactionType,
     UserQuotaType,
 )
 
@@ -714,3 +720,83 @@ def test_proof_upload_runtime_has_writable_persistent_uploads_directory():
     assert "fastapi_uploads:" in prod_compose
     assert "fastapi_uploads:/app/uploads" in dev_compose
     assert "fastapi_uploads:" in dev_compose
+
+
+def test_hard_delete_merchant_removes_recharge_orders_and_proof_files(tmp_path, monkeypatch):
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    upload_root = tmp_path / "uploads" / "commercial"
+    proof_dir = upload_root / "proofs"
+    proof_dir.mkdir(parents=True)
+    proof_path = proof_dir / "proof.png"
+    proof_path.write_bytes(b"fake-png")
+    monkeypatch.setattr(commercial_service, "UPLOAD_ROOT", upload_root)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="delete-order-merchant", password_hash=hash_password("secret123"), status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        account = UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=10)
+        session.add(account)
+        session.commit()
+        session.refresh(account)
+        tx = UserQuotaTransaction(
+            transaction_id="uq_delete_order",
+            account_id=account.id,
+            user_id=merchant.id,
+            username=merchant.username,
+            quota_type=UserQuotaType.kami_issue,
+            transaction_type=UserQuotaTransactionType.grant,
+            amount=10,
+            balance_before=0,
+            balance_after=10,
+            biz_id="recharge_order:RC_DELETE_ORDER",
+        )
+        order = RechargeOrder(
+            order_no="RC_DELETE_ORDER",
+            user_id=merchant.id,
+            username=merchant.username,
+            mode=RechargeMode.custom,
+            channel=RechargeChannel.wechat,
+            amount_cents=1000,
+            base_quota=10,
+            bonus_quota=0,
+            credit_quota=10,
+            status=RechargeOrderStatus.approved,
+            proof_file_path=proof_path.as_posix(),
+            proof_file_name="proof.png",
+            proof_content_type="image/png",
+            quota_transaction_id=tx.transaction_id,
+        )
+        session.add(tx)
+        session.add(order)
+        session.commit()
+        merchant_id = merchant.id
+
+    try:
+        response = client.post(
+            "/api/v1/admin/end-users/delete",
+            json={"user_ids": [merchant_id]},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["deleted_users"] == 1
+        assert data["deleted_recharge_orders"] == 1
+        assert data["deleted_recharge_proofs"] == 1
+        assert not proof_path.exists()
+
+        with Session(engine) as session:
+            assert session.get(EndUser, merchant_id) is None
+            assert session.exec(select(RechargeOrder)).all() == []
+            assert session.exec(select(UserQuotaAccount)).all() == []
+            assert session.exec(select(UserQuotaTransaction)).all() == []
+    finally:
+        fastapi_app.dependency_overrides.clear()
