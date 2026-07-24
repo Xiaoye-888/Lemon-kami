@@ -176,7 +176,7 @@ def test_notice_and_update_check_are_separate_sdk_surfaces():
         fastapi_app.dependency_overrides.clear()
 
 
-def test_admin_can_grant_user_quota_and_user_can_create_apps_with_it():
+def test_admin_can_grant_user_quota_and_user_can_create_apps_without_app_create_consumption():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
 
@@ -229,7 +229,7 @@ def test_admin_can_grant_user_quota_and_user_can_create_apps_with_it():
         )
         assert user_quota_response.status_code == 200
         user_quota = user_quota_response.json()["data"]
-        assert user_quota["app_create_balance"] == 1
+        assert user_quota["app_create_balance"] == 2
 
         apps_response = client.get(
             "/api/v1/user/apps",

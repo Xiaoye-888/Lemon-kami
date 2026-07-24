@@ -301,6 +301,19 @@ def test_devices_page_defaults_to_all_apps_with_keyword_search():
     assert "if (!queryParams.app_id)" not in source
 
 
+def test_devices_page_uses_merchant_scoped_api_in_merchant_console():
+    source = (PROJECT_ROOT / "admin/src/views/Devices.vue").read_text(encoding="utf-8")
+    device_api = (PROJECT_ROOT / "admin/src/api/device.js").read_text(encoding="utf-8")
+
+    assert "getMerchantDevices" in device_api
+    assert "url: '/merchant/devices'" in device_api
+    assert "useRoute" in source
+    assert "isMerchantConsole" in source
+    assert "getMerchantDevices(queryParams)" in source
+    assert "getMerchantApps()" in source
+    assert 'v-if="!isMerchantConsole"' in source
+
+
 def test_application_menu_groups_info_notice_and_versions():
     layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
     router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")

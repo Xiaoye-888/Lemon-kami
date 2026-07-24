@@ -71,6 +71,7 @@ services:
     volumes:
       - .:/app
       - fastapi_logs:/app/logs
+      - fastapi_uploads:/app/uploads
     depends_on:
       mysql:
         condition: service_healthy
@@ -127,6 +128,7 @@ volumes:
   mysql_data:
   redis_data:
   fastapi_logs:
+  fastapi_uploads:
   frontend_node_modules:
   frontend_npm_cache:
 

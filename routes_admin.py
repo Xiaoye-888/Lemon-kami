@@ -3877,6 +3877,16 @@ def _admin_device_payload(
     app = apps_by_id.get(device.app_id) if apps_by_id else None
     username = user.username if user else event_user.get("username") if event_user else None
     user_id = user.id if user else event_user.get("user_id") if event_user else None
+    issuing_user = users_by_id.get(kami.created_by_user_id) if kami and kami.created_by_user_id else None
+    owning_user = users_by_id.get(app.owner_user_id) if app and app.owner_user_id else None
+    if user:
+        user_type = "usage_user" if user.app_id else "merchant"
+    elif event_user:
+        user_type = "usage_user"
+    elif issuing_user:
+        user_type = "merchant"
+    else:
+        user_type = "admin"
     risk = get_device_risk_payload(device.risk_level, ip_count)
     machine_bind_mode = get_machine_bind_mode_value(kami.machine_bind_mode) if kami else None
     redeemed_at = _kami_redeemed_at(kami) if kami else None
@@ -3897,6 +3907,19 @@ def _admin_device_payload(
         "last_verify_at": to_api_beijing_iso(kami.last_verify_at, naive="civil") if kami and kami.last_verify_at else None,
         "username": username,
         "user_id": user_id,
+        "user_type": user_type,
+        "app_source": "merchant_self_owned" if owning_user else "admin_owned",
+        "card_source": "merchant_issued" if issuing_user else "admin_issued" if kami else None,
+        "issuing_user": {
+            "id": issuing_user.id,
+            "username": issuing_user.username,
+            "app_id": issuing_user.app_id,
+        } if issuing_user else None,
+        "owning_user": {
+            "id": owning_user.id,
+            "username": owning_user.username,
+            "app_id": owning_user.app_id,
+        } if owning_user else None,
         "binding_relation": "用户授权" if username and not kami else get_binding_relation_text(kami),
         "machine_bind_mode": machine_bind_mode,
         "machine_bind_mode_text": get_machine_bind_mode_text(machine_bind_mode),
@@ -4018,7 +4041,13 @@ def _device_payload_matches_keyword(payload: dict, keyword: Optional[str]) -> bo
         payload.get("kami_code"),
         payload.get("username"),
         payload.get("user_id"),
+        payload.get("user_type"),
+        payload.get("app_source"),
+        payload.get("card_source"),
     ]
+    for user_key in ("issuing_user", "owning_user"):
+        user_payload = payload.get(user_key) or {}
+        values.extend([user_payload.get("id"), user_payload.get("username")])
     values.extend(payload.get("kami_codes") or [])
     return any(keyword_lower in str(value).lower() for value in values if value is not None)
 
@@ -4034,6 +4063,7 @@ async def list_devices(
     session: Session = Depends(get_session)
 ):
     """获取设备列表（支持风险等级过滤）- 全局共享"""
+    _require_admin(current_user)
     selected_app_id = app_id.strip() if app_id else None
     keyword_value = keyword.strip() if keyword else None
 
@@ -4125,25 +4155,32 @@ async def list_devices(
                 add_related_code(device, kami.kami_code)
 
     kamis_by_code = {}
-    user_ids = []
+    user_ids = set()
     if kami_codes:
         kami_statement = select(Kami).where(Kami.kami_code.in_(list(kami_codes)))
         if selected_app_id:
             kami_statement = kami_statement.where(Kami.app_id == selected_app_id)
         kamis = session.exec(kami_statement).all()
         kamis_by_code = {kami.kami_code: kami for kami in kamis}
-        user_ids = [kami.redeemed_by_user_id for kami in kamis if kami.redeemed_by_user_id]
-
-    users_by_id = {}
-    if user_ids:
-        users = session.exec(select(EndUser).where(EndUser.id.in_(user_ids))).all()
-        users_by_id = {user.id: user for user in users}
+        for kami in kamis:
+            if kami.redeemed_by_user_id:
+                user_ids.add(kami.redeemed_by_user_id)
+            if kami.created_by_user_id:
+                user_ids.add(kami.created_by_user_id)
 
     app_ids = sorted({device.app_id for device in all_devices if device.app_id})
     apps_by_id = {}
     if app_ids:
         apps = session.exec(select(App).where(App.app_id.in_(app_ids))).all()
         apps_by_id = {app.app_id: app for app in apps}
+        for app in apps:
+            if app.owner_user_id:
+                user_ids.add(app.owner_user_id)
+
+    users_by_id = {}
+    if user_ids:
+        users = session.exec(select(EndUser).where(EndUser.id.in_(list(user_ids)))).all()
+        users_by_id = {user.id: user for user in users}
 
     ip_sets_by_device_key = {(device.app_id, device.uuid): set() for device in all_devices}
     event_user_by_device_key = {}
@@ -4208,6 +4245,7 @@ async def update_device_risk(
     session: Session = Depends(get_session)
 ):
     """更新设备风险等级（0正常，1警告，2黑名单）- 全局共享"""
+    _require_admin(current_user)
     statement = select(Device).where(Device.id == device_id)
     device = session.exec(statement).first()
 

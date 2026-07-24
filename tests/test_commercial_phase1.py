@@ -14,12 +14,15 @@ from main import app as fastapi_app
 from models import (
     AdminUser,
     App,
+    Device,
     EndUser,
     Kami,
+    KamiDeviceBinding,
     KamiSpec,
     UserAppAuthorization,
     UserQuotaAccount,
     UserQuotaTransaction,
+    UserQuotaType,
 )
 
 
@@ -438,3 +441,276 @@ def test_merchant_authorized_app_issue_requires_existing_spec_and_hides_secrets(
             assert all(row.points_amount == 100 for row in rows)
     finally:
         fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_can_create_self_owned_app_without_hidden_app_create_quota():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="self-app-merchant", password_hash=hash_password("secret123"), status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        merchant_token = routes_user.create_user_access_token(merchant)
+        merchant_id = merchant.id
+
+    try:
+        response = client.post(
+            "/api/v1/merchant/apps",
+            headers=auth_headers(merchant_token),
+            json={"name": "Merchant Self App"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["is_owned"] is True
+        assert data["quota"]["quota_type"] == "app_create"
+        assert data["quota"]["amount"] == 0
+
+        with Session(engine) as session:
+            account = session.exec(
+                select(UserQuotaAccount).where(UserQuotaAccount.user_id == merchant_id)
+            ).one()
+            assert account.app_create_balance == 0
+            assert account.kami_issue_balance == 0
+            app_create_transactions = session.exec(
+                select(UserQuotaTransaction).where(
+                    UserQuotaTransaction.user_id == merchant_id,
+                    UserQuotaTransaction.quota_type == UserQuotaType.app_create,
+                )
+            ).all()
+            assert app_create_transactions == []
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_duplicate_merchant_issue_batch_is_rejected_without_free_cards():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="duplicate-issuer", password_hash=hash_password("secret123"), status=1)
+        app = App(
+            app_id="app_duplicate_issue",
+            name="Duplicate Issue App",
+            app_secret="secret-duplicate",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by=merchant.username,
+            owner_user_id=1,
+        )
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        app.owner_user_id = merchant.id
+        session.add(app)
+        session.add(UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=5))
+        session.commit()
+        token = routes_user.create_user_access_token(merchant)
+        merchant_id = merchant.id
+
+    payload = {
+        "kami_type": "points",
+        "count": 2,
+        "points_amount": 10,
+        "batch_no": "DUP-001",
+        "code_length": 8,
+    }
+
+    try:
+        first_response = client.post(
+            "/api/v1/merchant/apps/app_duplicate_issue/kamis/batch",
+            headers=auth_headers(token),
+            json=payload,
+        )
+        assert first_response.status_code == 200
+
+        duplicate_response = client.post(
+            "/api/v1/merchant/apps/app_duplicate_issue/kamis/batch",
+            headers=auth_headers(token),
+            json=payload,
+        )
+        assert duplicate_response.status_code == 400
+        assert "batch_no" in duplicate_response.json()["detail"]
+
+        with Session(engine) as session:
+            cards = session.exec(
+                select(Kami).where(
+                    Kami.app_id == "app_duplicate_issue",
+                    Kami.batch_no == "DUP-001",
+                    Kami.created_by_user_id == merchant_id,
+                )
+            ).all()
+            account = session.exec(
+                select(UserQuotaAccount).where(UserQuotaAccount.user_id == merchant_id)
+            ).one()
+            consume_transactions = session.exec(
+                select(UserQuotaTransaction).where(
+                    UserQuotaTransaction.user_id == merchant_id,
+                    UserQuotaTransaction.quota_type == UserQuotaType.kami_issue,
+                    UserQuotaTransaction.biz_id == "kami_issue:app_duplicate_issue:DUP-001::2",
+                )
+            ).all()
+            assert len(cards) == 2
+            assert account.kami_issue_balance == 3
+            assert len(consume_transactions) == 1
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_devices_require_admin_and_merchant_devices_are_scoped():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="device-merchant", password_hash=hash_password("secret123"), status=1)
+        other_merchant = EndUser(username="other-device-merchant", password_hash=hash_password("secret123"), status=1)
+        usage_user = EndUser(
+            app_id="app_device_owned",
+            username="usage-device-user",
+            password_hash=hash_password("secret123"),
+            status=1,
+        )
+        app = App(
+            app_id="app_device_owned",
+            name="Device Owned App",
+            app_secret="secret-device-owned",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by="device-merchant",
+        )
+        other_app = App(
+            app_id="app_device_other",
+            name="Other Device App",
+            app_secret="secret-device-other",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by="other-device-merchant",
+        )
+        session.add(merchant)
+        session.add(other_merchant)
+        session.add(usage_user)
+        session.add(app)
+        session.add(other_app)
+        session.commit()
+        session.refresh(merchant)
+        session.refresh(other_merchant)
+        session.refresh(usage_user)
+        app.owner_user_id = merchant.id
+        other_app.owner_user_id = other_merchant.id
+        session.add(app)
+        session.add(other_app)
+        session.add(
+            Kami(
+                app_id="app_device_owned",
+                kami_code="DEVOWN001",
+                kami_type="points",
+                status="active",
+                points_amount=10,
+                redeemed_by_user_id=usage_user.id,
+                created_by_user_id=merchant.id,
+            )
+        )
+        session.add(
+            KamiDeviceBinding(
+                app_id="app_device_owned",
+                kami_code="DEVOWN001",
+                device_uuid="device-owned-1",
+                fingerprint="fingerprint-owned-1",
+                bind_ip="203.0.113.10",
+            )
+        )
+        session.add(Device(app_id="app_device_owned", uuid="device-owned-1", fingerprint="fingerprint-owned-1", last_ip="203.0.113.10"))
+        session.add(
+            Kami(
+                app_id="app_device_other",
+                kami_code="DEVOTH001",
+                kami_type="points",
+                status="active",
+                points_amount=10,
+                created_by_user_id=other_merchant.id,
+            )
+        )
+        session.add(
+            KamiDeviceBinding(
+                app_id="app_device_other",
+                kami_code="DEVOTH001",
+                device_uuid="device-other-1",
+                fingerprint="fingerprint-other-1",
+                bind_ip="203.0.113.11",
+            )
+        )
+        session.add(Device(app_id="app_device_other", uuid="device-other-1", fingerprint="fingerprint-other-1", last_ip="203.0.113.11"))
+        session.commit()
+        merchant_token = routes_user.create_user_access_token(merchant)
+        admin_token = routes_admin.create_access_token({"sub": "admin", "user_id": 1, "is_admin": True})
+
+    try:
+        forbidden_admin_response = client.get(
+            "/api/v1/admin/devices",
+            headers=auth_headers(merchant_token),
+        )
+        assert forbidden_admin_response.status_code == 403
+
+        forbidden_risk_response = client.put(
+            "/api/v1/admin/devices/1/risk",
+            headers=auth_headers(merchant_token),
+            params={"risk_level": 2},
+        )
+        assert forbidden_risk_response.status_code == 403
+
+        merchant_devices_response = client.get(
+            "/api/v1/merchant/devices",
+            headers=auth_headers(merchant_token),
+        )
+        assert merchant_devices_response.status_code == 200
+        merchant_items = merchant_devices_response.json()["data"]["items"]
+        assert [item["uuid"] for item in merchant_items] == ["device-owned-1"]
+        assert merchant_items[0]["card_source"] == "merchant_issued"
+        assert merchant_items[0]["app_source"] == "merchant_self_owned"
+        assert merchant_items[0]["issuing_user"]["username"] == "device-merchant"
+        assert merchant_items[0]["owning_user"]["username"] == "device-merchant"
+
+        admin_devices_response = client.get(
+            "/api/v1/admin/devices",
+            headers=auth_headers(admin_token),
+            params={"app_id": "app_device_owned"},
+        )
+        assert admin_devices_response.status_code == 200
+        admin_item = admin_devices_response.json()["data"]["items"][0]
+        assert admin_item["uuid"] == "device-owned-1"
+        assert admin_item["user_type"] == "usage_user"
+        assert admin_item["card_source"] == "merchant_issued"
+        assert admin_item["app_source"] == "merchant_self_owned"
+        assert admin_item["issuing_user"]["username"] == "device-merchant"
+        assert admin_item["owning_user"]["username"] == "device-merchant"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_proof_upload_runtime_has_writable_persistent_uploads_directory():
+    project_root = __import__("pathlib").Path(__file__).resolve().parents[1]
+    dockerfile = (project_root / "Dockerfile").read_text(encoding="utf-8")
+    prod_compose = (project_root / "docker-compose.prod.yml").read_text(encoding="utf-8")
+    dev_compose = (project_root / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "/app/uploads" in dockerfile
+    assert "chown -R app:app /app/logs /app/uploads" in dockerfile
+    assert "fastapi_uploads:/app/uploads" in prod_compose
+    assert "fastapi_uploads:" in prod_compose
+    assert "fastapi_uploads:/app/uploads" in dev_compose
+    assert "fastapi_uploads:" in dev_compose

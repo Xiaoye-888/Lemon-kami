@@ -316,16 +316,6 @@ def create_user_app(
     app_id = f"app_{uuid.uuid4().hex[:12]}"
     secret = uuid.uuid4().hex
     key_pair = RSACrypto.generate_key_pair()
-    result = consume_user_quota(
-        session=session,
-        account=account,
-        quota_type=UserQuotaType.app_create,
-        amount=1,
-        biz_id=f"app_create:{app_id}",
-        operator=user.username,
-        remark=f"Create app {name}",
-        metadata={"name": name, "app_id": app_id},
-    )
     app = App(
         app_id=app_id,
         name=name,
@@ -339,6 +329,14 @@ def create_user_app(
     )
     session.add(app)
     session.flush()
+    result = {
+        "transaction_id": None,
+        "quota_type": UserQuotaType.app_create.value,
+        "amount": 0,
+        "balance_after": account.app_create_balance,
+        "idempotent": False,
+        "metered": False,
+    }
     return app, result
 
 
@@ -370,6 +368,15 @@ def issue_user_kamis(
     if unit_cost <= 0:
         raise ValueError("unit_cost must be greater than 0")
     effective_batch_no = batch_no or f"user_{uuid.uuid4().hex[:12]}"
+    existing_batch = session.exec(
+        select(KamiBatch).where(
+            KamiBatch.app_id == app.app_id,
+            KamiBatch.batch_no == effective_batch_no,
+        )
+    ).first()
+    if existing_batch:
+        raise ValueError("batch_no already exists")
+
     account = get_or_create_user_quota_account(session, user.id, user.username)
     total_cost = count * unit_cost
     quota_result = consume_user_quota(
@@ -388,6 +395,8 @@ def issue_user_kamis(
             "total_cost": total_cost,
         },
     )
+    if quota_result.get("idempotent"):
+        raise ValueError("batch_no already processed")
 
     kami_type_enum = _normalize_kami_type(kami_type)
     if charset not in KAMI_CHARSETS:
@@ -419,37 +428,30 @@ def issue_user_kamis(
     code_expires_at = None
     codes: list[str] = []
     kamis: list[Kami] = []
-    existing_batch = session.exec(
-        select(KamiBatch).where(
-            KamiBatch.app_id == app.app_id,
-            KamiBatch.batch_no == effective_batch_no,
+    session.add(
+        KamiBatch(
+            spec_id=spec_id,
+            app_id=app.app_id,
+            batch_no=effective_batch_no,
+            kami_type=kami_type_enum,
+            points_amount=points_amount if kami_type_enum == KamiType.points else None,
+            points_valid_days=points_valid_days if kami_type_enum == KamiType.points else None,
+            time_value=time_value if kami_type_enum in TIME_CARD_UNITS else None,
+            time_unit=time_unit if kami_type_enum in TIME_CARD_UNITS else None,
+            times_total=times_total if kami_type_enum == KamiType.times else None,
+            code_prefix=code_prefix,
+            code_length=code_length,
+            charset=charset,
+            machine_bind_mode=machine_bind_mode_enum,
+            max_bind_devices=max_bind_devices,
+            authorization_owner=authorization_owner_enum,
+            user_bind_mode=user_bind_mode_enum,
+            status=1,
+            remark=f"Merchant issued by {user.username}",
+            created_at=now,
+            updated_at=now,
         )
-    ).first()
-    if not existing_batch:
-        session.add(
-            KamiBatch(
-                spec_id=spec_id,
-                app_id=app.app_id,
-                batch_no=effective_batch_no,
-                kami_type=kami_type_enum,
-                points_amount=points_amount if kami_type_enum == KamiType.points else None,
-                points_valid_days=points_valid_days if kami_type_enum == KamiType.points else None,
-                time_value=time_value if kami_type_enum in TIME_CARD_UNITS else None,
-                time_unit=time_unit if kami_type_enum in TIME_CARD_UNITS else None,
-                times_total=times_total if kami_type_enum == KamiType.times else None,
-                code_prefix=code_prefix,
-                code_length=code_length,
-                charset=charset,
-                machine_bind_mode=machine_bind_mode_enum,
-                max_bind_devices=max_bind_devices,
-                authorization_owner=authorization_owner_enum,
-                user_bind_mode=user_bind_mode_enum,
-                status=1,
-                remark=f"Merchant issued by {user.username}",
-                created_at=now,
-                updated_at=now,
-            )
-        )
+    )
 
     for _ in range(count):
         kami_code = generate_kami_code(code_length, code_prefix or "", charset)

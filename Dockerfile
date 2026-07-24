@@ -49,8 +49,8 @@ COPY --chown=app:app sdk/python_sdk/*.zip ./sdk/python_sdk/
 COPY --chown=app:app sdk/js_sdk/*.zip ./sdk/js_sdk/
 COPY --chown=app:app sdk/java_sdk/*.zip ./sdk/java_sdk/
 
-RUN mkdir -p /app/logs \
-    && chown -R app:app /app/logs
+RUN mkdir -p /app/logs /app/uploads \
+    && chown -R app:app /app/logs /app/uploads
 
 USER app
 

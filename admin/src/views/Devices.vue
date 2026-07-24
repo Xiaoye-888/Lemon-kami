@@ -70,6 +70,7 @@
         <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button 
+              v-if="!isMerchantConsole"
               size="small" 
               type="success" 
               :disabled="row.risk_level === 0"
@@ -78,6 +79,7 @@
               恢复正常
             </el-button>
             <el-button 
+              v-if="!isMerchantConsole"
               size="small" 
               type="warning" 
               :disabled="row.risk_level === 1"
@@ -86,6 +88,7 @@
               警告
             </el-button>
             <el-button 
+              v-if="!isMerchantConsole"
               size="small" 
               type="danger" 
               :disabled="row.risk_level === 2"
@@ -110,15 +113,19 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getDevices, updateDeviceRisk } from '../api/device'
+import { getDevices, getMerchantDevices, updateDeviceRisk } from '../api/device'
 import { getApps } from '../api/admin'
+import { getMerchantApps } from '../api/merchant'
 
 const loading = ref(false)
 const devices = ref([])
 const apps = ref([])
 const total = ref(0)
+const route = useRoute()
+const isMerchantConsole = computed(() => route.path.startsWith('/merchant'))
 
 const queryParams = reactive({
   app_id: '',  // 默认为空，显示全部
@@ -129,7 +136,7 @@ const queryParams = reactive({
 
 const loadApps = async () => {
   try {
-    const res = await getApps()
+    const res = isMerchantConsole.value ? await getMerchantApps() : await getApps()
     apps.value = res.data
   } catch (error) {
     console.error('加载应用失败:', error)
@@ -140,7 +147,7 @@ const loadApps = async () => {
 const loadDevices = async () => {
   loading.value = true
   try {
-    const res = await getDevices(queryParams)
+    const res = isMerchantConsole.value ? await getMerchantDevices(queryParams) : await getDevices(queryParams)
     devices.value = res.data.items || []
     total.value = res.data.total ?? devices.value.length
   } catch (error) {
@@ -164,6 +171,7 @@ const getDeviceKamiText = (row) => {
 }
 
 const updateRisk = async (row, level) => {
+  if (isMerchantConsole.value) return
   const levelText = { 0: '恢复正常', 1: '警告', 2: '黑名单' }
   const confirmText = {
     0: `确定要将设备 "${row.uuid}" 恢复正常吗？`,

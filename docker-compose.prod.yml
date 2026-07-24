@@ -57,6 +57,7 @@ services:
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - fastapi_logs:/app/logs
+      - fastapi_uploads:/app/uploads
     depends_on:
       mysql:
         condition: service_healthy
@@ -86,6 +87,7 @@ volumes:
   mysql_data:
   redis_data:
   fastapi_logs:
+  fastapi_uploads:
 
 networks:
   lemon_network:

@@ -1,9 +1,11 @@
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field as PydanticField
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 import routes_user
@@ -20,9 +22,11 @@ from database import get_session
 from datetime_utils import to_api_beijing_iso
 from models import (
     App,
+    Device,
     EndUser,
     Kami,
     KamiBatch,
+    KamiDeviceBinding,
     KamiSpec,
     RechargeOrder,
     UserAppAuthorization,
@@ -128,6 +132,98 @@ def _spec_payload(spec: KamiSpec) -> dict:
     }
 
 
+def _compact_end_user_payload(user: Optional[EndUser]) -> Optional[dict]:
+    if not user:
+        return None
+    return {"id": user.id, "username": user.username, "app_id": user.app_id}
+
+
+def _device_matches_binding(device: object, binding: KamiDeviceBinding) -> bool:
+    return (
+        getattr(device, "app_id", None) == binding.app_id
+        and (
+            getattr(device, "uuid", None) == binding.device_uuid
+            or getattr(device, "fingerprint", None) == binding.fingerprint
+        )
+    )
+
+
+def _merchant_device_payload(
+    *,
+    device: object,
+    related_kami_codes: list[str],
+    kamis_by_code: dict[str, Kami],
+    users_by_id: dict[int, EndUser],
+    apps_by_id: dict[str, App],
+    current_user: EndUser,
+) -> dict:
+    related_kami_codes = list(dict.fromkeys([code for code in related_kami_codes if code]))
+    related_kamis = [kamis_by_code[code] for code in related_kami_codes if code in kamis_by_code]
+    kami = related_kamis[0] if related_kamis else None
+    app = apps_by_id.get(getattr(device, "app_id", None))
+    redeemed_user = users_by_id.get(kami.redeemed_by_user_id) if kami and kami.redeemed_by_user_id else None
+    issuing_user = users_by_id.get(kami.created_by_user_id) if kami and kami.created_by_user_id else None
+    owning_user = users_by_id.get(app.owner_user_id) if app and app.owner_user_id else None
+    if not owning_user and app and _app_is_owned_by_user(app, current_user):
+        owning_user = current_user
+
+    if redeemed_user:
+        user_type = "usage_user" if redeemed_user.app_id else "merchant"
+    elif issuing_user:
+        user_type = "merchant"
+    else:
+        user_type = "admin"
+
+    risk_level = getattr(device, "risk_level", 0)
+    risk_text = {0: "normal", 1: "warning", 2: "blocked"}.get(risk_level, "unknown")
+    return {
+        "id": getattr(device, "id", None),
+        "app_id": getattr(device, "app_id", None),
+        "app_name": app.name if app else None,
+        "uuid": getattr(device, "uuid", None),
+        "fingerprint": getattr(device, "fingerprint", None),
+        "last_ip": getattr(device, "last_ip", None),
+        "ip_count": 1 if getattr(device, "last_ip", None) else 0,
+        "kami_code": related_kami_codes[0] if related_kami_codes else None,
+        "kami_codes": related_kami_codes,
+        "kami_count": len(related_kami_codes),
+        "username": redeemed_user.username if redeemed_user else None,
+        "user_id": redeemed_user.id if redeemed_user else None,
+        "user_type": user_type,
+        "app_source": "merchant_self_owned" if app and _app_is_owned_by_user(app, current_user) else "admin_authorized",
+        "card_source": "merchant_issued" if issuing_user and issuing_user.id == current_user.id else "admin_issued" if kami else None,
+        "issuing_user": _compact_end_user_payload(issuing_user),
+        "owning_user": _compact_end_user_payload(owning_user),
+        "risk_level": risk_level,
+        "risk_level_text": risk_text,
+        "last_verify_at": to_api_beijing_iso(kami.last_verify_at, naive="civil") if kami and kami.last_verify_at else None,
+    }
+
+
+def _merchant_device_payload_matches_keyword(payload: dict, keyword: Optional[str]) -> bool:
+    if not keyword:
+        return True
+    keyword_lower = keyword.lower()
+    values = [
+        payload.get("app_id"),
+        payload.get("app_name"),
+        payload.get("uuid"),
+        payload.get("fingerprint"),
+        payload.get("last_ip"),
+        payload.get("kami_code"),
+        payload.get("username"),
+        payload.get("user_id"),
+        payload.get("user_type"),
+        payload.get("app_source"),
+        payload.get("card_source"),
+    ]
+    for user_key in ("issuing_user", "owning_user"):
+        user_payload = payload.get(user_key) or {}
+        values.extend([user_payload.get("id"), user_payload.get("username")])
+    values.extend(payload.get("kami_codes") or [])
+    return any(keyword_lower in str(value).lower() for value in values if value is not None)
+
+
 async def get_current_merchant(
     current_user: EndUser = Depends(routes_user.get_current_end_user),
 ) -> EndUser:
@@ -182,6 +278,147 @@ async def list_merchant_quota_transactions(
             page=page,
             page_size=page_size,
         ),
+    }
+
+
+@router.get("/devices", summary="List merchant visible devices")
+async def list_merchant_devices(
+    app_id: Optional[str] = Query(None),
+    risk_level: Optional[int] = Query(None),
+    keyword: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    apps = get_user_visible_apps(session, current_user)
+    apps_by_id = {app.app_id: app for app in apps}
+    if not apps_by_id:
+        return {"success": True, "data": {"total": 0, "page": page, "page_size": page_size, "items": []}}
+
+    selected_app_id = app_id.strip() if app_id else None
+    if selected_app_id and selected_app_id not in apps_by_id:
+        raise HTTPException(status_code=403, detail="No permission to view this app")
+
+    allowed_app_ids = {selected_app_id} if selected_app_id else set(apps_by_id.keys())
+    owned_app_ids = {
+        app.app_id
+        for app in apps
+        if app.app_id in allowed_app_ids and _app_is_owned_by_user(app, current_user)
+    }
+
+    kami_visibility_conditions = [Kami.created_by_user_id == current_user.id]
+    if owned_app_ids:
+        kami_visibility_conditions.append(Kami.app_id.in_(list(owned_app_ids)))
+    kami_statement = select(Kami).where(
+        Kami.app_id.in_(list(allowed_app_ids)),
+        or_(*kami_visibility_conditions),
+    )
+    kamis = session.exec(kami_statement).all()
+    kamis_by_code = {kami.kami_code: kami for kami in kamis}
+    visible_kami_codes = set(kamis_by_code.keys())
+
+    binding_conditions = []
+    if visible_kami_codes:
+        binding_conditions.append(KamiDeviceBinding.kami_code.in_(list(visible_kami_codes)))
+    if owned_app_ids:
+        binding_conditions.append(KamiDeviceBinding.app_id.in_(list(owned_app_ids)))
+    bindings = []
+    if binding_conditions:
+        bindings = session.exec(
+            select(KamiDeviceBinding).where(
+                KamiDeviceBinding.app_id.in_(list(allowed_app_ids)),
+                or_(*binding_conditions),
+            )
+        ).all()
+        missing_codes = {binding.kami_code for binding in bindings if binding.kami_code not in kamis_by_code}
+        if missing_codes:
+            extra_kamis = session.exec(
+                select(Kami).where(
+                    Kami.app_id.in_(list(allowed_app_ids)),
+                    Kami.kami_code.in_(list(missing_codes)),
+                )
+            ).all()
+            kamis_by_code.update({kami.kami_code: kami for kami in extra_kamis})
+
+    device_statement = select(Device).where(Device.app_id.in_(list(allowed_app_ids)))
+    if risk_level is not None:
+        device_statement = device_statement.where(Device.risk_level == risk_level)
+    physical_devices = session.exec(device_statement).all()
+
+    related_codes_by_device_id = {}
+    primary_binding_by_device_id = {}
+    visible_devices = []
+    for device in physical_devices:
+        matching_bindings = [binding for binding in bindings if _device_matches_binding(device, binding)]
+        if device.app_id not in owned_app_ids and not matching_bindings:
+            continue
+        visible_devices.append(device)
+        related_codes_by_device_id[device.id] = [binding.kami_code for binding in matching_bindings]
+        if matching_bindings:
+            primary_binding_by_device_id[device.id] = matching_bindings[0]
+
+    seen_device_keys = {
+        (device.app_id, device.uuid, device.fingerprint)
+        for device in visible_devices
+    }
+    for binding in bindings:
+        matched_physical_device = any(_device_matches_binding(device, binding) for device in visible_devices)
+        if matched_physical_device:
+            continue
+        key = (binding.app_id, binding.device_uuid, binding.fingerprint)
+        if key in seen_device_keys:
+            continue
+        virtual_device = SimpleNamespace(
+            id=f"binding:{binding.id}",
+            app_id=binding.app_id,
+            uuid=binding.device_uuid,
+            fingerprint=binding.fingerprint,
+            last_ip=binding.bind_ip,
+            risk_level=0,
+        )
+        visible_devices.append(virtual_device)
+        related_codes_by_device_id[virtual_device.id] = [binding.kami_code]
+        primary_binding_by_device_id[virtual_device.id] = binding
+        seen_device_keys.add(key)
+
+    user_ids = {current_user.id}
+    for app in apps_by_id.values():
+        if app.owner_user_id:
+            user_ids.add(app.owner_user_id)
+    for kami in kamis_by_code.values():
+        if kami.redeemed_by_user_id:
+            user_ids.add(kami.redeemed_by_user_id)
+        if kami.created_by_user_id:
+            user_ids.add(kami.created_by_user_id)
+    users = session.exec(select(EndUser).where(EndUser.id.in_(list(user_ids)))).all() if user_ids else []
+    users_by_id = {user.id: user for user in users}
+
+    keyword_value = keyword.strip() if keyword else None
+    payloads = [
+        _merchant_device_payload(
+            device=device,
+            related_kami_codes=related_codes_by_device_id.get(device.id, []),
+            kamis_by_code=kamis_by_code,
+            users_by_id=users_by_id,
+            apps_by_id=apps_by_id,
+            current_user=current_user,
+        )
+        for device in visible_devices
+    ]
+    payloads = [payload for payload in payloads if _merchant_device_payload_matches_keyword(payload, keyword_value)]
+    payloads.sort(key=lambda item: str(item.get("id") or ""), reverse=True)
+
+    total = len(payloads)
+    offset = (page - 1) * page_size
+    return {
+        "success": True,
+        "data": {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "items": payloads[offset:offset + page_size],
+        },
     }
 
 

@@ -19,6 +19,14 @@ export function getDevices(params) {
 }
 
 // 更新设备风险等级
+export function getMerchantDevices(params) {
+  return request({
+    url: '/merchant/devices',
+    method: 'get',
+    params
+  })
+}
+
 export function updateDeviceRisk(deviceId, riskLevel) {
   return request({
     url: `/admin/devices/${deviceId}/risk`,
