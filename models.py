@@ -366,6 +366,46 @@ class RechargeBonusRule(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=get_now_naive, description="Updated time")
 
 
+class AdminAuditLog(SQLModel, table=True):
+    __tablename__ = "admin_audit_logs"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    action: str = Field(max_length=64, index=True, description="Admin action key")
+    resource_type: str = Field(max_length=64, index=True, description="Resource type")
+    resource_id: Optional[str] = Field(default=None, max_length=128, description="Resource public ID")
+    admin_id: Optional[int] = Field(default=None, description="Admin user ID")
+    admin_username: Optional[str] = Field(default=None, max_length=255, index=True, description="Admin username")
+    target_user_id: Optional[int] = Field(default=None, index=True, description="Target user ID")
+    target_username: Optional[str] = Field(default=None, max_length=255, index=True, description="Target username")
+    status: str = Field(default="success", max_length=32, index=True, description="Action status")
+    confirm_scope: Optional[str] = Field(default=None, max_length=64, index=True, description="Confirmation scope")
+    request_ip: Optional[str] = Field(default=None, max_length=64, description="Request IP")
+    user_agent: Optional[str] = Field(default=None, sa_column=Column(Text), description="Request user agent")
+    summary: Optional[str] = Field(default=None, sa_column=Column(Text), description="Human-readable summary")
+    before_json: Optional[str] = Field(default=None, sa_column=Column(Text), description="JSON snapshot before action")
+    after_json: Optional[str] = Field(default=None, sa_column=Column(Text), description="JSON snapshot after action")
+    metadata_json: Optional[str] = Field(default=None, sa_column=Column(Text), description="Additional JSON metadata")
+    error_message: Optional[str] = Field(default=None, sa_column=Column(Text), description="Failure detail")
+    created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Created time")
+
+
+class OpsBackupRecord(SQLModel, table=True):
+    __tablename__ = "ops_backup_records"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    backup_no: str = Field(unique=True, index=True, max_length=64, description="Public backup number")
+    backup_type: str = Field(max_length=32, description="Backup type")
+    status: str = Field(max_length=32, description="Backup status")
+    file_path: Optional[str] = Field(default=None, sa_column=Column(Text), description="Backup file path")
+    file_name: Optional[str] = Field(default=None, max_length=255, description="Backup file name")
+    file_size: Optional[int] = Field(default=None, description="Backup file size in bytes")
+    table_counts_json: Optional[str] = Field(default=None, sa_column=Column(Text), description="JSON table row counts")
+    error_message: Optional[str] = Field(default=None, sa_column=Column(Text), description="Failure detail")
+    created_by: Optional[str] = Field(default=None, max_length=255, description="Creator username")
+    created_at: datetime = Field(default_factory=get_now_naive, description="Created time")
+    completed_at: Optional[datetime] = Field(default=None, description="Completed time")
+
+
 class RechargeOrder(SQLModel, table=True):
     __tablename__ = "recharge_orders"
 
@@ -387,6 +427,8 @@ class RechargeOrder(SQLModel, table=True):
     proof_file_path: Optional[str] = Field(default=None, description="Stored payment proof path")
     proof_file_name: Optional[str] = Field(default=None, max_length=255, description="Original proof file name")
     proof_content_type: Optional[str] = Field(default=None, max_length=128, description="Proof content type")
+    proof_file_deleted: bool = Field(default=False, index=True, description="Whether stored proof file was deleted")
+    proof_deleted_at: Optional[datetime] = Field(default=None, description="Proof file deletion time")
     user_remark: Optional[str] = Field(default=None, description="Merchant remark")
     admin_remark: Optional[str] = Field(default=None, description="Admin review remark")
     reject_reason: Optional[str] = Field(default=None, description="Reject reason")

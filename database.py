@@ -769,6 +769,77 @@ def _ensure_sqlite_schema():
             conn.commit()
 
 
+def _ensure_phase2_recharge_order_schema():
+    """Backfill phase 2 proof lifecycle columns on existing recharge_orders tables."""
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        if engine.dialect.name == "sqlite":
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT name FROM sqlite_master WHERE type='table'")
+                ).fetchall()
+            }
+            if "recharge_orders" not in tables:
+                return
+
+            columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(recharge_orders)")).fetchall()
+            }
+            if "proof_file_deleted" not in columns:
+                conn.execute(
+                    text("ALTER TABLE recharge_orders ADD COLUMN proof_file_deleted BOOLEAN DEFAULT 0")
+                )
+            if "proof_deleted_at" not in columns:
+                conn.execute(
+                    text("ALTER TABLE recharge_orders ADD COLUMN proof_deleted_at DATETIME DEFAULT NULL")
+                )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS "
+                    "idx_recharge_orders_proof_file_deleted "
+                    "ON recharge_orders (proof_file_deleted)"
+                )
+            )
+            conn.commit()
+            return
+
+        result = conn.execute(text("SHOW TABLES"))
+        tables = {row[0] for row in result.fetchall()}
+        if "recharge_orders" not in tables:
+            return
+
+        columns = {
+            row[0]
+            for row in conn.execute(text("SHOW COLUMNS FROM recharge_orders")).fetchall()
+        }
+        if "proof_file_deleted" not in columns:
+            conn.execute(
+                text("ALTER TABLE recharge_orders ADD COLUMN proof_file_deleted BOOLEAN DEFAULT FALSE")
+            )
+            conn.commit()
+        if "proof_deleted_at" not in columns:
+            conn.execute(
+                text("ALTER TABLE recharge_orders ADD COLUMN proof_deleted_at DATETIME DEFAULT NULL")
+            )
+            conn.commit()
+
+        indexes = {
+            row[2]
+            for row in conn.execute(text("SHOW INDEX FROM recharge_orders")).fetchall()
+        }
+        if "idx_recharge_orders_proof_file_deleted" not in indexes:
+            conn.execute(
+                text(
+                    "CREATE INDEX idx_recharge_orders_proof_file_deleted "
+                    "ON recharge_orders (proof_file_deleted)"
+                )
+            )
+            conn.commit()
+
+
 def wait_for_db(max_retries=30, retry_interval=2):
     """
     等待数据库就绪
@@ -826,6 +897,7 @@ def _init_db_unlocked():
     if engine.dialect.name == "sqlite":
         SQLModel.metadata.create_all(engine)
         _ensure_sqlite_schema()
+        _ensure_phase2_recharge_order_schema()
         from kami_spec_service import backfill_specs_for_session
         with Session(engine) as session:
             backfill_specs_for_session(session)
@@ -1064,6 +1136,7 @@ def _init_db_unlocked():
     # create_all is non-destructive and adds newer SQLModel tables that are not
     # covered by the legacy hand-written bootstrap path.
     SQLModel.metadata.create_all(engine)
+    _ensure_phase2_recharge_order_schema()
     
     _ensure_points_schema()
 

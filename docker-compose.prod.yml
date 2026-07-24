@@ -54,10 +54,14 @@ services:
       LOGIN_AES_KEY: ${LOGIN_AES_KEY:?LOGIN_AES_KEY is required}
       UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?BOOTSTRAP_ADMIN_PASSWORD is required}
+      BACKUP_ROOT: ${BACKUP_ROOT:-/app/backups}
+      MERCHANT_LOW_ISSUE_QUOTA_THRESHOLD: ${MERCHANT_LOW_ISSUE_QUOTA_THRESHOLD:-20}
+      OPS_RECENT_LOG_LINES: ${OPS_RECENT_LOG_LINES:-200}
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - fastapi_logs:/app/logs
       - fastapi_uploads:/app/uploads
+      - fastapi_backups:/app/backups
     depends_on:
       mysql:
         condition: service_healthy
@@ -88,6 +92,7 @@ volumes:
   redis_data:
   fastapi_logs:
   fastapi_uploads:
+  fastapi_backups:
 
 networks:
   lemon_network:

@@ -30,6 +30,9 @@ class Settings(BaseSettings):
 
     LOGIN_AES_KEY: Optional[str] = None
     BOOTSTRAP_ADMIN_PASSWORD: Optional[str] = None
+    BACKUP_ROOT: str = "/app/backups"
+    MERCHANT_LOW_ISSUE_QUOTA_THRESHOLD: int = 20
+    OPS_RECENT_LOG_LINES: int = 200
 
 
 settings = Settings()
