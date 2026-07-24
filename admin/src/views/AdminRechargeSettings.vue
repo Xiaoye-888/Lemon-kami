@@ -18,9 +18,6 @@
           <el-form-item label="显示名称">
             <el-input v-model="channelForm.display_name" />
           </el-form-item>
-          <el-form-item label="二维码地址">
-            <el-input v-model="channelForm.qr_code_url" />
-          </el-form-item>
           <el-form-item label="二维码图片">
             <div class="file-input-row">
               <input ref="qrFileInput" type="file" accept="image/png,image/jpeg,image/webp" @change="handleQrFile" />
@@ -211,7 +208,6 @@ function channelPayloadFormData() {
   const payload = new FormData()
   payload.append('channel', channelForm.channel)
   payload.append('display_name', channelForm.display_name)
-  payload.append('qr_code_url', channelForm.qr_code_url || '')
   payload.append('enabled', String(channelForm.enabled))
   payload.append('sort_order', String(channelForm.sort_order || 0))
   if (channelForm.remark) {

@@ -407,6 +407,9 @@ def test_commercial_recharge_pages_expose_order_review_and_upload_flow():
     assert "handleDeleteQrCode" in admin_settings
     assert "ElMessageBox" in admin_settings
     assert "删除二维码" in admin_settings
+    assert "二维码地址" not in admin_settings
+    assert 'v-model="channelForm.qr_code_url"' not in admin_settings
+    assert "payload.append('qr_code_url'" not in admin_settings
     assert "qr_code_file" in admin_settings
     assert "saveRechargeOption" in admin_settings
     assert "saveBonusRule" in admin_settings

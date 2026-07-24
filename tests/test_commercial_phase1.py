@@ -921,6 +921,55 @@ def test_admin_payment_channel_qrcode_delete_clears_url_and_removes_uploaded_fil
         fastapi_app.dependency_overrides.clear()
 
 
+def test_admin_payment_channel_upload_preserves_qrcode_when_no_new_file_or_url(tmp_path, monkeypatch):
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    upload_root = tmp_path / "uploads" / "commercial"
+    monkeypatch.setattr(commercial_service, "UPLOAD_ROOT", upload_root)
+
+    with Session(engine) as session:
+        commercial_service.upsert_payment_channel(
+            session,
+            channel=RechargeChannel.wechat,
+            display_name="WeChat Pay",
+            qr_code_url="/api/v1/commercial/payment-qrcodes/wechat_saved.png",
+            enabled=True,
+            sort_order=1,
+        )
+        session.commit()
+
+    try:
+        response = client.post(
+            "/api/v1/admin/commercial/payment-channels/upload",
+            data={
+                "channel": "wechat",
+                "display_name": "WeChat Pay Updated",
+                "enabled": "true",
+                "sort_order": "2",
+                "remark": "keep existing qr",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["display_name"] == "WeChat Pay Updated"
+        assert data["qr_code_url"] == "/api/v1/commercial/payment-qrcodes/wechat_saved.png"
+
+        with Session(engine) as session:
+            saved = session.exec(
+                select(RechargePaymentChannel).where(
+                    RechargePaymentChannel.channel == RechargeChannel.wechat
+                )
+            ).one()
+            assert saved.qr_code_url == "/api/v1/commercial/payment-qrcodes/wechat_saved.png"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_merchant_recharge_order_upload_stores_proof_file(tmp_path, monkeypatch):
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

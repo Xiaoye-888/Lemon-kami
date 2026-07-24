@@ -236,6 +236,8 @@ async def save_payment_channel_with_upload(
         if qr_code_file and qr_code_file.filename:
             saved_qr_code_url = await save_payment_qrcode_upload(qr_code_file, channel)
             qr_code_url = saved_qr_code_url
+        elif existing and qr_code_url is None:
+            qr_code_url = existing.qr_code_url
         row = upsert_payment_channel(
             session,
             channel=channel,
