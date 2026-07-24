@@ -424,6 +424,42 @@ def test_commercial_recharge_pages_expose_order_review_and_upload_flow():
     assert "customPreview" in merchant_recharge
 
 
+def test_commercial_ops_stability_controls_are_exposed():
+    admin_orders = (PROJECT_ROOT / "admin/src/views/AdminRechargeOrders.vue").read_text(encoding="utf-8")
+    admin_settings = (PROJECT_ROOT / "admin/src/views/AdminRechargeSettings.vue").read_text(encoding="utf-8")
+    merchant_orders = (PROJECT_ROOT / "admin/src/views/MerchantOrders.vue").read_text(encoding="utf-8")
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+    commercial_api = (PROJECT_ROOT / "admin/src/api/commercial.js").read_text(encoding="utf-8")
+    merchant_api = (PROJECT_ROOT / "admin/src/api/merchant.js").read_text(encoding="utf-8")
+
+    assert "deleteRechargeOption" in commercial_api
+    assert "deleteBonusRule" in commercial_api
+    assert "handleDeleteRechargeOption" in admin_settings
+    assert "handleDeleteBonusRule" in admin_settings
+
+    assert "expireRechargeOrder" in commercial_api
+    assert "cleanupRechargeProofs" in commercial_api
+    assert "expireRechargeOrder" in admin_orders
+    assert "cleanupRechargeProofs" in admin_orders
+    assert "detailVisible" in admin_orders
+    assert "selectedOrder" in admin_orders
+    assert "payment_snapshot" in admin_orders
+    assert "preview_snapshot" in admin_orders
+    assert "reviewer" in admin_orders
+    assert "canceled" in admin_orders
+    assert "expired" in admin_orders
+
+    assert "cancelMerchantRechargeOrder" in merchant_api
+    assert "cancelMerchantRechargeOrder" in merchant_orders
+    assert "canceled" in merchant_orders
+    assert "expired" in merchant_orders
+
+    assert "previewMerchantKamis" in merchant_api
+    assert "previewMerchantKamis" in merchant_batches
+    assert "issuePreview" in merchant_batches
+    assert "can_issue" in merchant_batches
+
+
 def test_commercial_phase1_corrections_keep_identity_and_quota_scope_clear():
     auth_api = (PROJECT_ROOT / "admin/src/api/auth.js").read_text(encoding="utf-8")
     store = (PROJECT_ROOT / "admin/src/stores/user.js").read_text(encoding="utf-8")

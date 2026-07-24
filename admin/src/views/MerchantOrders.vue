@@ -18,6 +18,19 @@
         <el-table-column prop="created_at" label="提交时间" width="180" />
         <el-table-column prop="reviewed_at" label="审核时间" width="180" />
         <el-table-column prop="reject_reason" label="拒绝原因" min-width="160" show-overflow-tooltip />
+        <el-table-column label="操作" width="110" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              link
+              type="danger"
+              :disabled="row.status !== 'pending_review'"
+              :loading="rowAction === `cancel:${row.order_no}`"
+              @click="handleCancelOrder(row)"
+            >
+              取消
+            </el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
   </div>
@@ -25,15 +38,19 @@
 
 <script setup>
 import { onMounted, ref } from 'vue'
-import { getMerchantRechargeOrders } from '../api/merchant'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { cancelMerchantRechargeOrder, getMerchantRechargeOrders } from '../api/merchant'
 
 const loading = ref(false)
+const rowAction = ref('')
 const orders = ref([])
 
 const statusText = (status) => ({
   pending_review: '待审核',
   approved: '已通过',
   rejected: '已拒绝',
+  canceled: '已取消',
+  expired: '已过期',
   abnormal: '异常'
 }[status] || status)
 
@@ -44,6 +61,23 @@ async function loadOrders() {
     orders.value = res.data?.items || []
   } finally {
     loading.value = false
+  }
+}
+
+async function handleCancelOrder(row) {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入取消备注，可留空', `取消订单 ${row.order_no}`, {
+      inputValue: '用户取消充值',
+      type: 'warning'
+    })
+    rowAction.value = `cancel:${row.order_no}`
+    await cancelMerchantRechargeOrder(row.order_no, { remark: value || '用户取消充值' })
+    ElMessage.success('订单已取消')
+    await loadOrders()
+  } catch (error) {
+    if (error !== 'cancel') console.error(error)
+  } finally {
+    rowAction.value = ''
   }
 }
 

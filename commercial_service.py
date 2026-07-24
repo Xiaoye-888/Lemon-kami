@@ -2,7 +2,7 @@ import base64
 import json
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Optional
@@ -265,6 +265,42 @@ def create_bonus_rule(
     session.add(rule)
     session.flush()
     return rule
+
+
+def delete_or_archive_recharge_option(session: Session, option_id: int) -> tuple[RechargeOption, bool]:
+    option = session.get(RechargeOption, option_id)
+    if not option:
+        raise ValueError("recharge option not found")
+    used_order = session.exec(
+        select(RechargeOrder).where(RechargeOrder.option_id == option_id)
+    ).first()
+    if used_order:
+        option.enabled = False
+        option.updated_at = get_now_naive()
+        session.add(option)
+        session.flush()
+        return option, True
+    session.delete(option)
+    session.flush()
+    return option, False
+
+
+def delete_or_archive_bonus_rule(session: Session, rule_id: int) -> tuple[RechargeBonusRule, bool]:
+    rule = session.get(RechargeBonusRule, rule_id)
+    if not rule:
+        raise ValueError("recharge bonus rule not found")
+    used_order = session.exec(
+        select(RechargeOrder).where(RechargeOrder.bonus_rule_id == rule_id)
+    ).first()
+    if used_order:
+        rule.enabled = False
+        rule.updated_at = get_now_naive()
+        session.add(rule)
+        session.flush()
+        return rule, True
+    session.delete(rule)
+    session.flush()
+    return rule, False
 
 
 def recharge_config_payload(session: Session, enabled_only: bool = False) -> dict:
@@ -723,6 +759,15 @@ def _delete_proof_file_if_safe(proof_file_path: Optional[str]) -> bool:
     return _delete_file_if_safe(proof_file_path, UPLOAD_ROOT)
 
 
+TERMINAL_RECHARGE_ORDER_STATUSES = {
+    RechargeOrderStatus.approved,
+    RechargeOrderStatus.rejected,
+    RechargeOrderStatus.canceled,
+    RechargeOrderStatus.expired,
+    RechargeOrderStatus.abnormal,
+}
+
+
 def delete_recharge_orders_for_users(session: Session, user_ids: list[int]) -> dict:
     if not user_ids:
         return {"deleted_recharge_orders": 0, "deleted_recharge_proofs": 0}
@@ -790,8 +835,8 @@ def update_recharge_order_status(
     remark: Optional[str] = None,
     reject_reason: Optional[str] = None,
 ) -> RechargeOrder:
-    if order.status == RechargeOrderStatus.approved:
-        raise ValueError("approved orders cannot be reviewed again")
+    if order.status != RechargeOrderStatus.pending_review:
+        raise ValueError("only pending_review orders can be reviewed")
     if status == RechargeOrderStatus.rejected and not reject_reason:
         raise ValueError("reject_reason is required")
     order.status = status
@@ -803,6 +848,81 @@ def update_recharge_order_status(
     session.add(order)
     session.flush()
     return order
+
+
+def cancel_recharge_order(
+    session: Session,
+    *,
+    order: RechargeOrder,
+    operator: str,
+    remark: Optional[str] = None,
+) -> RechargeOrder:
+    if order.status != RechargeOrderStatus.pending_review:
+        raise ValueError("only pending_review orders can be canceled")
+    order.status = RechargeOrderStatus.canceled
+    order.admin_remark = remark
+    order.updated_at = get_now_naive()
+    session.add(order)
+    session.flush()
+    return order
+
+
+def expire_recharge_order(
+    session: Session,
+    *,
+    order: RechargeOrder,
+    reviewer: str,
+    remark: Optional[str] = None,
+) -> RechargeOrder:
+    if order.status != RechargeOrderStatus.pending_review:
+        raise ValueError("only pending_review orders can be expired")
+    order.status = RechargeOrderStatus.expired
+    order.reviewer = reviewer
+    order.reviewed_at = get_now_naive()
+    order.admin_remark = remark
+    order.updated_at = get_now_naive()
+    session.add(order)
+    session.flush()
+    return order
+
+
+def cleanup_recharge_proofs(
+    session: Session,
+    *,
+    older_than_days: int,
+    dry_run: bool = True,
+) -> dict:
+    if older_than_days <= 0:
+        raise ValueError("older_than_days must be greater than 0")
+    cutoff = get_now_naive() - timedelta(days=older_than_days)
+    orders = session.exec(
+        select(RechargeOrder).where(
+            RechargeOrder.status.in_(TERMINAL_RECHARGE_ORDER_STATUSES),
+            RechargeOrder.created_at <= cutoff,
+            RechargeOrder.proof_file_path.is_not(None),
+        )
+    ).all()
+    deleted_proofs = 0
+    for order in orders:
+        if dry_run:
+            if order.proof_file_path and Path(order.proof_file_path).exists():
+                deleted_proofs += 1
+            continue
+        if _delete_proof_file_if_safe(order.proof_file_path):
+            deleted_proofs += 1
+        order.proof_file_path = None
+        order.proof_file_name = None
+        order.proof_content_type = None
+        order.updated_at = get_now_naive()
+        session.add(order)
+    if not dry_run:
+        session.flush()
+    return {
+        "dry_run": dry_run,
+        "older_than_days": older_than_days,
+        "matched_orders": len(orders),
+        "deleted_proofs": deleted_proofs,
+    }
 
 
 def user_quota_transactions_payload(

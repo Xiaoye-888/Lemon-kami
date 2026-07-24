@@ -340,6 +340,34 @@ def create_user_app(
     return app, result
 
 
+def preview_user_kami_issue(
+    session: Session,
+    user: EndUser,
+    app: App,
+    *,
+    count: int,
+    unit_cost: int = 1,
+) -> dict:
+    if count <= 0:
+        raise ValueError("count must be greater than 0")
+    if unit_cost <= 0:
+        raise ValueError("unit_cost must be greater than 0")
+    account = session.exec(
+        select(UserQuotaAccount).where(UserQuotaAccount.user_id == user.id)
+    ).first()
+    balance_before = account.kami_issue_balance if account else 0
+    total_cost = count * unit_cost
+    balance_after = balance_before - total_cost
+    return {
+        "count": count,
+        "unit_cost": unit_cost,
+        "total_cost": total_cost,
+        "balance_before": balance_before,
+        "balance_after": balance_after,
+        "can_issue": balance_before >= total_cost,
+    }
+
+
 def issue_user_kamis(
     session: Session,
     user: EndUser,

@@ -1,4 +1,5 @@
 import base64
+from datetime import timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -25,6 +26,7 @@ from models import (
     RechargeMode,
     RechargeOrder,
     RechargeOrderStatus,
+    RechargeOption,
     RechargePaymentChannel,
     KamiSpec,
     UserAppAuthorization,
@@ -32,6 +34,7 @@ from models import (
     UserQuotaTransaction,
     UserQuotaTransactionType,
     UserQuotaType,
+    get_now_naive,
 )
 
 
@@ -367,6 +370,302 @@ def test_manual_recharge_order_review_credits_issue_quota_and_transactions(tmp_p
         fastapi_app.dependency_overrides.clear()
 
 
+def test_admin_can_delete_unused_recharge_config_and_archives_used_rows():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        _, merchant = seed_admin_and_merchant(session)
+        merchant_id = merchant.id
+
+    try:
+        unused_option_response = client.post(
+            "/api/v1/admin/commercial/recharge-options",
+            json={"amount": 50, "credit_quota": 60, "enabled": True},
+        )
+        assert unused_option_response.status_code == 200
+        unused_option_id = unused_option_response.json()["data"]["id"]
+
+        delete_unused_option = client.delete(
+            f"/api/v1/admin/commercial/recharge-options/{unused_option_id}"
+        )
+        assert delete_unused_option.status_code == 200
+        assert delete_unused_option.json()["data"] == {
+            "id": unused_option_id,
+            "deleted": True,
+            "archived": False,
+        }
+
+        with Session(engine) as session:
+            assert session.get(RechargeOption, unused_option_id) is None
+
+        used_option_response = client.post(
+            "/api/v1/admin/commercial/recharge-options",
+            json={"amount": 80, "credit_quota": 100, "enabled": True},
+        )
+        assert used_option_response.status_code == 200
+        used_option_id = used_option_response.json()["data"]["id"]
+        with Session(engine) as session:
+            session.add(
+                RechargeOrder(
+                    order_no="RC_USED_OPTION",
+                    user_id=merchant_id,
+                    username="merchant-a",
+                    mode=RechargeMode.fixed,
+                    channel=RechargeChannel.wechat,
+                    amount_cents=8000,
+                    base_quota=100,
+                    bonus_quota=0,
+                    credit_quota=100,
+                    option_id=used_option_id,
+                    status=RechargeOrderStatus.pending_review,
+                )
+            )
+            session.commit()
+
+        archive_used_option = client.delete(
+            f"/api/v1/admin/commercial/recharge-options/{used_option_id}"
+        )
+        assert archive_used_option.status_code == 200
+        assert archive_used_option.json()["data"] == {
+            "id": used_option_id,
+            "deleted": False,
+            "archived": True,
+        }
+        with Session(engine) as session:
+            archived_option = session.get(RechargeOption, used_option_id)
+            assert archived_option is not None
+            assert archived_option.enabled is False
+
+        unused_rule_response = client.post(
+            "/api/v1/admin/commercial/recharge-bonus-rules",
+            json={"threshold_amount": 300, "bonus_quota": 50, "enabled": True},
+        )
+        assert unused_rule_response.status_code == 200
+        unused_rule_id = unused_rule_response.json()["data"]["id"]
+        delete_unused_rule = client.delete(
+            f"/api/v1/admin/commercial/recharge-bonus-rules/{unused_rule_id}"
+        )
+        assert delete_unused_rule.status_code == 200
+        assert delete_unused_rule.json()["data"] == {
+            "id": unused_rule_id,
+            "deleted": True,
+            "archived": False,
+        }
+
+        used_rule_response = client.post(
+            "/api/v1/admin/commercial/recharge-bonus-rules",
+            json={"threshold_amount": 500, "bonus_quota": 90, "enabled": True},
+        )
+        assert used_rule_response.status_code == 200
+        used_rule_id = used_rule_response.json()["data"]["id"]
+        with Session(engine) as session:
+            session.add(
+                RechargeOrder(
+                    order_no="RC_USED_RULE",
+                    user_id=merchant_id,
+                    username="merchant-a",
+                    mode=RechargeMode.custom,
+                    channel=RechargeChannel.wechat,
+                    amount_cents=50000,
+                    base_quota=500,
+                    bonus_quota=90,
+                    credit_quota=590,
+                    bonus_rule_id=used_rule_id,
+                    status=RechargeOrderStatus.pending_review,
+                )
+            )
+            session.commit()
+
+        archive_used_rule = client.delete(
+            f"/api/v1/admin/commercial/recharge-bonus-rules/{used_rule_id}"
+        )
+        assert archive_used_rule.status_code == 200
+        assert archive_used_rule.json()["data"] == {
+            "id": used_rule_id,
+            "deleted": False,
+            "archived": True,
+        }
+        with Session(engine) as session:
+            archived_rule = session.get(RechargeBonusRule, used_rule_id)
+            assert archived_rule is not None
+            assert archived_rule.enabled is False
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_recharge_orders_can_be_canceled_and_expired_before_review():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        _, merchant = seed_admin_and_merchant(session)
+        merchant_token = routes_user.create_user_access_token(merchant)
+
+    try:
+        channel_response = client.post(
+            "/api/v1/admin/commercial/payment-channels",
+            json={"channel": "wechat", "display_name": "Wechat", "enabled": True},
+        )
+        assert channel_response.status_code == 200
+
+        first_order_response = client.post(
+            "/api/v1/merchant/recharge/orders",
+            headers=auth_headers(merchant_token),
+            json={"amount": 20, "mode": "custom", "channel": "wechat"},
+        )
+        assert first_order_response.status_code == 200
+        first_order_no = first_order_response.json()["data"]["order_no"]
+
+        cancel_response = client.post(
+            f"/api/v1/merchant/recharge/orders/{first_order_no}/cancel",
+            headers=auth_headers(merchant_token),
+            json={"remark": "merchant changed mind"},
+        )
+        assert cancel_response.status_code == 200
+        assert cancel_response.json()["data"]["status"] == "canceled"
+
+        approve_canceled = client.post(
+            f"/api/v1/admin/commercial/recharge-orders/{first_order_no}/approve",
+            json={"remark": "must not approve"},
+        )
+        assert approve_canceled.status_code == 400
+
+        second_order_response = client.post(
+            "/api/v1/merchant/recharge/orders",
+            headers=auth_headers(merchant_token),
+            json={"amount": 30, "mode": "custom", "channel": "wechat"},
+        )
+        assert second_order_response.status_code == 200
+        second_order_no = second_order_response.json()["data"]["order_no"]
+
+        expire_response = client.post(
+            f"/api/v1/admin/commercial/recharge-orders/{second_order_no}/expire",
+            json={"remark": "manual timeout"},
+        )
+        assert expire_response.status_code == 200
+        assert expire_response.json()["data"]["status"] == "expired"
+
+        cancel_expired = client.post(
+            f"/api/v1/merchant/recharge/orders/{second_order_no}/cancel",
+            headers=auth_headers(merchant_token),
+            json={"remark": "too late"},
+        )
+        assert cancel_expired.status_code == 400
+
+        approve_expired = client.post(
+            f"/api/v1/admin/commercial/recharge-orders/{second_order_no}/approve",
+            json={"remark": "must not approve"},
+        )
+        assert approve_expired.status_code == 400
+
+        canceled_list = client.get("/api/v1/admin/commercial/recharge-orders?status=canceled")
+        assert canceled_list.status_code == 200
+        assert canceled_list.json()["data"]["items"][0]["order_no"] == first_order_no
+
+        expired_list = client.get("/api/v1/admin/commercial/recharge-orders?status=expired")
+        assert expired_list.status_code == 200
+        assert expired_list.json()["data"]["items"][0]["order_no"] == second_order_no
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_cleanup_recharge_proofs_removes_only_terminal_old_files(tmp_path, monkeypatch):
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    upload_root = tmp_path / "uploads" / "commercial"
+    proof_dir = upload_root / "proofs"
+    proof_dir.mkdir(parents=True)
+    monkeypatch.setattr(commercial_service, "UPLOAD_ROOT", upload_root)
+
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    old_time = get_now_naive() - timedelta(days=40)
+    new_time = get_now_naive() - timedelta(days=5)
+    terminal_path = proof_dir / "terminal.png"
+    pending_path = proof_dir / "pending.png"
+    new_path = proof_dir / "new.png"
+    terminal_path.write_bytes(b"terminal-proof")
+    pending_path.write_bytes(b"pending-proof")
+    new_path.write_bytes(b"new-proof")
+
+    with Session(engine) as session:
+        _, merchant = seed_admin_and_merchant(session)
+        for order_no, status, proof_path, created_at in [
+            ("RC_OLD_TERMINAL", RechargeOrderStatus.approved, terminal_path, old_time),
+            ("RC_OLD_PENDING", RechargeOrderStatus.pending_review, pending_path, old_time),
+            ("RC_NEW_TERMINAL", RechargeOrderStatus.approved, new_path, new_time),
+        ]:
+            session.add(
+                RechargeOrder(
+                    order_no=order_no,
+                    user_id=merchant.id,
+                    username=merchant.username,
+                    mode=RechargeMode.custom,
+                    channel=RechargeChannel.wechat,
+                    amount_cents=1000,
+                    base_quota=10,
+                    bonus_quota=0,
+                    credit_quota=10,
+                    status=status,
+                    proof_file_path=proof_path.as_posix(),
+                    proof_file_name=proof_path.name,
+                    proof_content_type="image/png",
+                    created_at=created_at,
+                    updated_at=created_at,
+                )
+            )
+        session.commit()
+
+    try:
+        dry_run_response = client.post(
+            "/api/v1/admin/commercial/recharge-proofs/cleanup",
+            json={"older_than_days": 30, "dry_run": True},
+        )
+        assert dry_run_response.status_code == 200
+        assert dry_run_response.json()["data"]["matched_orders"] == 1
+        assert terminal_path.exists()
+
+        cleanup_response = client.post(
+            "/api/v1/admin/commercial/recharge-proofs/cleanup",
+            json={"older_than_days": 30, "dry_run": False},
+        )
+        assert cleanup_response.status_code == 200
+        data = cleanup_response.json()["data"]
+        assert data["matched_orders"] == 1
+        assert data["deleted_proofs"] == 1
+        assert not terminal_path.exists()
+        assert pending_path.exists()
+        assert new_path.exists()
+
+        with Session(engine) as session:
+            old_terminal = session.exec(
+                select(RechargeOrder).where(RechargeOrder.order_no == "RC_OLD_TERMINAL")
+            ).one()
+            old_pending = session.exec(
+                select(RechargeOrder).where(RechargeOrder.order_no == "RC_OLD_PENDING")
+            ).one()
+            assert old_terminal.proof_file_path is None
+            assert old_terminal.proof_file_name is None
+            assert old_terminal.proof_content_type is None
+            assert old_pending.proof_file_path == pending_path.as_posix()
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_merchant_authorized_app_issue_requires_existing_spec_and_hides_secrets():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
@@ -573,6 +872,136 @@ def test_duplicate_merchant_issue_batch_is_rejected_without_free_cards():
             assert len(cards) == 2
             assert account.kami_issue_balance == 3
             assert len(consume_transactions) == 1
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_issue_preview_returns_cost_and_balance_without_deducting():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="preview-issuer", password_hash=hash_password("secret123"), status=1)
+        other = EndUser(username="other-issuer", password_hash=hash_password("secret123"), status=1)
+        self_app = App(
+            app_id="app_preview_self",
+            name="Preview Self App",
+            app_secret="secret-self",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by=merchant.username,
+        )
+        authorized_app = App(
+            app_id="app_preview_authorized",
+            name="Preview Authorized App",
+            app_secret="secret-authorized",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by="admin",
+        )
+        forbidden_app = App(
+            app_id="app_preview_forbidden",
+            name="Preview Forbidden App",
+            app_secret="secret-forbidden",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by=other.username,
+        )
+        session.add(merchant)
+        session.add(other)
+        session.commit()
+        session.refresh(merchant)
+        session.refresh(other)
+        self_app.owner_user_id = merchant.id
+        forbidden_app.owner_user_id = other.id
+        session.add(self_app)
+        session.add(authorized_app)
+        session.add(forbidden_app)
+        session.add(UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=5))
+        session.commit()
+        spec = KamiSpec(
+            app_id=authorized_app.app_id,
+            spec_key="lifetime-device",
+            spec_name="Lifetime",
+            kami_type="lifetime",
+            status=1,
+        )
+        session.add(spec)
+        session.add(
+            UserAppAuthorization(
+                app_id=authorized_app.app_id,
+                user_id=merchant.id,
+                username=merchant.username,
+                granted_by="admin",
+            )
+        )
+        session.commit()
+        session.refresh(spec)
+        token = routes_user.create_user_access_token(merchant)
+        merchant_id = merchant.id
+        spec_id = spec.id
+
+    try:
+        preview_response = client.post(
+            "/api/v1/merchant/apps/app_preview_self/kamis/preview",
+            headers=auth_headers(token),
+            json={"kami_type": "points", "points_amount": 10, "count": 3},
+        )
+        assert preview_response.status_code == 200
+        preview_data = preview_response.json()["data"]
+        assert preview_data == {
+            "count": 3,
+            "unit_cost": 1,
+            "total_cost": 3,
+            "balance_before": 5,
+            "balance_after": 2,
+            "can_issue": True,
+        }
+
+        insufficient_response = client.post(
+            "/api/v1/merchant/apps/app_preview_self/kamis/preview",
+            headers=auth_headers(token),
+            json={"kami_type": "points", "points_amount": 10, "count": 6},
+        )
+        assert insufficient_response.status_code == 200
+        assert insufficient_response.json()["data"]["balance_after"] == -1
+        assert insufficient_response.json()["data"]["can_issue"] is False
+
+        missing_spec_response = client.post(
+            "/api/v1/merchant/apps/app_preview_authorized/kamis/preview",
+            headers=auth_headers(token),
+            json={"count": 1},
+        )
+        assert missing_spec_response.status_code == 400
+        assert "spec_id" in missing_spec_response.json()["detail"]
+
+        authorized_preview_response = client.post(
+            "/api/v1/merchant/apps/app_preview_authorized/kamis/preview",
+            headers=auth_headers(token),
+            json={"spec_id": spec_id, "count": 2},
+        )
+        assert authorized_preview_response.status_code == 200
+        assert authorized_preview_response.json()["data"]["total_cost"] == 2
+        assert authorized_preview_response.json()["data"]["can_issue"] is True
+
+        forbidden_response = client.post(
+            "/api/v1/merchant/apps/app_preview_forbidden/kamis/preview",
+            headers=auth_headers(token),
+            json={"kami_type": "points", "points_amount": 10, "count": 1},
+        )
+        assert forbidden_response.status_code == 403
+
+        with Session(engine) as session:
+            account = session.exec(
+                select(UserQuotaAccount).where(UserQuotaAccount.user_id == merchant_id)
+            ).one()
+            assert account.kami_issue_balance == 5
+            assert session.exec(select(UserQuotaTransaction)).all() == []
+            assert session.exec(select(Kami)).all() == []
     finally:
         fastapi_app.dependency_overrides.clear()
 

@@ -45,11 +45,25 @@ export function saveRechargeOption(data) {
   })
 }
 
+export function deleteRechargeOption(optionId) {
+  return request({
+    url: `/admin/commercial/recharge-options/${optionId}`,
+    method: 'delete'
+  })
+}
+
 export function saveBonusRule(data) {
   return request({
     url: '/admin/commercial/recharge-bonus-rules',
     method: 'post',
     data
+  })
+}
+
+export function deleteBonusRule(ruleId) {
+  return request({
+    url: `/admin/commercial/recharge-bonus-rules/${ruleId}`,
+    method: 'delete'
   })
 }
 
@@ -88,6 +102,22 @@ export function rejectRechargeOrder(orderNo, data = {}) {
 export function markRechargeOrderAbnormal(orderNo, data = {}) {
   return request({
     url: `/admin/commercial/recharge-orders/${orderNo}/abnormal`,
+    method: 'post',
+    data
+  })
+}
+
+export function expireRechargeOrder(orderNo, data = {}) {
+  return request({
+    url: `/admin/commercial/recharge-orders/${orderNo}/expire`,
+    method: 'post',
+    data
+  })
+}
+
+export function cleanupRechargeProofs(data = {}) {
+  return request({
+    url: '/admin/commercial/recharge-proofs/cleanup',
     method: 'post',
     data
   })

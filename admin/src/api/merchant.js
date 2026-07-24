@@ -61,6 +61,14 @@ export function getMerchantRechargeOrders(params) {
   })
 }
 
+export function cancelMerchantRechargeOrder(orderNo, data = {}) {
+  return request({
+    url: `/merchant/recharge/orders/${orderNo}/cancel`,
+    method: 'post',
+    data
+  })
+}
+
 export function getMerchantApps() {
   return request({
     url: '/merchant/apps',
@@ -86,6 +94,14 @@ export function getMerchantAppSpecs(appId) {
 export function issueMerchantKamis(appId, data) {
   return request({
     url: `/merchant/apps/${appId}/kamis/batch`,
+    method: 'post',
+    data
+  })
+}
+
+export function previewMerchantKamis(appId, data) {
+  return request({
+    url: `/merchant/apps/${appId}/kamis/preview`,
     method: 'post',
     data
   })

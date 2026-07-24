@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 import routes_user
 from commercial_service import (
     calculate_recharge_preview,
+    cancel_recharge_order,
     create_recharge_order,
     create_recharge_order_from_upload,
     get_recharge_order_or_404,
@@ -37,6 +38,7 @@ from user_quota_service import (
     get_user_visible_apps,
     issue_user_kamis,
     list_user_issued_kamis,
+    preview_user_kami_issue,
     user_can_manage_app,
 )
 
@@ -54,6 +56,10 @@ class RechargeOrderCreateRequest(RechargePreviewRequest):
     channel: str = PydanticField(..., pattern="^(wechat|alipay|bank|other)$")
     remark: Optional[str] = None
     proof_image_data_url: Optional[str] = None
+
+
+class MerchantOrderActionRequest(BaseModel):
+    remark: Optional[str] = None
 
 
 class MerchantAppCreateRequest(BaseModel):
@@ -131,6 +137,34 @@ def _spec_payload(spec: KamiSpec) -> dict:
         "status": spec.status,
         "sort_order": spec.sort_order,
     }
+
+
+def _resolve_merchant_issue_context(
+    session: Session,
+    current_user: EndUser,
+    app_id: str,
+    payload: MerchantKamiIssueRequest,
+) -> tuple[App, Optional[KamiSpec]]:
+    app = session.exec(select(App).where(App.app_id == app_id)).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="App not found")
+    if not user_can_manage_app(session, current_user, app_id):
+        raise HTTPException(status_code=403, detail="No permission to manage this app")
+
+    is_owned = _app_is_owned_by_user(app, current_user)
+    is_authorized = _app_authorized_to_user(session, app_id, current_user)
+    spec = None
+    if not is_owned and is_authorized:
+        if not payload.spec_id:
+            raise HTTPException(status_code=400, detail="spec_id is required for authorized apps")
+        spec = session.get(KamiSpec, payload.spec_id)
+        if not spec or spec.app_id != app_id or spec.status != 1:
+            raise HTTPException(status_code=400, detail="spec_id is not available")
+    elif payload.spec_id:
+        spec = session.get(KamiSpec, payload.spec_id)
+        if not spec or spec.app_id != app_id or spec.status != 1:
+            raise HTTPException(status_code=400, detail="spec_id is not available")
+    return app, spec
 
 
 def _compact_end_user_payload(user: Optional[EndUser]) -> Optional[dict]:
@@ -544,6 +578,29 @@ async def get_merchant_recharge_order(
     return {"success": True, "data": recharge_order_payload(order)}
 
 
+@router.post("/recharge/orders/{order_no}/cancel", summary="Cancel merchant recharge order")
+async def cancel_merchant_recharge_order(
+    order_no: str,
+    payload: MerchantOrderActionRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    order = get_recharge_order_or_404(session, order_no)
+    if order.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="No permission to cancel this order")
+    try:
+        order = cancel_recharge_order(
+            session,
+            order=order,
+            operator=current_user.username,
+            remark=payload.remark,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    session.commit()
+    return {"success": True, "message": "order canceled", "data": recharge_order_payload(order)}
+
+
 @router.get("/recharge/orders/{order_no}/proof", summary="Get merchant recharge proof")
 async def get_merchant_recharge_proof(
     order_no: str,
@@ -609,25 +666,7 @@ async def issue_merchant_kamis(
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
-    app = session.exec(select(App).where(App.app_id == app_id)).first()
-    if not app:
-        raise HTTPException(status_code=404, detail="App not found")
-    if not user_can_manage_app(session, current_user, app_id):
-        raise HTTPException(status_code=403, detail="No permission to manage this app")
-
-    is_owned = _app_is_owned_by_user(app, current_user)
-    is_authorized = _app_authorized_to_user(session, app_id, current_user)
-    spec = None
-    if not is_owned and is_authorized:
-        if not payload.spec_id:
-            raise HTTPException(status_code=400, detail="spec_id is required for authorized apps")
-        spec = session.get(KamiSpec, payload.spec_id)
-        if not spec or spec.app_id != app_id or spec.status != 1:
-            raise HTTPException(status_code=400, detail="spec_id is not available")
-    elif payload.spec_id:
-        spec = session.get(KamiSpec, payload.spec_id)
-        if not spec or spec.app_id != app_id or spec.status != 1:
-            raise HTTPException(status_code=400, detail="spec_id is not available")
+    app, spec = _resolve_merchant_issue_context(session, current_user, app_id, payload)
 
     kami_type = payload.kami_type
     points_amount = payload.points_amount
@@ -682,6 +721,32 @@ async def issue_merchant_kamis(
         raise HTTPException(status_code=400, detail=str(error))
     session.commit()
     return {"success": True, "message": "issue success", "data": result}
+
+
+@router.post("/apps/{app_id}/kamis/preview", summary="Preview merchant kami issue cost")
+async def preview_merchant_kamis(
+    app_id: str,
+    payload: MerchantKamiIssueRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    app, spec = _resolve_merchant_issue_context(session, current_user, app_id, payload)
+    kami_type = payload.kami_type
+    if spec:
+        kami_type = spec.kami_type.value if hasattr(spec.kami_type, "value") else spec.kami_type
+    if not kami_type:
+        raise HTTPException(status_code=400, detail="kami_type is required")
+    try:
+        data = preview_user_kami_issue(
+            session,
+            current_user,
+            app,
+            count=payload.count,
+            unit_cost=1,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return {"success": True, "data": data}
 
 
 @router.get("/apps/{app_id}/kamis", summary="List merchant issued kamis")

@@ -94,6 +94,21 @@
         <el-table :data="config.options" size="small">
           <el-table-column prop="label" label="展示" />
           <el-table-column prop="credit_quota" label="到账额度" width="100" />
+          <el-table-column prop="enabled" label="状态" width="90">
+            <template #default="{ row }">{{ row.enabled ? '启用' : '已归档' }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="92">
+            <template #default="{ row }">
+              <el-button
+                link
+                type="danger"
+                :loading="rowAction === `option:${row.id}`"
+                @click="handleDeleteRechargeOption(row)"
+              >
+                删除
+              </el-button>
+            </template>
+          </el-table-column>
         </el-table>
       </el-card>
       <el-card shadow="never" class="panel">
@@ -101,6 +116,21 @@
         <el-table :data="config.bonus_rules" size="small">
           <el-table-column prop="threshold_amount" label="门槛" width="90" />
           <el-table-column prop="bonus_quota" label="赠送额度" width="110" />
+          <el-table-column prop="enabled" label="状态" width="90">
+            <template #default="{ row }">{{ row.enabled ? '启用' : '已归档' }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="92">
+            <template #default="{ row }">
+              <el-button
+                link
+                type="danger"
+                :loading="rowAction === `bonus:${row.id}`"
+                @click="handleDeleteBonusRule(row)"
+              >
+                删除
+              </el-button>
+            </template>
+          </el-table-column>
         </el-table>
       </el-card>
     </section>
@@ -110,13 +140,22 @@
 <script setup>
 import { onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { deletePaymentChannelQrCode, getRechargeConfig, saveBonusRule, savePaymentChannelWithUpload, saveRechargeOption } from '../api/commercial'
+import {
+  deleteBonusRule,
+  deletePaymentChannelQrCode,
+  deleteRechargeOption,
+  getRechargeConfig,
+  saveBonusRule,
+  savePaymentChannelWithUpload,
+  saveRechargeOption
+} from '../api/commercial'
 
 const loading = ref(false)
 const savingChannel = ref(false)
 const deletingQr = ref(false)
 const savingOption = ref(false)
 const savingBonus = ref(false)
+const rowAction = ref('')
 const config = ref({ channels: [], options: [], bonus_rules: [] })
 const qrFileInput = ref(null)
 const qrPreviewUrl = ref('')
@@ -281,6 +320,46 @@ async function handleSaveBonusRule() {
     await loadConfig()
   } finally {
     savingBonus.value = false
+  }
+}
+
+async function handleDeleteRechargeOption(row) {
+  try {
+    await ElMessageBox.confirm(
+      '确定删除该充值配置吗？如果已有订单引用，系统会自动归档并禁用，不会影响历史订单。',
+      '删除充值配置',
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  rowAction.value = `option:${row.id}`
+  try {
+    const res = await deleteRechargeOption(row.id)
+    ElMessage.success(res.data?.archived ? '该配置已归档禁用' : '该配置已删除')
+    await loadConfig()
+  } finally {
+    rowAction.value = ''
+  }
+}
+
+async function handleDeleteBonusRule(row) {
+  try {
+    await ElMessageBox.confirm(
+      '确定删除该赠送规则吗？如果已有订单引用，系统会自动归档并禁用，不会影响历史订单。',
+      '删除赠送规则',
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  rowAction.value = `bonus:${row.id}`
+  try {
+    const res = await deleteBonusRule(row.id)
+    ElMessage.success(res.data?.archived ? '该规则已归档禁用' : '该规则已删除')
+    await loadConfig()
+  } finally {
+    rowAction.value = ''
   }
 }
 

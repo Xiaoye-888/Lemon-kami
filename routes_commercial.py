@@ -13,9 +13,13 @@ from commercial_service import (
     approve_recharge_order,
     calculate_recharge_preview,
     clear_payment_channel_qrcode,
+    cleanup_recharge_proofs,
     create_bonus_rule,
     create_recharge_option,
+    delete_or_archive_bonus_rule,
+    delete_or_archive_recharge_option,
     delete_payment_qrcode_by_url_if_safe,
+    expire_recharge_order,
     get_recharge_order_or_404,
     payment_channel_payload,
     payment_qrcode_file_path,
@@ -76,6 +80,11 @@ class BonusRuleRequest(BaseModel):
 class OrderReviewRequest(BaseModel):
     remark: Optional[str] = None
     reject_reason: Optional[str] = None
+
+
+class RechargeProofCleanupRequest(BaseModel):
+    older_than_days: int = PydanticField(..., ge=1, le=3650)
+    dry_run: bool = True
 
 
 def _require_admin(current_user: dict) -> None:
@@ -319,6 +328,29 @@ async def save_recharge_option(
     return {"success": True, "message": "recharge option saved", "data": recharge_option_payload(row)}
 
 
+@router.delete("/recharge-options/{option_id}", summary="Delete or archive fixed recharge option")
+async def delete_recharge_option(
+    option_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    try:
+        row, archived = delete_or_archive_recharge_option(session, option_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    data = {"id": option_id, "deleted": not archived, "archived": archived}
+    session.commit()
+    routes_admin.log_admin_action(
+        session=session,
+        username=current_user.get("sub"),
+        event_type="commercial_recharge_option_delete",
+        payload=data,
+        message=f"管理员 {current_user.get('sub')} 删除或归档固定充值额度 {option_id}",
+    )
+    return {"success": True, "message": "recharge option archived" if archived else "recharge option deleted", "data": data}
+
+
 @router.post("/recharge-bonus-rules", summary="Create custom amount bonus rule")
 async def save_bonus_rule(
     payload: BonusRuleRequest,
@@ -340,6 +372,29 @@ async def save_bonus_rule(
         message=f"管理员 {current_user.get('sub')} 新增自定义充值赠送规则",
     )
     return {"success": True, "message": "bonus rule saved", "data": recharge_bonus_rule_payload(row)}
+
+
+@router.delete("/recharge-bonus-rules/{rule_id}", summary="Delete or archive custom recharge bonus rule")
+async def delete_bonus_rule(
+    rule_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    try:
+        row, archived = delete_or_archive_bonus_rule(session, rule_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    data = {"id": rule_id, "deleted": not archived, "archived": archived}
+    session.commit()
+    routes_admin.log_admin_action(
+        session=session,
+        username=current_user.get("sub"),
+        event_type="commercial_bonus_rule_delete",
+        payload=data,
+        message=f"管理员 {current_user.get('sub')} 删除或归档自定义充值赠送规则 {rule_id}",
+    )
+    return {"success": True, "message": "bonus rule archived" if archived else "bonus rule deleted", "data": data}
 
 
 @router.post("/recharge-preview", summary="Preview recharge crediting")
@@ -407,6 +462,32 @@ async def get_recharge_order(
     _require_admin(current_user)
     order = get_recharge_order_or_404(session, order_no)
     return {"success": True, "data": recharge_order_payload(order, include_user=True)}
+
+
+@router.post("/recharge-proofs/cleanup", summary="Clean old terminal recharge proof files")
+async def cleanup_old_recharge_proofs(
+    payload: RechargeProofCleanupRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    try:
+        data = cleanup_recharge_proofs(
+            session,
+            older_than_days=payload.older_than_days,
+            dry_run=payload.dry_run,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    session.commit()
+    routes_admin.log_admin_action(
+        session=session,
+        username=current_user.get("sub"),
+        event_type="commercial_recharge_proof_cleanup",
+        payload=data,
+        message=f"管理员 {current_user.get('sub')} 清理充值凭证 dry_run={payload.dry_run}",
+    )
+    return {"success": True, "message": "proof cleanup checked" if payload.dry_run else "proof cleanup completed", "data": data}
 
 
 @router.get("/recharge-orders/{order_no}/proof", summary="Get recharge proof image")
@@ -477,6 +558,35 @@ async def reject_order(
         raise HTTPException(status_code=400, detail=str(error))
     session.commit()
     return {"success": True, "message": "order rejected", "data": recharge_order_payload(order, include_user=True)}
+
+
+@router.post("/recharge-orders/{order_no}/expire", summary="Expire recharge order")
+async def expire_order(
+    order_no: str,
+    payload: OrderReviewRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    order = get_recharge_order_or_404(session, order_no)
+    try:
+        order = expire_recharge_order(
+            session,
+            order=order,
+            reviewer=current_user.get("sub"),
+            remark=payload.remark,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    session.commit()
+    routes_admin.log_admin_action(
+        session=session,
+        username=current_user.get("sub"),
+        event_type="commercial_recharge_order_expire",
+        payload={"order_no": order_no, "remark": payload.remark},
+        message=f"管理员 {current_user.get('sub')} 标记充值订单 {order_no} 已过期",
+    )
+    return {"success": True, "message": "order expired", "data": recharge_order_payload(order, include_user=True)}
 
 
 @router.post("/recharge-orders/{order_no}/abnormal", summary="Mark recharge order abnormal")

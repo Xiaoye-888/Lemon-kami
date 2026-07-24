@@ -44,6 +44,15 @@
           <el-form-item label="前缀">
             <el-input v-model="form.code_prefix" maxlength="32" />
           </el-form-item>
+          <div v-if="issuePreview" class="issue-preview">
+            <div>
+              本次预计扣 {{ issuePreview.total_cost }} 发卡额度，当前余额 {{ issuePreview.balance_before }}，生成后余额 {{ issuePreview.balance_after }}
+            </div>
+            <el-tag :type="issuePreview.can_issue ? 'success' : 'danger'">
+              {{ issuePreview.can_issue ? '额度充足' : '额度不足' }}
+            </el-tag>
+          </div>
+          <div v-else-if="previewLoading" class="issue-preview muted">正在计算发卡额度...</div>
           <el-button type="primary" :loading="issuing" :disabled="!canIssue" @click="handleIssue">生成卡密</el-button>
         </el-form>
       </el-card>
@@ -62,15 +71,17 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getMerchantAppSpecs, getMerchantApps, getMerchantBatches, issueMerchantKamis } from '../api/merchant'
+import { getMerchantAppSpecs, getMerchantApps, getMerchantBatches, issueMerchantKamis, previewMerchantKamis } from '../api/merchant'
 
 const loading = ref(false)
 const issuing = ref(false)
+const previewLoading = ref(false)
 const apps = ref([])
 const specs = ref([])
 const batches = ref([])
+const issuePreview = ref(null)
 
 const form = reactive({
   app_id: '',
@@ -86,11 +97,42 @@ const form = reactive({
 })
 
 const selectedApp = computed(() => apps.value.find((item) => item.app_id === form.app_id))
-const canIssue = computed(() => {
+const canIssueInputs = computed(() => {
   if (!form.app_id || form.count <= 0) return false
   if (selectedApp.value && !selectedApp.value.is_owned) return Boolean(form.spec_id)
   return Boolean(form.kami_type)
 })
+const canIssue = computed(() => canIssueInputs.value && issuePreview.value?.can_issue !== false)
+
+function buildIssuePayload() {
+  return {
+    spec_id: selectedApp.value?.is_owned ? null : form.spec_id,
+    kami_type: selectedApp.value?.is_owned ? form.kami_type : null,
+    points_amount: form.kami_type === 'points' ? form.points_amount : null,
+    times_total: form.kami_type === 'times' ? form.times_total : null,
+    count: form.count,
+    batch_no: form.batch_no || null,
+    code_prefix: form.code_prefix || null,
+    code_length: form.code_length,
+    charset: form.charset
+  }
+}
+
+async function loadIssuePreview() {
+  if (!canIssueInputs.value) {
+    issuePreview.value = null
+    return
+  }
+  previewLoading.value = true
+  try {
+    const res = await previewMerchantKamis(form.app_id, buildIssuePayload())
+    issuePreview.value = res.data || null
+  } catch (error) {
+    issuePreview.value = null
+  } finally {
+    previewLoading.value = false
+  }
+}
 
 async function loadApps() {
   const res = await getMerchantApps()
@@ -132,30 +174,30 @@ async function loadAll() {
 async function handleAppChange() {
   await loadSpecs()
   await loadBatches()
+  await loadIssuePreview()
 }
 
 async function handleIssue() {
+  if (issuePreview.value?.can_issue === false) {
+    ElMessage.error('发卡额度不足')
+    return
+  }
   issuing.value = true
   try {
-    const payload = {
-      spec_id: selectedApp.value?.is_owned ? null : form.spec_id,
-      kami_type: selectedApp.value?.is_owned ? form.kami_type : null,
-      points_amount: form.kami_type === 'points' ? form.points_amount : null,
-      times_total: form.kami_type === 'times' ? form.times_total : null,
-      count: form.count,
-      batch_no: form.batch_no || null,
-      code_prefix: form.code_prefix || null,
-      code_length: form.code_length,
-      charset: form.charset
-    }
-    const res = await issueMerchantKamis(form.app_id, payload)
+    const res = await issueMerchantKamis(form.app_id, buildIssuePayload())
     ElMessage.success(`已生成 ${res.data.count} 个卡密`)
     form.batch_no = ''
     await loadBatches()
+    await loadIssuePreview()
   } finally {
     issuing.value = false
   }
 }
+
+watch(
+  () => [form.app_id, form.spec_id, form.kami_type, form.points_amount, form.times_total, form.count],
+  loadIssuePreview
+)
 
 onMounted(loadAll)
 </script>
@@ -186,6 +228,25 @@ onMounted(loadAll)
 
 .panel {
   border-radius: 8px;
+}
+
+.issue-preview {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #334155;
+  font-size: 13px;
+}
+
+.issue-preview.muted {
+  color: #64748b;
+  justify-content: flex-start;
 }
 
 @media (max-width: 980px) {
