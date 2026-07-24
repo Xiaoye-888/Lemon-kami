@@ -51,10 +51,11 @@ export function updateKamiSpec(specId, data) {
   })
 }
 
-export function deleteKamiSpec(specId) {
+export function deleteKamiSpec(specId, data = { confirm_text: undefined }) {
   return request({
     url: `/admin/kami-specs/${specId}`,
-    method: 'delete'
+    method: 'delete',
+    data
   })
 }
 

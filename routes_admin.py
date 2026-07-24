@@ -503,6 +503,10 @@ class DeleteKamisRequest(BaseModel):
     confirm_text: Optional[str] = None
 
 
+class SensitiveConfirmRequest(BaseModel):
+    confirm_text: Optional[str] = None
+
+
 class KamiBatchCreateRequest(BaseModel):
     app_id: str = PydanticField(..., max_length=64)
     batch_no: str = PydanticField(..., min_length=1, max_length=64)
@@ -2587,6 +2591,9 @@ async def update_kami_spec(
 @router.delete("/kami-specs/{spec_id}", summary="删除卡密规格")
 async def delete_kami_spec(
     spec_id: int,
+    request: Request,
+    payload: Optional[SensitiveConfirmRequest] = None,
+    confirm_text: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -2596,16 +2603,79 @@ async def delete_kami_spec(
     if not check_app_permission(session, spec.app_id, username, is_admin):
         raise HTTPException(status_code=403, detail="无权删除此应用的卡密规格")
 
-    existing_batch = session.exec(select(KamiBatch).where(KamiBatch.spec_id == spec.id)).first()
-    existing_kami = session.exec(select(Kami).where(Kami.spec_id == spec.id)).first()
-    if existing_batch or existing_kami:
-        raise HTTPException(status_code=400, detail="规格下仍有批次或卡密，请先删除批次和卡密后再删除规格。")
+    effective_confirm_text = (
+        payload.confirm_text
+        if payload is not None and payload.confirm_text is not None
+        else confirm_text
+    )
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="delete_kami",
+        confirm_text=effective_confirm_text,
+        resource_type="kami_spec",
+        resource_id=str(spec_id),
+        request=request,
+        metadata={"app_id": spec.app_id, "spec_name": spec.spec_name},
+    )
 
     app_id = spec.app_id
     spec_name = spec.spec_name
     payload_data = _kami_spec_payload(spec, _kami_spec_stats(session, spec.id))
-    session.delete(spec)
-    session.commit()
+    existing_batch = session.exec(select(KamiBatch).where(KamiBatch.spec_id == spec.id)).first()
+    existing_kami = session.exec(select(Kami).where(Kami.spec_id == spec.id)).first()
+    if existing_batch or existing_kami:
+        record_admin_audit(
+            session,
+            admin=current_user,
+            action="delete_kami",
+            resource_type="kami_spec",
+            resource_id=str(spec_id),
+            status="failed",
+            request=request,
+            before=payload_data,
+            metadata={
+                "app_id": app_id,
+                "spec_name": spec_name,
+                "has_batch": bool(existing_batch),
+                "has_kami": bool(existing_kami),
+            },
+            error_message="kami spec still has batches or kamis",
+            summary=f"Failed to delete kami spec {spec_name}",
+        )
+        raise HTTPException(status_code=400, detail="规格下仍有批次或卡密，请先删除批次和卡密后再删除规格。")
+
+    try:
+        session.delete(spec)
+        session.commit()
+    except Exception as error:
+        error_message = str(error)
+        session.rollback()
+        record_admin_audit(
+            session,
+            admin=current_user,
+            action="delete_kami",
+            resource_type="kami_spec",
+            resource_id=str(spec_id),
+            status="failed",
+            request=request,
+            before=payload_data,
+            metadata={"app_id": app_id, "spec_name": spec_name},
+            error_message=error_message,
+            summary=f"Failed to delete kami spec {spec_name}",
+        )
+        raise HTTPException(status_code=400, detail=error_message)
+
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="delete_kami",
+        resource_type="kami_spec",
+        resource_id=str(spec_id),
+        request=request,
+        after=payload_data,
+        summary=f"Deleted kami spec {spec_name}",
+    )
     log_admin_action(
         session=session,
         username=username,

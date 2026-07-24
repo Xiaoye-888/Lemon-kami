@@ -524,8 +524,12 @@ def test_phase2_sensitive_actions_use_fixed_confirmation_texts():
     assert "deleteEndUsers({" in end_users
 
     assert "confirm_text" in kami_api
+    assert "deleteKamiSpec(specId, data" in kami_api
     assert "确认删除卡密" in kamis
     assert "deleteKamis({ ...payload, confirm_text: confirmText })" in kamis
+    assert "确认删除卡密" in kami_batches
+    assert "deleteKamiSpec(variant.id, { confirm_text: confirmText })" in kami_batches
+    assert "deleteKamiSpec(row.id, { confirm_text: confirmText })" in kami_batches
     assert "确认删除批次" in kami_batches
     assert "deleteKamiBatch(row.id, { confirm_text: confirmText })" in kami_batches
 

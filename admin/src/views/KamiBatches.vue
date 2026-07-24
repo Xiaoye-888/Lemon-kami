@@ -1372,8 +1372,9 @@ const handleDeleteSpecGroup = async (row) => {
       '删除空规格',
       { type: 'warning' }
     )
+    const confirmText = await promptSensitiveConfirm(CONFIRM_DELETE_KAMI, '确认删除卡密')
     for (const variant of variants) {
-      await deleteKamiSpec(variant.id)
+      await deleteKamiSpec(variant.id, { confirm_text: confirmText })
     }
     ElMessage.success('规格已删除')
     resetDetailAfterSpecDelete(deletedIds)
@@ -1471,7 +1472,8 @@ const handleDeleteSpec = async (row) => {
     await ElMessageBox.confirm(`确定删除规格「${row.spec_name}」吗？只有没有批次和卡密的规格可以删除。`, '删除规格', {
       type: 'warning'
     })
-    await deleteKamiSpec(row.id)
+    const confirmText = await promptSensitiveConfirm(CONFIRM_DELETE_KAMI, '确认删除卡密')
+    await deleteKamiSpec(row.id, { confirm_text: confirmText })
     ElMessage.success('规格已删除')
     resetDetailAfterSpecDelete([row.id])
     await loadSpecs()

@@ -5,6 +5,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 import routes_admin
 from models import (
     ApiInterface,
+    AdminAuditLog,
     App,
     AppInterfaceConfig,
     AuthorizationAccount,
@@ -522,7 +523,15 @@ def test_delete_empty_spec_and_reject_non_empty_spec():
         )
         assert empty_response.status_code == 200
         empty_spec_id = empty_response.json()["data"]["id"]
-        delete_empty = client.delete(f"/api/v1/admin/kami-specs/{empty_spec_id}")
+        delete_empty_without_confirm = client.delete(f"/api/v1/admin/kami-specs/{empty_spec_id}")
+        assert delete_empty_without_confirm.status_code == 400
+        assert delete_empty_without_confirm.json()["detail"]["expected"] == CONFIRM_DELETE_KAMI
+
+        delete_empty = client.request(
+            "DELETE",
+            f"/api/v1/admin/kami-specs/{empty_spec_id}",
+            json={"confirm_text": CONFIRM_DELETE_KAMI},
+        )
         assert delete_empty.status_code == 200
 
         non_empty_response = client.post(
@@ -547,8 +556,23 @@ def test_delete_empty_spec_and_reject_non_empty_spec():
         )
         assert generate_response.status_code == 200
 
-        delete_non_empty = client.delete(f"/api/v1/admin/kami-specs/{non_empty_spec_id}")
+        delete_non_empty = client.request(
+            "DELETE",
+            f"/api/v1/admin/kami-specs/{non_empty_spec_id}",
+            json={"confirm_text": CONFIRM_DELETE_KAMI},
+        )
         assert delete_non_empty.status_code == 400
+        with Session(engine) as session:
+            audit_logs = session.exec(
+                select(AdminAuditLog)
+                .where(AdminAuditLog.resource_type == "kami_spec")
+                .order_by(AdminAuditLog.id)
+            ).all()
+            assert [(log.action, log.status, log.resource_id) for log in audit_logs] == [
+                ("delete_kami", "failed", str(empty_spec_id)),
+                ("delete_kami", "success", str(empty_spec_id)),
+                ("delete_kami", "failed", str(non_empty_spec_id)),
+            ]
         assert "规格下仍有批次或卡密" in delete_non_empty.json()["detail"]
     finally:
         fastapi_app.dependency_overrides.clear()
