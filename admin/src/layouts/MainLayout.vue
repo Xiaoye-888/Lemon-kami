@@ -110,7 +110,8 @@ import {
   Sunny,
   Tickets,
   User,
-  UserFilled
+  UserFilled,
+  Wallet
 } from '@element-plus/icons-vue'
 import { useThemeStore } from '../stores/theme'
 import { useUserStore } from '../stores/user'

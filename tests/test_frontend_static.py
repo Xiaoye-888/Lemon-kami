@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -371,6 +372,21 @@ def test_commercial_admin_and_merchant_navigation_entries_are_visible():
     assert "我的订单" in layout
     assert "批次管理" in layout
     assert "我的卡密" in layout
+
+
+def test_main_layout_imports_every_menu_icon_it_uses():
+    source = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
+    import_match = re.search(
+        r"import\s+\{(?P<body>.*?)\}\s+from\s+'@element-plus/icons-vue'",
+        source,
+        re.S,
+    )
+    assert import_match is not None
+    imported_icons = set(re.findall(r"\b[A-Z][A-Za-z0-9_]*\b", import_match.group("body")))
+    menu_source = source.split("const adminMenuItems", 1)[1].split("const menuItems", 1)[0]
+    used_icons = set(re.findall(r"icon:\s*([A-Z][A-Za-z0-9_]*)", menu_source))
+
+    assert used_icons <= imported_icons
 
 
 def test_commercial_recharge_pages_expose_order_review_and_upload_flow():
