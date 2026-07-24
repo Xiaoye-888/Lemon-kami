@@ -86,6 +86,11 @@ def override_session_factory(engine):
     return override_session
 
 
+CONFIRM_GRANT_ISSUE_QUOTA = "确认调整额度"
+CONFIRM_GRANT_APP_AUTHORIZATION = "确认授权应用"
+CONFIRM_DELETE_MERCHANT = "确认删除用户"
+
+
 class FakeRedis:
     def __init__(self):
         self.hashes = {}
@@ -219,6 +224,7 @@ def test_admin_can_grant_user_quota_and_user_can_create_apps_without_app_create_
                 "quota_type": "app_create",
                 "amount": 2,
                 "remark": "seed app quota",
+                "confirm_text": CONFIRM_GRANT_ISSUE_QUOTA,
             },
         )
         assert grant_response.status_code == 200
@@ -291,7 +297,11 @@ def test_admin_app_authorization_grant_makes_app_visible_to_end_user():
     try:
         grant_response = client.post(
             f"/api/v1/admin/end-users/{user_id}/app-authorizations",
-            json={"app_id": "app_shared", "remark": "allow management"},
+            json={
+                "app_id": "app_shared",
+                "remark": "allow management",
+                "confirm_text": CONFIRM_GRANT_APP_AUTHORIZATION,
+            },
         )
         assert grant_response.status_code == 200
         assert grant_response.json()["data"]["app_id"] == "app_shared"
@@ -341,7 +351,12 @@ def test_user_can_issue_kamis_by_consuming_issue_quota_and_list_them():
     try:
         grant_response = client.post(
             f"/api/v1/admin/end-users/{user_id}/quotas/grant",
-            json={"quota_type": "kami_issue", "amount": 3, "remark": "seed kami quota"},
+            json={
+                "quota_type": "kami_issue",
+                "amount": 3,
+                "remark": "seed kami quota",
+                "confirm_text": CONFIRM_GRANT_ISSUE_QUOTA,
+            },
         )
         assert grant_response.status_code == 200
         assert grant_response.json()["data"]["kami_issue_balance"] == 3
@@ -459,7 +474,10 @@ def test_admin_delete_end_users_removes_user_quota_app_authorizations_and_owned_
         user_id = user.id
 
     try:
-        response = client.post("/api/v1/admin/end-users/delete", json={"user_ids": [user_id]})
+        response = client.post(
+            "/api/v1/admin/end-users/delete",
+            json={"user_ids": [user_id], "confirm_text": CONFIRM_DELETE_MERCHANT},
+        )
         assert response.status_code == 200
         data = response.json()["data"]
         assert data["deleted_users"] == 1
@@ -1197,7 +1215,10 @@ def test_admin_delete_end_users_hard_deletes_related_records():
         username = user.username
 
     try:
-        response = client.post("/api/v1/admin/end-users/delete", json={"user_ids": [user_id]})
+        response = client.post(
+            "/api/v1/admin/end-users/delete",
+            json={"user_ids": [user_id], "confirm_text": CONFIRM_DELETE_MERCHANT},
+        )
         assert response.status_code == 200
         data = response.json()["data"]
         assert data["deleted_users"] == 1
@@ -1303,7 +1324,10 @@ def test_admin_delete_end_users_removes_legacy_owner_key_accounts_without_user_i
         user_id = user.id
 
     try:
-        response = client.post("/api/v1/admin/end-users/delete", json={"user_ids": [user_id]})
+        response = client.post(
+            "/api/v1/admin/end-users/delete",
+            json={"user_ids": [user_id], "confirm_text": CONFIRM_DELETE_MERCHANT},
+        )
         assert response.status_code == 200
         data = response.json()["data"]
         assert data["deleted_users"] == 1
@@ -1401,7 +1425,10 @@ def test_admin_delete_end_users_respects_foreign_key_delete_order():
         user_id = user.id
 
     try:
-        response = client.post("/api/v1/admin/end-users/delete", json={"user_ids": [user_id]})
+        response = client.post(
+            "/api/v1/admin/end-users/delete",
+            json={"user_ids": [user_id], "confirm_text": CONFIRM_DELETE_MERCHANT},
+        )
         assert response.status_code == 200
 
         with Session(engine) as session:

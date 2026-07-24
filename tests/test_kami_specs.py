@@ -57,6 +57,10 @@ def make_app(app_id="app_demo"):
     )
 
 
+CONFIRM_DELETE_KAMI = "确认删除卡密"
+CONFIRM_DELETE_APP = "确认删除应用"
+
+
 def test_kami_spec_schema_exists():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
@@ -605,7 +609,11 @@ def test_delete_kamis_allows_active_card_and_clears_direct_relations():
     try:
         response = client.post(
             "/api/v1/admin/kamis/delete",
-            json={"app_id": "app_demo", "kami_codes": ["ACTIVE001"]},
+            json={
+                "app_id": "app_demo",
+                "kami_codes": ["ACTIVE001"],
+                "confirm_text": CONFIRM_DELETE_KAMI,
+            },
         )
         assert response.status_code == 200
         data = response.json()["data"]
@@ -756,7 +764,10 @@ def test_delete_app_cleans_app_scoped_child_rows_before_parent_rows():
         session.commit()
 
     try:
-        response = client.delete("/api/v1/admin/apps/app_demo")
+        response = client.delete(
+            "/api/v1/admin/apps/app_demo",
+            params={"confirm_text": CONFIRM_DELETE_APP},
+        )
         assert response.status_code == 200
 
         with Session(engine) as session:
