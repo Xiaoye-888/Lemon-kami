@@ -62,6 +62,14 @@ def auth_headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+CONFIRM_CHANGE_RECHARGE_CONFIG = "确认修改充值配置"
+CONFIRM_DELETE_PAYMENT_QRCODE = "确认删除二维码"
+CONFIRM_APPROVE_RECHARGE_ORDER = "确认审核入账"
+CONFIRM_EXPIRE_RECHARGE_ORDER = "确认关闭订单"
+CONFIRM_CLEANUP_PROOF_FILES = "确认清理凭证"
+CONFIRM_DELETE_MERCHANT = "确认删除用户"
+
+
 def seed_admin_and_merchant(session: Session) -> tuple[AdminUser, EndUser]:
     admin = AdminUser(
         username="admin",
@@ -281,6 +289,7 @@ def test_manual_recharge_order_review_credits_issue_quota_and_transactions(tmp_p
                 "qr_code_url": "https://example.com/wechat.png",
                 "enabled": True,
                 "sort_order": 1,
+                "confirm_text": CONFIRM_CHANGE_RECHARGE_CONFIG,
             },
         )
         assert channel_response.status_code == 200
@@ -292,6 +301,7 @@ def test_manual_recharge_order_review_credits_issue_quota_and_transactions(tmp_p
                 "bonus_quota": 50,
                 "enabled": True,
                 "sort_order": 1,
+                "confirm_text": CONFIRM_CHANGE_RECHARGE_CONFIG,
             },
         )
         assert bonus_response.status_code == 200
@@ -330,14 +340,14 @@ def test_manual_recharge_order_review_credits_issue_quota_and_transactions(tmp_p
 
         approve_response = client.post(
             f"/api/v1/admin/commercial/recharge-orders/{order_data['order_no']}/approve",
-            json={"remark": "到账确认"},
+            json={"remark": "到账确认", "confirm_text": CONFIRM_APPROVE_RECHARGE_ORDER},
         )
         assert approve_response.status_code == 200
         assert approve_response.json()["data"]["status"] == "approved"
 
         duplicate_response = client.post(
             f"/api/v1/admin/commercial/recharge-orders/{order_data['order_no']}/approve",
-            json={"remark": "duplicate click"},
+            json={"remark": "duplicate click", "confirm_text": CONFIRM_APPROVE_RECHARGE_ORDER},
         )
         assert duplicate_response.status_code == 400
 
@@ -385,13 +395,19 @@ def test_admin_can_delete_unused_recharge_config_and_archives_used_rows():
     try:
         unused_option_response = client.post(
             "/api/v1/admin/commercial/recharge-options",
-            json={"amount": 50, "credit_quota": 60, "enabled": True},
+            json={
+                "amount": 50,
+                "credit_quota": 60,
+                "enabled": True,
+                "confirm_text": CONFIRM_CHANGE_RECHARGE_CONFIG,
+            },
         )
         assert unused_option_response.status_code == 200
         unused_option_id = unused_option_response.json()["data"]["id"]
 
         delete_unused_option = client.delete(
-            f"/api/v1/admin/commercial/recharge-options/{unused_option_id}"
+            f"/api/v1/admin/commercial/recharge-options/{unused_option_id}",
+            params={"confirm_text": CONFIRM_CHANGE_RECHARGE_CONFIG},
         )
         assert delete_unused_option.status_code == 200
         assert delete_unused_option.json()["data"] == {
@@ -405,7 +421,12 @@ def test_admin_can_delete_unused_recharge_config_and_archives_used_rows():
 
         used_option_response = client.post(
             "/api/v1/admin/commercial/recharge-options",
-            json={"amount": 80, "credit_quota": 100, "enabled": True},
+            json={
+                "amount": 80,
+                "credit_quota": 100,
+                "enabled": True,
+                "confirm_text": CONFIRM_CHANGE_RECHARGE_CONFIG,
+            },
         )
         assert used_option_response.status_code == 200
         used_option_id = used_option_response.json()["data"]["id"]
@@ -428,7 +449,8 @@ def test_admin_can_delete_unused_recharge_config_and_archives_used_rows():
             session.commit()
 
         archive_used_option = client.delete(
-            f"/api/v1/admin/commercial/recharge-options/{used_option_id}"
+            f"/api/v1/admin/commercial/recharge-options/{used_option_id}",
+            params={"confirm_text": CONFIRM_CHANGE_RECHARGE_CONFIG},
         )
         assert archive_used_option.status_code == 200
         assert archive_used_option.json()["data"] == {
@@ -443,12 +465,18 @@ def test_admin_can_delete_unused_recharge_config_and_archives_used_rows():
 
         unused_rule_response = client.post(
             "/api/v1/admin/commercial/recharge-bonus-rules",
-            json={"threshold_amount": 300, "bonus_quota": 50, "enabled": True},
+            json={
+                "threshold_amount": 300,
+                "bonus_quota": 50,
+                "enabled": True,
+                "confirm_text": CONFIRM_CHANGE_RECHARGE_CONFIG,
+            },
         )
         assert unused_rule_response.status_code == 200
         unused_rule_id = unused_rule_response.json()["data"]["id"]
         delete_unused_rule = client.delete(
-            f"/api/v1/admin/commercial/recharge-bonus-rules/{unused_rule_id}"
+            f"/api/v1/admin/commercial/recharge-bonus-rules/{unused_rule_id}",
+            params={"confirm_text": CONFIRM_CHANGE_RECHARGE_CONFIG},
         )
         assert delete_unused_rule.status_code == 200
         assert delete_unused_rule.json()["data"] == {
@@ -459,7 +487,12 @@ def test_admin_can_delete_unused_recharge_config_and_archives_used_rows():
 
         used_rule_response = client.post(
             "/api/v1/admin/commercial/recharge-bonus-rules",
-            json={"threshold_amount": 500, "bonus_quota": 90, "enabled": True},
+            json={
+                "threshold_amount": 500,
+                "bonus_quota": 90,
+                "enabled": True,
+                "confirm_text": CONFIRM_CHANGE_RECHARGE_CONFIG,
+            },
         )
         assert used_rule_response.status_code == 200
         used_rule_id = used_rule_response.json()["data"]["id"]
@@ -482,7 +515,8 @@ def test_admin_can_delete_unused_recharge_config_and_archives_used_rows():
             session.commit()
 
         archive_used_rule = client.delete(
-            f"/api/v1/admin/commercial/recharge-bonus-rules/{used_rule_id}"
+            f"/api/v1/admin/commercial/recharge-bonus-rules/{used_rule_id}",
+            params={"confirm_text": CONFIRM_CHANGE_RECHARGE_CONFIG},
         )
         assert archive_used_rule.status_code == 200
         assert archive_used_rule.json()["data"] == {
@@ -515,7 +549,12 @@ def test_recharge_orders_can_be_canceled_and_expired_before_review():
     try:
         channel_response = client.post(
             "/api/v1/admin/commercial/payment-channels",
-            json={"channel": "wechat", "display_name": "Wechat", "enabled": True},
+            json={
+                "channel": "wechat",
+                "display_name": "Wechat",
+                "enabled": True,
+                "confirm_text": CONFIRM_CHANGE_RECHARGE_CONFIG,
+            },
         )
         assert channel_response.status_code == 200
 
@@ -537,7 +576,7 @@ def test_recharge_orders_can_be_canceled_and_expired_before_review():
 
         approve_canceled = client.post(
             f"/api/v1/admin/commercial/recharge-orders/{first_order_no}/approve",
-            json={"remark": "must not approve"},
+            json={"remark": "must not approve", "confirm_text": CONFIRM_APPROVE_RECHARGE_ORDER},
         )
         assert approve_canceled.status_code == 400
 
@@ -551,7 +590,7 @@ def test_recharge_orders_can_be_canceled_and_expired_before_review():
 
         expire_response = client.post(
             f"/api/v1/admin/commercial/recharge-orders/{second_order_no}/expire",
-            json={"remark": "manual timeout"},
+            json={"remark": "manual timeout", "confirm_text": CONFIRM_EXPIRE_RECHARGE_ORDER},
         )
         assert expire_response.status_code == 200
         assert expire_response.json()["data"]["status"] == "expired"
@@ -565,7 +604,7 @@ def test_recharge_orders_can_be_canceled_and_expired_before_review():
 
         approve_expired = client.post(
             f"/api/v1/admin/commercial/recharge-orders/{second_order_no}/approve",
-            json={"remark": "must not approve"},
+            json={"remark": "must not approve", "confirm_text": CONFIRM_APPROVE_RECHARGE_ORDER},
         )
         assert approve_expired.status_code == 400
 
@@ -641,7 +680,11 @@ def test_admin_cleanup_recharge_proofs_removes_only_terminal_old_files(tmp_path,
 
         cleanup_response = client.post(
             "/api/v1/admin/commercial/recharge-proofs/cleanup",
-            json={"older_than_days": 30, "dry_run": False},
+            json={
+                "older_than_days": 30,
+                "dry_run": False,
+                "confirm_text": CONFIRM_CLEANUP_PROOF_FILES,
+            },
         )
         assert cleanup_response.status_code == 200
         data = cleanup_response.json()["data"]
@@ -1217,7 +1260,7 @@ def test_hard_delete_merchant_removes_recharge_orders_and_proof_files(tmp_path, 
     try:
         response = client.post(
             "/api/v1/admin/end-users/delete",
-            json={"user_ids": [merchant_id]},
+            json={"user_ids": [merchant_id], "confirm_text": CONFIRM_DELETE_MERCHANT},
         )
         assert response.status_code == 200
         data = response.json()["data"]
@@ -1272,6 +1315,7 @@ def test_admin_payment_channel_upload_saves_qrcode_and_replaces_old_file(tmp_pat
                 "enabled": "true",
                 "sort_order": "2",
                 "remark": "new qr",
+                "confirm_text": CONFIRM_CHANGE_RECHARGE_CONFIG,
             },
             files={"qr_code_file": ("wechat.png", b"new-qr", "image/png")},
         )
@@ -1331,7 +1375,10 @@ def test_admin_payment_channel_qrcode_delete_clears_url_and_removes_uploaded_fil
         session.commit()
 
     try:
-        response = client.delete("/api/v1/admin/commercial/payment-channels/wechat/qrcode")
+        response = client.delete(
+            "/api/v1/admin/commercial/payment-channels/wechat/qrcode",
+            params={"confirm_text": CONFIRM_DELETE_PAYMENT_QRCODE},
+        )
         assert response.status_code == 200
         data = response.json()["data"]
         assert data["channel"] == "wechat"
@@ -1381,6 +1428,7 @@ def test_admin_payment_channel_upload_preserves_qrcode_when_no_new_file_or_url(t
                 "enabled": "true",
                 "sort_order": "2",
                 "remark": "keep existing qr",
+                "confirm_text": CONFIRM_CHANGE_RECHARGE_CONFIG,
             },
         )
         assert response.status_code == 200
