@@ -372,9 +372,9 @@ class AdminAuditLog(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     action: str = Field(max_length=64, index=True, description="Admin action key")
     resource_type: str = Field(max_length=64, index=True, description="Resource type")
-    resource_id: Optional[str] = Field(default=None, max_length=128, description="Resource public ID")
-    admin_id: Optional[int] = Field(default=None, description="Admin user ID")
-    admin_username: Optional[str] = Field(default=None, max_length=255, index=True, description="Admin username")
+    resource_id: Optional[str] = Field(default=None, max_length=128, index=True, description="Resource public ID")
+    admin_id: Optional[int] = Field(default=None, index=True, description="Admin user ID")
+    admin_username: str = Field(max_length=255, index=True, description="Admin username")
     target_user_id: Optional[int] = Field(default=None, index=True, description="Target user ID")
     target_username: Optional[str] = Field(default=None, max_length=255, index=True, description="Target username")
     status: str = Field(default="success", max_length=32, index=True, description="Action status")
@@ -394,7 +394,7 @@ class OpsBackupRecord(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     backup_no: str = Field(unique=True, index=True, max_length=64, description="Public backup number")
-    backup_type: str = Field(max_length=32, description="Backup type")
+    backup_type: str = Field(max_length=32, index=True, description="Backup type")
     status: str = Field(default="created", max_length=32, index=True, description="Backup status")
     file_path: Optional[str] = Field(default=None, sa_column=Column(Text), description="Backup file path")
     file_name: Optional[str] = Field(default=None, max_length=255, description="Backup file name")
@@ -402,7 +402,7 @@ class OpsBackupRecord(SQLModel, table=True):
     table_counts_json: Optional[str] = Field(default=None, sa_column=Column(Text), description="JSON table row counts")
     error_message: Optional[str] = Field(default=None, sa_column=Column(Text), description="Failure detail")
     created_by: str = Field(max_length=255, index=True, description="Creator username")
-    created_at: datetime = Field(default_factory=get_now_naive, description="Created time")
+    created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Created time")
     completed_at: Optional[datetime] = Field(default=None, description="Completed time")
 
 

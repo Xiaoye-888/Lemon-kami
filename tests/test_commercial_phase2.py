@@ -32,6 +32,21 @@ def test_phase2_schema_creates_audit_backup_and_proof_columns():
         column["name"]: column for column in inspector.get_columns("ops_backup_records")
     }
     assert backup_record_columns["created_by"]["nullable"] is False
+    admin_audit_index_columns = {
+        column
+        for index in inspector.get_indexes("admin_audit_logs")
+        for column in index["column_names"]
+    }
+    assert {"resource_id", "admin_id", "admin_username"}.issubset(admin_audit_index_columns)
+
+    backup_record_index_columns = {
+        column
+        for index in inspector.get_indexes("ops_backup_records")
+        for column in index["column_names"]
+    }
+    assert {"backup_no", "backup_type", "created_by", "created_at"}.issubset(
+        backup_record_index_columns
+    )
 
     recharge_order_columns = {
         column["name"] for column in inspector.get_columns("recharge_orders")
