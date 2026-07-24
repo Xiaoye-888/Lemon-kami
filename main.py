@@ -14,6 +14,7 @@ from routes_sdk import router as sdk_router
 from routes_admin_advanced import router as admin_advanced_router
 from routes_admin import router as admin_router
 from routes_auth import router as auth_router
+from routes_commercial import public_router as commercial_public_router
 from routes_commercial import router as commercial_router
 from routes_user import router as user_router
 from routes_merchant import router as merchant_router
@@ -142,6 +143,7 @@ app_logger.info(f"✅ SDK download endpoint configured")
 app.include_router(sdk_router)
 app.include_router(auth_router)
 app.include_router(admin_advanced_router)
+app.include_router(commercial_public_router)
 app.include_router(commercial_router)
 app.include_router(admin_router)
 app.include_router(user_router)

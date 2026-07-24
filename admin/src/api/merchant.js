@@ -45,6 +45,14 @@ export function createMerchantRechargeOrder(data) {
   })
 }
 
+export function createMerchantRechargeOrderUpload(data) {
+  return request({
+    url: '/merchant/recharge/orders/upload',
+    method: 'post',
+    data
+  })
+}
+
 export function getMerchantRechargeOrders(params) {
   return request({
     url: '/merchant/recharge/orders',

@@ -1,12 +1,13 @@
 import base64
 import json
+import re
 import uuid
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 from sqlmodel import Session, select
 
 from datetime_utils import to_api_beijing_iso
@@ -32,12 +33,15 @@ from user_quota_service import (
 
 
 UPLOAD_ROOT = Path("uploads") / "commercial"
+PUBLIC_PAYMENT_QRCODE_PREFIX = "/api/v1/commercial/payment-qrcodes"
 SUPPORTED_IMAGE_TYPES = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
     "image/jpg": ".jpg",
     "image/webp": ".webp",
 }
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+MAX_QRCODE_BYTES = 2 * 1024 * 1024
 MAX_PROOF_BYTES = 5 * 1024 * 1024
 
 
@@ -347,6 +351,140 @@ def _payment_snapshot(channel: RechargePaymentChannel) -> dict:
     }
 
 
+def _proof_root() -> Path:
+    return UPLOAD_ROOT / "proofs"
+
+
+def _payment_qrcode_root() -> Path:
+    return UPLOAD_ROOT / "payment-qrcodes"
+
+
+def _safe_file_prefix(value: str) -> str:
+    prefix = re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_")
+    return prefix[:80] or "upload"
+
+
+def _image_extension(content_type: Optional[str], label: str) -> tuple[str, str]:
+    normalized = (content_type or "").split(";", 1)[0].strip().lower()
+    extension = SUPPORTED_IMAGE_TYPES.get(normalized)
+    if not extension:
+        raise ValueError(f"unsupported {label} image type")
+    return normalized, extension
+
+
+def _path_is_inside(path: Path, root: Path) -> bool:
+    resolved_path = path.resolve(strict=False)
+    resolved_root = root.resolve(strict=False)
+    return resolved_path == resolved_root or resolved_root in resolved_path.parents
+
+
+def _delete_file_if_safe(file_path: Optional[str | Path], root: Optional[Path] = None) -> bool:
+    if not file_path:
+        return False
+    path = Path(file_path)
+    safety_root = root or UPLOAD_ROOT
+    if not _path_is_inside(path, safety_root):
+        return False
+    if not path.exists() or not path.is_file():
+        return False
+    path.unlink()
+    return True
+
+
+def payment_qrcode_public_url(filename: str) -> str:
+    return f"{PUBLIC_PAYMENT_QRCODE_PREFIX}/{filename}"
+
+
+def payment_qrcode_path_from_public_url(url: Optional[str]) -> Optional[Path]:
+    if not url or not url.startswith(f"{PUBLIC_PAYMENT_QRCODE_PREFIX}/"):
+        return None
+    filename = url.rsplit("/", 1)[-1]
+    if not filename or filename != Path(filename).name:
+        return None
+    return _payment_qrcode_root() / filename
+
+
+def delete_payment_qrcode_by_url_if_safe(url: Optional[str]) -> bool:
+    path = payment_qrcode_path_from_public_url(url)
+    if not path:
+        return False
+    return _delete_file_if_safe(path, _payment_qrcode_root())
+
+
+def payment_qrcode_file_path(filename: str) -> Path:
+    if not filename or filename != Path(filename).name:
+        raise ValueError("invalid payment QR code filename")
+    path = _payment_qrcode_root() / filename
+    if not _path_is_inside(path, _payment_qrcode_root()):
+        raise ValueError("invalid payment QR code filename")
+    return path
+
+
+def payment_qrcode_media_type(filename: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".png":
+        return "image/png"
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    return "application/octet-stream"
+
+
+async def _save_upload_image(
+    upload: UploadFile,
+    *,
+    target_dir: Path,
+    file_prefix: str,
+    max_bytes: int,
+    label: str,
+) -> tuple[str, str, str]:
+    content_type, extension = _image_extension(upload.content_type, label)
+    dir_preexisted = target_dir.exists()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{_safe_file_prefix(file_prefix)}_{uuid.uuid4().hex[:12]}{extension}"
+    final_path = target_dir / filename
+    temp_path = target_dir / f".{filename}.tmp"
+    size = 0
+    try:
+        with temp_path.open("wb") as target:
+            while True:
+                chunk = await upload.read(UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > max_bytes:
+                    raise ValueError(f"{label} image is too large")
+                target.write(chunk)
+        if size <= 0:
+            raise ValueError(f"{label} image is empty")
+        temp_path.replace(final_path)
+    except Exception:
+        if temp_path.exists():
+            temp_path.unlink()
+        if not dir_preexisted:
+            try:
+                target_dir.rmdir()
+            except OSError:
+                pass
+        raise
+    finally:
+        await upload.close()
+    return final_path.as_posix(), filename, content_type
+
+
+async def save_payment_qrcode_upload(upload: UploadFile, channel: str | RechargeChannel) -> str:
+    channel_enum = normalize_recharge_channel(channel)
+    _, filename, _ = await _save_upload_image(
+        upload,
+        target_dir=_payment_qrcode_root(),
+        file_prefix=f"{channel_enum.value}_qrcode",
+        max_bytes=MAX_QRCODE_BYTES,
+        label="payment QR code",
+    )
+    return payment_qrcode_public_url(filename)
+
+
 def _save_data_url_image(data_url: Optional[str], order_no: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
     if not data_url:
         return None, None, None
@@ -363,7 +501,7 @@ def _save_data_url_image(data_url: Optional[str], order_no: str) -> tuple[Option
         raise ValueError("invalid proof image data") from error
     if len(data) > MAX_PROOF_BYTES:
         raise ValueError("proof image is too large")
-    target_dir = UPLOAD_ROOT / "proofs"
+    target_dir = _proof_root()
     target_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{order_no}_{uuid.uuid4().hex[:8]}{extension}"
     path = target_dir / filename
@@ -371,26 +509,19 @@ def _save_data_url_image(data_url: Optional[str], order_no: str) -> tuple[Option
     return path.as_posix(), filename, content_type
 
 
-def create_recharge_order(
+def _create_recharge_order_record(
     session: Session,
     *,
     user: EndUser,
-    amount,
-    channel: str | RechargeChannel,
-    mode: str | RechargeMode = RechargeMode.custom,
-    option_id: Optional[int] = None,
+    channel_enum: RechargeChannel,
+    payment_channel: RechargePaymentChannel,
+    preview: dict,
+    order_no: str,
     remark: Optional[str] = None,
-    proof_image_data_url: Optional[str] = None,
+    proof_path: Optional[str] = None,
+    proof_name: Optional[str] = None,
+    proof_content_type: Optional[str] = None,
 ) -> RechargeOrder:
-    channel_enum = normalize_recharge_channel(channel)
-    payment_channel = session.exec(
-        select(RechargePaymentChannel).where(RechargePaymentChannel.channel == channel_enum)
-    ).first()
-    if not payment_channel or not payment_channel.enabled:
-        raise ValueError("payment channel is not available")
-    preview = calculate_recharge_preview(session, amount=amount, mode=mode, option_id=option_id)
-    order_no = make_order_no()
-    proof_path, proof_name, proof_content_type = _save_data_url_image(proof_image_data_url, order_no)
     order = RechargeOrder(
         order_no=order_no,
         user_id=user.id,
@@ -416,6 +547,98 @@ def create_recharge_order(
     session.add(order)
     session.flush()
     return order
+
+
+def _recharge_order_inputs(
+    session: Session,
+    *,
+    amount,
+    channel: str | RechargeChannel,
+    mode: str | RechargeMode = RechargeMode.custom,
+    option_id: Optional[int] = None,
+) -> tuple[RechargeChannel, RechargePaymentChannel, dict]:
+    channel_enum = normalize_recharge_channel(channel)
+    payment_channel = session.exec(
+        select(RechargePaymentChannel).where(RechargePaymentChannel.channel == channel_enum)
+    ).first()
+    if not payment_channel or not payment_channel.enabled:
+        raise ValueError("payment channel is not available")
+    preview = calculate_recharge_preview(session, amount=amount, mode=mode, option_id=option_id)
+    return channel_enum, payment_channel, preview
+
+
+def create_recharge_order(
+    session: Session,
+    *,
+    user: EndUser,
+    amount,
+    channel: str | RechargeChannel,
+    mode: str | RechargeMode = RechargeMode.custom,
+    option_id: Optional[int] = None,
+    remark: Optional[str] = None,
+    proof_image_data_url: Optional[str] = None,
+) -> RechargeOrder:
+    channel_enum, payment_channel, preview = _recharge_order_inputs(
+        session,
+        amount=amount,
+        mode=mode,
+        option_id=option_id,
+        channel=channel,
+    )
+    order_no = make_order_no()
+    proof_path, proof_name, proof_content_type = _save_data_url_image(proof_image_data_url, order_no)
+    return _create_recharge_order_record(
+        session,
+        user=user,
+        channel_enum=channel_enum,
+        payment_channel=payment_channel,
+        preview=preview,
+        order_no=order_no,
+        remark=remark,
+        proof_path=proof_path,
+        proof_name=proof_name,
+        proof_content_type=proof_content_type,
+    )
+
+
+async def create_recharge_order_from_upload(
+    session: Session,
+    *,
+    user: EndUser,
+    amount,
+    channel: str | RechargeChannel,
+    mode: str | RechargeMode = RechargeMode.custom,
+    option_id: Optional[int] = None,
+    remark: Optional[str] = None,
+    proof_file: UploadFile,
+) -> RechargeOrder:
+    channel_enum, payment_channel, preview = _recharge_order_inputs(
+        session,
+        amount=amount,
+        mode=mode,
+        option_id=option_id,
+        channel=channel,
+    )
+    order_no = make_order_no()
+    proof_path, proof_name, proof_content_type = await _save_upload_image(
+        proof_file,
+        target_dir=_proof_root(),
+        file_prefix=order_no,
+        max_bytes=MAX_PROOF_BYTES,
+        label="proof",
+    )
+    return _create_recharge_order_record(
+        session,
+        user=user,
+        channel_enum=channel_enum,
+        payment_channel=payment_channel,
+        preview=preview,
+        order_no=order_no,
+        remark=remark,
+        proof_path=proof_path,
+        proof_name=proof_name,
+        proof_content_type=proof_content_type,
+    )
 
 
 def recharge_order_payload(order: RechargeOrder, include_user: bool = False) -> dict:
@@ -479,17 +702,7 @@ def get_recharge_order_or_404(session: Session, order_no: str) -> RechargeOrder:
 
 
 def _delete_proof_file_if_safe(proof_file_path: Optional[str]) -> bool:
-    if not proof_file_path:
-        return False
-    path = Path(proof_file_path)
-    resolved_path = path.resolve(strict=False)
-    resolved_upload_root = UPLOAD_ROOT.resolve(strict=False)
-    if resolved_path != resolved_upload_root and resolved_upload_root not in resolved_path.parents:
-        return False
-    if not path.exists():
-        return False
-    path.unlink()
-    return True
+    return _delete_file_if_safe(proof_file_path, UPLOAD_ROOT)
 
 
 def delete_recharge_orders_for_users(session: Session, user_ids: list[int]) -> dict:

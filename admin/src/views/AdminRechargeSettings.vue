@@ -21,6 +21,15 @@
           <el-form-item label="二维码地址">
             <el-input v-model="channelForm.qr_code_url" />
           </el-form-item>
+          <el-form-item label="二维码图片">
+            <div class="file-input-row">
+              <input ref="qrFileInput" type="file" accept="image/png,image/jpeg,image/webp" @change="handleQrFile" />
+              <span v-if="channelForm.qr_code_file" class="file-name">{{ channelForm.qr_code_file.name }}</span>
+            </div>
+            <div v-if="qrPreviewUrl || channelForm.qr_code_url" class="qr-preview">
+              <img :src="qrPreviewUrl || channelForm.qr_code_url" alt="payment QR code" />
+            </div>
+          </el-form-item>
           <el-form-item label="收款备注">
             <el-input v-model="channelForm.remark" />
           </el-form-item>
@@ -91,20 +100,26 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getRechargeConfig, saveBonusRule, savePaymentChannel, saveRechargeOption } from '../api/commercial'
+import { getRechargeConfig, saveBonusRule, savePaymentChannelWithUpload, saveRechargeOption } from '../api/commercial'
 
 const loading = ref(false)
 const savingChannel = ref(false)
 const savingOption = ref(false)
 const savingBonus = ref(false)
 const config = ref({ channels: [], options: [], bonus_rules: [] })
+const qrFileInput = ref(null)
+const qrPreviewUrl = ref('')
+
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+const MAX_QR_FILE_SIZE = 2 * 1024 * 1024
 
 const channelForm = reactive({
   channel: 'wechat',
   display_name: '微信收款',
   qr_code_url: '',
+  qr_code_file: null,
   remark: '',
   enabled: true,
   sort_order: 1
@@ -134,10 +149,63 @@ async function loadConfig() {
   }
 }
 
+function clearQrPreview() {
+  if (qrPreviewUrl.value) {
+    URL.revokeObjectURL(qrPreviewUrl.value)
+    qrPreviewUrl.value = ''
+  }
+}
+
+function handleQrFile(event) {
+  const file = event.target.files?.[0]
+  if (!file) {
+    channelForm.qr_code_file = null
+    clearQrPreview()
+    return
+  }
+  if (!IMAGE_TYPES.has(file.type)) {
+    ElMessage.error('请上传 PNG/JPG/WebP 图片')
+    event.target.value = ''
+    channelForm.qr_code_file = null
+    clearQrPreview()
+    return
+  }
+  if (file.size > MAX_QR_FILE_SIZE) {
+    ElMessage.error('支付二维码不能超过 2MB')
+    event.target.value = ''
+    channelForm.qr_code_file = null
+    clearQrPreview()
+    return
+  }
+  channelForm.qr_code_file = file
+  clearQrPreview()
+  qrPreviewUrl.value = URL.createObjectURL(file)
+}
+
+function channelPayloadFormData() {
+  const payload = new FormData()
+  payload.append('channel', channelForm.channel)
+  payload.append('display_name', channelForm.display_name)
+  payload.append('qr_code_url', channelForm.qr_code_url || '')
+  payload.append('enabled', String(channelForm.enabled))
+  payload.append('sort_order', String(channelForm.sort_order || 0))
+  if (channelForm.remark) {
+    payload.append('remark', channelForm.remark)
+  }
+  if (channelForm.qr_code_file) {
+    payload.append('qr_code_file', channelForm.qr_code_file)
+  }
+  return payload
+}
+
 async function handleSavePaymentChannel() {
   savingChannel.value = true
   try {
-    await savePaymentChannel(channelForm)
+    const res = await savePaymentChannelWithUpload(channelPayloadFormData())
+    channelForm.qr_code_url = res.data?.qr_code_url || channelForm.qr_code_url
+    channelForm.qr_code_file = null
+    if (qrFileInput.value) qrFileInput.value.value = ''
+    clearQrPreview()
     ElMessage.success('支付渠道已保存')
     await loadConfig()
   } finally {
@@ -168,6 +236,7 @@ async function handleSaveBonusRule() {
 }
 
 onMounted(loadConfig)
+onUnmounted(clearQrPreview)
 </script>
 
 <style scoped>
@@ -198,6 +267,41 @@ onMounted(loadConfig)
 
 .panel {
   border-radius: 8px;
+}
+
+.file-input-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.file-name {
+  max-width: 220px;
+  color: #475569;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qr-preview {
+  margin-top: 10px;
+  width: 180px;
+  height: 180px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qr-preview img {
+  max-width: 160px;
+  max-height: 160px;
+  object-fit: contain;
 }
 
 @media (max-width: 1180px) {

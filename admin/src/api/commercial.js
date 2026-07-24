@@ -22,6 +22,14 @@ export function savePaymentChannel(data) {
   })
 }
 
+export function savePaymentChannelWithUpload(data) {
+  return request({
+    url: '/admin/commercial/payment-channels/upload',
+    method: 'post',
+    data
+  })
+}
+
 export function saveRechargeOption(data) {
   return request({
     url: '/admin/commercial/recharge-options',

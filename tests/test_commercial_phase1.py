@@ -1,4 +1,5 @@
 import base64
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
@@ -20,9 +21,11 @@ from models import (
     Kami,
     KamiDeviceBinding,
     RechargeChannel,
+    RechargeBonusRule,
     RechargeMode,
     RechargeOrder,
     RechargeOrderStatus,
+    RechargePaymentChannel,
     KamiSpec,
     UserAppAuthorization,
     UserQuotaAccount,
@@ -247,9 +250,10 @@ def test_admin_application_users_and_commercial_merchants_are_listed_separately(
         fastapi_app.dependency_overrides.clear()
 
 
-def test_manual_recharge_order_review_credits_issue_quota_and_transactions():
+def test_manual_recharge_order_review_credits_issue_quota_and_transactions(tmp_path, monkeypatch):
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
+    monkeypatch.setattr(commercial_service, "UPLOAD_ROOT", tmp_path / "uploads" / "commercial")
 
     fastapi_app.dependency_overrides[routes_auth.get_session] = override_session_factory(engine)
     fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
@@ -798,5 +802,180 @@ def test_hard_delete_merchant_removes_recharge_orders_and_proof_files(tmp_path, 
             assert session.exec(select(RechargeOrder)).all() == []
             assert session.exec(select(UserQuotaAccount)).all() == []
             assert session.exec(select(UserQuotaTransaction)).all() == []
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_payment_channel_upload_saves_qrcode_and_replaces_old_file(tmp_path, monkeypatch):
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    upload_root = tmp_path / "uploads" / "commercial"
+    qr_dir = upload_root / "payment-qrcodes"
+    qr_dir.mkdir(parents=True)
+    old_qr = qr_dir / "wechat_old.png"
+    old_qr.write_bytes(b"old-qr")
+    monkeypatch.setattr(commercial_service, "UPLOAD_ROOT", upload_root)
+
+    with Session(engine) as session:
+        row = commercial_service.upsert_payment_channel(
+            session,
+            channel=RechargeChannel.wechat,
+            display_name="Old WeChat",
+            qr_code_url="/api/v1/commercial/payment-qrcodes/wechat_old.png",
+            enabled=True,
+            sort_order=1,
+        )
+        session.commit()
+        assert row.id is not None
+
+    try:
+        response = client.post(
+            "/api/v1/admin/commercial/payment-channels/upload",
+            data={
+                "channel": "wechat",
+                "display_name": "WeChat Pay",
+                "account_name": "receiver",
+                "enabled": "true",
+                "sort_order": "2",
+                "remark": "new qr",
+            },
+            files={"qr_code_file": ("wechat.png", b"new-qr", "image/png")},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["channel"] == "wechat"
+        assert data["display_name"] == "WeChat Pay"
+        assert data["account_name"] == "receiver"
+        assert data["enabled"] is True
+        assert data["sort_order"] == 2
+        assert data["qr_code_url"].startswith("/api/v1/commercial/payment-qrcodes/")
+        assert data["qr_code_url"].endswith(".png")
+
+        new_qr_path = qr_dir / Path(data["qr_code_url"]).name
+        assert new_qr_path.exists()
+        assert new_qr_path.read_bytes() == b"new-qr"
+        assert not old_qr.exists()
+        served_qr_response = client.get(data["qr_code_url"])
+        assert served_qr_response.status_code == 200
+        assert served_qr_response.content == b"new-qr"
+
+        with Session(engine) as session:
+            saved = session.exec(
+                select(RechargePaymentChannel).where(
+                    RechargePaymentChannel.channel == RechargeChannel.wechat
+                )
+            ).one()
+            assert saved.qr_code_url == data["qr_code_url"]
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_recharge_order_upload_stores_proof_file(tmp_path, monkeypatch):
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    upload_root = tmp_path / "uploads" / "commercial"
+    monkeypatch.setattr(commercial_service, "UPLOAD_ROOT", upload_root)
+
+    with Session(engine) as session:
+        _, merchant = seed_admin_and_merchant(session)
+        merchant_token = routes_user.create_user_access_token(merchant)
+        session.add(
+            RechargePaymentChannel(
+                channel=RechargeChannel.wechat,
+                display_name="WeChat Pay",
+                qr_code_url="/api/v1/commercial/payment-qrcodes/wechat.png",
+                enabled=True,
+            )
+        )
+        session.add(
+            RechargeBonusRule(
+                threshold_amount_cents=30000,
+                bonus_quota=50,
+                enabled=True,
+                sort_order=1,
+            )
+        )
+        session.commit()
+
+    try:
+        response = client.post(
+            "/api/v1/merchant/recharge/orders/upload",
+            headers=auth_headers(merchant_token),
+            data={
+                "amount": "350",
+                "mode": "custom",
+                "channel": "wechat",
+                "remark": "uploaded receipt",
+            },
+            files={"proof_file": ("receipt.webp", b"proof-bytes", "image/webp")},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["status"] == "pending_review"
+        assert data["base_quota"] == 350
+        assert data["bonus_quota"] == 50
+        assert data["credit_quota"] == 400
+        assert data["has_proof"] is True
+        assert data["proof_content_type"] == "image/webp"
+        assert data["proof_file_name"].endswith(".webp")
+
+        proof_path = upload_root / "proofs" / data["proof_file_name"]
+        assert proof_path.exists()
+        assert proof_path.read_bytes() == b"proof-bytes"
+
+        with Session(engine) as session:
+            order = session.exec(
+                select(RechargeOrder).where(RechargeOrder.order_no == data["order_no"])
+            ).one()
+            assert order.proof_file_path == proof_path.as_posix()
+            assert order.proof_file_name == data["proof_file_name"]
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_recharge_order_upload_rejects_oversized_proof(tmp_path, monkeypatch):
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    upload_root = tmp_path / "uploads" / "commercial"
+    monkeypatch.setattr(commercial_service, "UPLOAD_ROOT", upload_root)
+    monkeypatch.setattr(commercial_service, "MAX_PROOF_BYTES", 4)
+
+    with Session(engine) as session:
+        _, merchant = seed_admin_and_merchant(session)
+        merchant_token = routes_user.create_user_access_token(merchant)
+        session.add(
+            RechargePaymentChannel(
+                channel=RechargeChannel.wechat,
+                display_name="WeChat Pay",
+                enabled=True,
+            )
+        )
+        session.commit()
+
+    try:
+        response = client.post(
+            "/api/v1/merchant/recharge/orders/upload",
+            headers=auth_headers(merchant_token),
+            data={"amount": "10", "mode": "custom", "channel": "wechat"},
+            files={"proof_file": ("too-large.png", b"12345", "image/png")},
+        )
+        assert response.status_code == 400
+        assert "too large" in response.json()["detail"]
+        assert not (upload_root / "proofs").exists()
     finally:
         fastapi_app.dependency_overrides.clear()

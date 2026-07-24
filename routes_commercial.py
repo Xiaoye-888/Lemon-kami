@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import or_
@@ -14,12 +14,16 @@ from commercial_service import (
     calculate_recharge_preview,
     create_bonus_rule,
     create_recharge_option,
+    delete_payment_qrcode_by_url_if_safe,
     get_recharge_order_or_404,
     payment_channel_payload,
+    payment_qrcode_file_path,
+    payment_qrcode_media_type,
     recharge_bonus_rule_payload,
     recharge_config_payload,
     recharge_option_payload,
     recharge_order_payload,
+    save_payment_qrcode_upload,
     update_recharge_order_status,
     upsert_payment_channel,
     user_quota_transactions_payload,
@@ -37,6 +41,7 @@ from models import (
 
 
 router = APIRouter(prefix="/api/v1/admin/commercial", tags=["Admin Commercial"])
+public_router = APIRouter(prefix="/api/v1/commercial", tags=["Commercial Public"])
 get_current_user = routes_admin.get_current_user
 
 
@@ -89,6 +94,17 @@ def _merchant_user_payload(user: EndUser, account: Optional[UserQuotaAccount]) -
         "created_at": to_api_beijing_iso(user.created_at, naive="civil"),
         "last_login": to_api_beijing_iso(user.last_login, naive="civil") if user.last_login else None,
     }
+
+
+@public_router.get("/payment-qrcodes/{filename}", summary="Get payment QR code")
+async def get_payment_qrcode(filename: str):
+    try:
+        path = payment_qrcode_file_path(filename)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Payment QR code not found")
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Payment QR code not found")
+    return FileResponse(path, media_type=payment_qrcode_media_type(filename))
 
 
 @router.get("/merchants", summary="List merchant/card issuer users")
@@ -192,6 +208,63 @@ async def save_payment_channel(
         event_type="commercial_payment_channel_save",
         payload=payment_channel_payload(row),
         message=f"管理员 {current_user.get('sub')} 更新充值收款渠道 {payload.channel}",
+    )
+    return {"success": True, "message": "payment channel saved", "data": payment_channel_payload(row)}
+
+
+@router.post("/payment-channels/upload", summary="Create or update payment channel with QR upload")
+async def save_payment_channel_with_upload(
+    channel: str = Form(..., pattern="^(wechat|alipay|bank|other)$"),
+    display_name: str = Form(..., min_length=1, max_length=64),
+    qr_code_url: Optional[str] = Form(None),
+    account_name: Optional[str] = Form(None, max_length=128),
+    enabled: bool = Form(True),
+    sort_order: int = Form(0),
+    remark: Optional[str] = Form(None),
+    qr_code_file: Optional[UploadFile] = File(None),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    existing = session.exec(
+        select(RechargePaymentChannel).where(RechargePaymentChannel.channel == channel)
+    ).first()
+    old_qr_code_url = existing.qr_code_url if existing else None
+    saved_qr_code_url = None
+    try:
+        if qr_code_file and qr_code_file.filename:
+            saved_qr_code_url = await save_payment_qrcode_upload(qr_code_file, channel)
+            qr_code_url = saved_qr_code_url
+        row = upsert_payment_channel(
+            session,
+            channel=channel,
+            display_name=display_name,
+            qr_code_url=qr_code_url,
+            account_name=account_name,
+            enabled=enabled,
+            sort_order=sort_order,
+            remark=remark,
+        )
+        session.commit()
+        session.refresh(row)
+    except ValueError as error:
+        if saved_qr_code_url:
+            delete_payment_qrcode_by_url_if_safe(saved_qr_code_url)
+        raise HTTPException(status_code=400, detail=str(error))
+    except Exception:
+        if saved_qr_code_url:
+            delete_payment_qrcode_by_url_if_safe(saved_qr_code_url)
+        raise
+
+    if saved_qr_code_url and old_qr_code_url and old_qr_code_url != saved_qr_code_url:
+        delete_payment_qrcode_by_url_if_safe(old_qr_code_url)
+
+    routes_admin.log_admin_action(
+        session=session,
+        username=current_user.get("sub"),
+        event_type="commercial_payment_channel_save",
+        payload=payment_channel_payload(row),
+        message=f"管理员 {current_user.get('sub')} 更新充值收款渠道 {channel}",
     )
     return {"success": True, "message": "payment channel saved", "data": payment_channel_payload(row)}
 

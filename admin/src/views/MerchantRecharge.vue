@@ -53,7 +53,10 @@
             <el-input v-model="form.remark" type="textarea" :rows="2" maxlength="200" />
           </el-form-item>
           <el-form-item label="支付凭证">
-            <input type="file" accept="image/png,image/jpeg,image/webp" @change="handleProofFile" />
+            <div class="file-input-row">
+              <input ref="proofFileInput" type="file" accept="image/png,image/jpeg,image/webp" @change="handleProofFile" />
+              <span v-if="form.proof_file" class="file-name">{{ form.proof_file.name }}</span>
+            </div>
           </el-form-item>
         </el-form>
         <el-button type="primary" :loading="submitting" :disabled="!canSubmit" @click="submitOrder">提交充值订单</el-button>
@@ -65,12 +68,16 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { createMerchantRechargeOrder, getMerchantRechargeConfig, previewMerchantRecharge } from '../api/merchant'
+import { createMerchantRechargeOrderUpload, getMerchantRechargeConfig, previewMerchantRecharge } from '../api/merchant'
 
 const loading = ref(false)
 const submitting = ref(false)
 const config = ref({ channels: [], options: [], bonus_rules: [] })
 const customPreview = ref({})
+const proofFileInput = ref(null)
+
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+const MAX_PROOF_FILE_SIZE = 5 * 1024 * 1024
 
 const form = reactive({
   channel: '',
@@ -78,12 +85,12 @@ const form = reactive({
   option_id: null,
   amount: 10,
   remark: '',
-  proof_image_data_url: ''
+  proof_file: null
 })
 
 const paymentChannels = computed(() => config.value.channels || [])
 const selectedChannel = computed(() => paymentChannels.value.find((item) => item.channel === form.channel))
-const canSubmit = computed(() => form.channel && form.amount > 0 && form.proof_image_data_url)
+const canSubmit = computed(() => form.channel && form.amount > 0 && form.proof_file)
 
 function selectFixedOption(item) {
   form.mode = 'fixed'
@@ -122,29 +129,44 @@ async function loadPreview() {
 
 function handleProofFile(event) {
   const file = event.target.files?.[0]
-  if (!file) return
-  const reader = new FileReader()
-  reader.onload = () => {
-    form.proof_image_data_url = String(reader.result || '')
+  if (!file) {
+    form.proof_file = null
+    return
   }
-  reader.readAsDataURL(file)
+  if (!IMAGE_TYPES.has(file.type)) {
+    ElMessage.error('请上传 PNG/JPG/WebP 图片')
+    event.target.value = ''
+    form.proof_file = null
+    return
+  }
+  if (file.size > MAX_PROOF_FILE_SIZE) {
+    ElMessage.error('支付凭证不能超过 5MB')
+    event.target.value = ''
+    form.proof_file = null
+    return
+  }
+  form.proof_file = file
 }
 
 async function submitOrder() {
   submitting.value = true
   try {
-    const payload = {
-      amount: form.amount,
-      mode: form.mode,
-      option_id: form.mode === 'fixed' ? form.option_id : null,
-      channel: form.channel,
-      remark: form.remark || null,
-      proof_image_data_url: form.proof_image_data_url
+    const payload = new FormData()
+    payload.append('amount', String(form.amount))
+    payload.append('mode', form.mode)
+    if (form.mode === 'fixed' && form.option_id) {
+      payload.append('option_id', String(form.option_id))
     }
-    await createMerchantRechargeOrder(payload)
+    payload.append('channel', form.channel)
+    if (form.remark) {
+      payload.append('remark', form.remark)
+    }
+    payload.append('proof_file', form.proof_file)
+    await createMerchantRechargeOrderUpload(payload)
     ElMessage.success('充值订单已提交')
     form.remark = ''
-    form.proof_image_data_url = ''
+    form.proof_file = null
+    if (proofFileInput.value) proofFileInput.value.value = ''
   } finally {
     submitting.value = false
   }
@@ -237,6 +259,23 @@ onMounted(loadConfig)
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.file-input-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.file-name {
+  max-width: 220px;
+  color: #475569;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 980px) {

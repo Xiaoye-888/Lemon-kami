@@ -393,16 +393,25 @@ def test_commercial_recharge_pages_expose_order_review_and_upload_flow():
     admin_orders = (PROJECT_ROOT / "admin/src/views/AdminRechargeOrders.vue").read_text(encoding="utf-8")
     admin_settings = (PROJECT_ROOT / "admin/src/views/AdminRechargeSettings.vue").read_text(encoding="utf-8")
     merchant_recharge = (PROJECT_ROOT / "admin/src/views/MerchantRecharge.vue").read_text(encoding="utf-8")
+    commercial_api = (PROJECT_ROOT / "admin/src/api/commercial.js").read_text(encoding="utf-8")
+    merchant_api = (PROJECT_ROOT / "admin/src/api/merchant.js").read_text(encoding="utf-8")
 
     assert "approveRechargeOrder" in admin_orders
     assert "rejectRechargeOrder" in admin_orders
     assert "pending_review" in admin_orders
     assert "支付凭证" in admin_orders
-    assert "savePaymentChannel" in admin_settings
+    assert "savePaymentChannelWithUpload" in commercial_api
+    assert "savePaymentChannelWithUpload" in admin_settings
+    assert "qr_code_file" in admin_settings
     assert "saveRechargeOption" in admin_settings
     assert "saveBonusRule" in admin_settings
+    assert "createMerchantRechargeOrderUpload" in merchant_api
+    assert "createMerchantRechargeOrderUpload" in merchant_recharge
     assert "paymentChannels" in merchant_recharge
-    assert "proof_image_data_url" in merchant_recharge
+    assert "FormData" in merchant_recharge
+    assert "proof_file" in merchant_recharge
+    assert "FileReader" not in merchant_recharge
+    assert "proof_image_data_url" not in merchant_recharge
     assert 'type="file"' in merchant_recharge
     assert "customPreview" in merchant_recharge
 

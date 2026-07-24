@@ -2,7 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import or_
@@ -12,6 +12,7 @@ import routes_user
 from commercial_service import (
     calculate_recharge_preview,
     create_recharge_order,
+    create_recharge_order_from_upload,
     get_recharge_order_or_404,
     merchant_quota_summary,
     recharge_config_payload,
@@ -464,6 +465,35 @@ async def create_merchant_recharge_order(
             channel=payload.channel,
             remark=payload.remark,
             proof_image_data_url=payload.proof_image_data_url,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    session.commit()
+    session.refresh(order)
+    return {"success": True, "message": "recharge order submitted", "data": recharge_order_payload(order)}
+
+
+@router.post("/recharge/orders/upload", summary="Create merchant recharge order with proof upload")
+async def create_merchant_recharge_order_with_upload(
+    amount: str = Form(...),
+    mode: str = Form("custom", pattern="^(fixed|custom)$"),
+    option_id: Optional[int] = Form(None),
+    channel: str = Form(..., pattern="^(wechat|alipay|bank|other)$"),
+    remark: Optional[str] = Form(None),
+    proof_file: UploadFile = File(...),
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    try:
+        order = await create_recharge_order_from_upload(
+            session,
+            user=current_user,
+            amount=amount,
+            mode=mode,
+            option_id=option_id,
+            channel=channel,
+            remark=remark,
+            proof_file=proof_file,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
