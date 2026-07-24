@@ -65,6 +65,7 @@ export function getEndUserQuotas(userId) {
 }
 
 export function grantEndUserQuota(userId, data) {
+  // data.confirm_text carries the fixed sensitive-action confirmation text.
   return request({
     url: `/admin/end-users/${userId}/quotas/grant`,
     method: 'post',
@@ -80,6 +81,7 @@ export function getEndUserAppAuthorizations(userId) {
 }
 
 export function grantEndUserAppAuthorization(userId, data) {
+  // data.confirm_text carries the fixed sensitive-action confirmation text.
   return request({
     url: `/admin/end-users/${userId}/app-authorizations`,
     method: 'post',

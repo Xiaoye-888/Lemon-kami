@@ -159,6 +159,8 @@ const rowAction = ref('')
 const config = ref({ channels: [], options: [], bonus_rules: [] })
 const qrFileInput = ref(null)
 const qrPreviewUrl = ref('')
+const CONFIRM_CHANGE_RECHARGE_CONFIG = '确认修改充值配置'
+const CONFIRM_DELETE_PAYMENT_QRCODE = '确认删除二维码'
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const MAX_QR_FILE_SIZE = 2 * 1024 * 1024
@@ -258,10 +260,22 @@ function channelPayloadFormData() {
   return payload
 }
 
+async function promptSensitiveConfirm(expected, title) {
+  const { value } = await ElMessageBox.prompt(`请输入「${expected}」以确认`, title, {
+    inputValue: '',
+    inputValidator: (value) => value === expected || `请输入${expected}`,
+    type: 'warning'
+  })
+  return value
+}
+
 async function handleSavePaymentChannel() {
   savingChannel.value = true
   try {
-    const res = await savePaymentChannelWithUpload(channelPayloadFormData())
+    const confirmText = await promptSensitiveConfirm(CONFIRM_CHANGE_RECHARGE_CONFIG, '保存渠道')
+    const payload = channelPayloadFormData()
+    payload.append('confirm_text', confirmText)
+    const res = await savePaymentChannelWithUpload(payload)
     channelForm.qr_code_url = res.data?.qr_code_url || channelForm.qr_code_url
     clearQrSelection()
     ElMessage.success('支付渠道已保存')
@@ -291,7 +305,8 @@ async function handleDeleteQrCode() {
 
   deletingQr.value = true
   try {
-    const res = await deletePaymentChannelQrCode(channelForm.channel)
+    const confirmText = await promptSensitiveConfirm(CONFIRM_DELETE_PAYMENT_QRCODE, '删除二维码')
+    const res = await deletePaymentChannelQrCode(channelForm.channel, confirmText)
     channelForm.qr_code_url = res.data?.qr_code_url || ''
     clearQrSelection()
     ElMessage.success('二维码已删除')
@@ -304,7 +319,8 @@ async function handleDeleteQrCode() {
 async function handleSaveRechargeOption() {
   savingOption.value = true
   try {
-    await saveRechargeOption(optionForm)
+    const confirmText = await promptSensitiveConfirm(CONFIRM_CHANGE_RECHARGE_CONFIG, '保存固定额度')
+    await saveRechargeOption({ ...optionForm, confirm_text: confirmText })
     ElMessage.success('固定充值档位已保存')
     await loadConfig()
   } finally {
@@ -315,7 +331,8 @@ async function handleSaveRechargeOption() {
 async function handleSaveBonusRule() {
   savingBonus.value = true
   try {
-    await saveBonusRule(bonusForm)
+    const confirmText = await promptSensitiveConfirm(CONFIRM_CHANGE_RECHARGE_CONFIG, '保存赠送规则')
+    await saveBonusRule({ ...bonusForm, confirm_text: confirmText })
     ElMessage.success('赠送规则已保存')
     await loadConfig()
   } finally {
@@ -335,7 +352,8 @@ async function handleDeleteRechargeOption(row) {
   }
   rowAction.value = `option:${row.id}`
   try {
-    const res = await deleteRechargeOption(row.id)
+    const confirmText = await promptSensitiveConfirm(CONFIRM_CHANGE_RECHARGE_CONFIG, '删除充值配置')
+    const res = await deleteRechargeOption(row.id, { confirm_text: confirmText })
     ElMessage.success(res.data?.archived ? '该配置已归档禁用' : '该配置已删除')
     await loadConfig()
   } finally {
@@ -355,7 +373,8 @@ async function handleDeleteBonusRule(row) {
   }
   rowAction.value = `bonus:${row.id}`
   try {
-    const res = await deleteBonusRule(row.id)
+    const confirmText = await promptSensitiveConfirm(CONFIRM_CHANGE_RECHARGE_CONFIG, '删除赠送规则')
+    const res = await deleteBonusRule(row.id, { confirm_text: confirmText })
     ElMessage.success(res.data?.archived ? '该规则已归档禁用' : '该规则已删除')
     await loadConfig()
   } finally {

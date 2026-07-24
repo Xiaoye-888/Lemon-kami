@@ -98,10 +98,12 @@ export function updateKamiBatch(batchId, data) {
   })
 }
 
-export function deleteKamiBatch(batchId) {
+export function deleteKamiBatch(batchId, data = { confirm_text: undefined }) {
   return request({
     url: `/admin/kamis/batches/${batchId}`,
-    method: 'delete'
+    method: 'delete',
+    params: data,
+    data
   })
 }
 

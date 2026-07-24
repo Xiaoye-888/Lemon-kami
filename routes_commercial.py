@@ -2,13 +2,19 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import or_
 from sqlmodel import Session, select
 
 import routes_admin
+from audit_service import (
+    CONFIRM_TEXT_BY_SCOPE,
+    audit_log_payload,
+    record_admin_audit,
+    require_sensitive_confirmation,
+)
 from commercial_service import (
     approve_recharge_order,
     calculate_recharge_preview,
@@ -36,6 +42,7 @@ from commercial_service import (
 from database import get_session
 from datetime_utils import to_api_beijing_iso
 from models import (
+    AdminAuditLog,
     EndUser,
     RechargeBonusRule,
     RechargeOrder,
@@ -58,6 +65,7 @@ class PaymentChannelRequest(BaseModel):
     enabled: bool = True
     sort_order: int = 0
     remark: Optional[str] = None
+    confirm_text: Optional[str] = None
 
 
 class RechargeOptionRequest(BaseModel):
@@ -67,6 +75,7 @@ class RechargeOptionRequest(BaseModel):
     enabled: bool = True
     sort_order: int = 0
     remark: Optional[str] = None
+    confirm_text: Optional[str] = None
 
 
 class BonusRuleRequest(BaseModel):
@@ -75,16 +84,19 @@ class BonusRuleRequest(BaseModel):
     enabled: bool = True
     sort_order: int = 0
     remark: Optional[str] = None
+    confirm_text: Optional[str] = None
 
 
 class OrderReviewRequest(BaseModel):
     remark: Optional[str] = None
     reject_reason: Optional[str] = None
+    confirm_text: Optional[str] = None
 
 
 class RechargeProofCleanupRequest(BaseModel):
     older_than_days: int = PydanticField(..., ge=1, le=3650)
     dry_run: bool = True
+    confirm_text: Optional[str] = None
 
 
 def _require_admin(current_user: dict) -> None:
@@ -205,13 +217,34 @@ async def list_payment_channels_route(
 @router.post("/payment-channels", summary="Create or update payment channel")
 async def save_payment_channel(
     payload: PaymentChannelRequest,
+    request: Request,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     _require_admin(current_user)
-    row = upsert_payment_channel(session, **payload.model_dump())
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="change_recharge_config",
+        confirm_text=payload.confirm_text,
+        resource_type="payment_channel",
+        resource_id=payload.channel,
+        request=request,
+    )
+    payload_data = payload.model_dump(exclude={"confirm_text"})
+    row = upsert_payment_channel(session, **payload_data)
     session.commit()
     session.refresh(row)
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="change_recharge_config",
+        resource_type="payment_channel",
+        resource_id=payload.channel,
+        request=request,
+        after=payment_channel_payload(row),
+        summary=f"Saved payment channel {payload.channel}",
+    )
     routes_admin.log_admin_action(
         session=session,
         username=current_user.get("sub"),
@@ -224,6 +257,7 @@ async def save_payment_channel(
 
 @router.post("/payment-channels/upload", summary="Create or update payment channel with QR upload")
 async def save_payment_channel_with_upload(
+    request: Request,
     channel: str = Form(..., pattern="^(wechat|alipay|bank|other)$"),
     display_name: str = Form(..., min_length=1, max_length=64),
     qr_code_url: Optional[str] = Form(None),
@@ -231,11 +265,21 @@ async def save_payment_channel_with_upload(
     enabled: bool = Form(True),
     sort_order: int = Form(0),
     remark: Optional[str] = Form(None),
+    confirm_text: Optional[str] = Form(None),
     qr_code_file: Optional[UploadFile] = File(None),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     _require_admin(current_user)
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="change_recharge_config",
+        confirm_text=confirm_text,
+        resource_type="payment_channel",
+        resource_id=channel,
+        request=request,
+    )
     existing = session.exec(
         select(RechargePaymentChannel).where(RechargePaymentChannel.channel == channel)
     ).first()
@@ -271,6 +315,16 @@ async def save_payment_channel_with_upload(
     if saved_qr_code_url and old_qr_code_url and old_qr_code_url != saved_qr_code_url:
         delete_payment_qrcode_by_url_if_safe(old_qr_code_url)
 
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="change_recharge_config",
+        resource_type="payment_channel",
+        resource_id=channel,
+        request=request,
+        after=payment_channel_payload(row),
+        summary=f"Saved payment channel {channel}",
+    )
     routes_admin.log_admin_action(
         session=session,
         username=current_user.get("sub"),
@@ -284,10 +338,21 @@ async def save_payment_channel_with_upload(
 @router.delete("/payment-channels/{channel}/qrcode", summary="Delete payment channel QR code")
 async def delete_payment_channel_qrcode(
     channel: str,
+    request: Request,
+    confirm_text: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     _require_admin(current_user)
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="delete_payment_qrcode",
+        confirm_text=confirm_text,
+        resource_type="payment_channel",
+        resource_id=channel,
+        request=request,
+    )
     try:
         row, deleted_file = clear_payment_channel_qrcode(session, channel)
     except ValueError as error:
@@ -295,6 +360,16 @@ async def delete_payment_channel_qrcode(
     session.commit()
     session.refresh(row)
     payload = {**payment_channel_payload(row), "deleted_file": deleted_file}
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="delete_payment_qrcode",
+        resource_type="payment_channel_qrcode",
+        resource_id=channel,
+        request=request,
+        after=payload,
+        summary=f"Deleted payment QR code for {channel}",
+    )
     routes_admin.log_admin_action(
         session=session,
         username=current_user.get("sub"),
@@ -308,16 +383,35 @@ async def delete_payment_channel_qrcode(
 @router.post("/recharge-options", summary="Create or update fixed recharge option")
 async def save_recharge_option(
     payload: RechargeOptionRequest,
+    request: Request,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     _require_admin(current_user)
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="change_recharge_config",
+        confirm_text=payload.confirm_text,
+        resource_type="recharge_option",
+        request=request,
+    )
     try:
-        row = create_recharge_option(session, **payload.model_dump())
+        row = create_recharge_option(session, **payload.model_dump(exclude={"confirm_text"}))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     session.commit()
     session.refresh(row)
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="change_recharge_config",
+        resource_type="recharge_option",
+        resource_id=row.id,
+        request=request,
+        after=recharge_option_payload(row),
+        summary="Saved fixed recharge option",
+    )
     routes_admin.log_admin_action(
         session=session,
         username=current_user.get("sub"),
@@ -331,16 +425,37 @@ async def save_recharge_option(
 @router.delete("/recharge-options/{option_id}", summary="Delete or archive fixed recharge option")
 async def delete_recharge_option(
     option_id: int,
+    request: Request,
+    confirm_text: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     _require_admin(current_user)
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="change_recharge_config",
+        confirm_text=confirm_text,
+        resource_type="recharge_option",
+        resource_id=option_id,
+        request=request,
+    )
     try:
         row, archived = delete_or_archive_recharge_option(session, option_id)
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error))
     data = {"id": option_id, "deleted": not archived, "archived": archived}
     session.commit()
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="change_recharge_config",
+        resource_type="recharge_option",
+        resource_id=option_id,
+        request=request,
+        after=data,
+        summary=f"Deleted or archived fixed recharge option {option_id}",
+    )
     routes_admin.log_admin_action(
         session=session,
         username=current_user.get("sub"),
@@ -354,16 +469,35 @@ async def delete_recharge_option(
 @router.post("/recharge-bonus-rules", summary="Create custom amount bonus rule")
 async def save_bonus_rule(
     payload: BonusRuleRequest,
+    request: Request,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     _require_admin(current_user)
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="change_recharge_config",
+        confirm_text=payload.confirm_text,
+        resource_type="recharge_bonus_rule",
+        request=request,
+    )
     try:
-        row = create_bonus_rule(session, **payload.model_dump())
+        row = create_bonus_rule(session, **payload.model_dump(exclude={"confirm_text"}))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     session.commit()
     session.refresh(row)
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="change_recharge_config",
+        resource_type="recharge_bonus_rule",
+        resource_id=row.id,
+        request=request,
+        after=recharge_bonus_rule_payload(row),
+        summary="Saved recharge bonus rule",
+    )
     routes_admin.log_admin_action(
         session=session,
         username=current_user.get("sub"),
@@ -377,16 +511,37 @@ async def save_bonus_rule(
 @router.delete("/recharge-bonus-rules/{rule_id}", summary="Delete or archive custom recharge bonus rule")
 async def delete_bonus_rule(
     rule_id: int,
+    request: Request,
+    confirm_text: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     _require_admin(current_user)
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="change_recharge_config",
+        confirm_text=confirm_text,
+        resource_type="recharge_bonus_rule",
+        resource_id=rule_id,
+        request=request,
+    )
     try:
         row, archived = delete_or_archive_bonus_rule(session, rule_id)
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error))
     data = {"id": rule_id, "deleted": not archived, "archived": archived}
     session.commit()
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="change_recharge_config",
+        resource_type="recharge_bonus_rule",
+        resource_id=rule_id,
+        request=request,
+        after=data,
+        summary=f"Deleted or archived recharge bonus rule {rule_id}",
+    )
     routes_admin.log_admin_action(
         session=session,
         username=current_user.get("sub"),
@@ -411,6 +566,54 @@ async def preview_recharge_as_admin(
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     return {"success": True, "data": data}
+
+
+@router.get("/audit-logs", summary="List admin audit logs")
+async def list_admin_audit_logs(
+    action: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    statement = select(AdminAuditLog)
+    count_statement = select(AdminAuditLog)
+    conditions = []
+    if action:
+        conditions.append(AdminAuditLog.action == action)
+    if status:
+        conditions.append(AdminAuditLog.status == status)
+    if keyword:
+        like_conditions = [
+            AdminAuditLog.admin_username.contains(keyword),
+            AdminAuditLog.target_username.contains(keyword),
+            AdminAuditLog.resource_id.contains(keyword),
+            AdminAuditLog.summary.contains(keyword),
+            AdminAuditLog.error_message.contains(keyword),
+        ]
+        conditions.append(or_(*like_conditions))
+    if conditions:
+        statement = statement.where(*conditions)
+        count_statement = count_statement.where(*conditions)
+    total = len(session.exec(count_statement).all())
+    logs = session.exec(
+        statement.order_by(AdminAuditLog.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return {
+        "success": True,
+        "data": {
+            "items": [audit_log_payload(log) for log in logs],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "confirmation_texts": CONFIRM_TEXT_BY_SCOPE,
+        },
+    }
 
 
 @router.get("/recharge-orders", summary="List recharge orders")
@@ -467,10 +670,21 @@ async def get_recharge_order(
 @router.post("/recharge-proofs/cleanup", summary="Clean old terminal recharge proof files")
 async def cleanup_old_recharge_proofs(
     payload: RechargeProofCleanupRequest,
+    request: Request,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     _require_admin(current_user)
+    if not payload.dry_run:
+        require_sensitive_confirmation(
+            session,
+            admin=current_user,
+            action="cleanup_proof_files",
+            confirm_text=payload.confirm_text,
+            resource_type="recharge_proof",
+            request=request,
+            metadata={"older_than_days": payload.older_than_days},
+        )
     try:
         data = cleanup_recharge_proofs(
             session,
@@ -480,6 +694,16 @@ async def cleanup_old_recharge_proofs(
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     session.commit()
+    if not payload.dry_run:
+        record_admin_audit(
+            session,
+            admin=current_user,
+            action="cleanup_proof_files",
+            resource_type="recharge_proof",
+            request=request,
+            after=data,
+            summary=f"Cleaned recharge proof files older than {payload.older_than_days} days",
+        )
     routes_admin.log_admin_action(
         session=session,
         username=current_user.get("sub"),
@@ -507,11 +731,24 @@ async def get_recharge_order_proof(
 async def approve_order(
     order_no: str,
     payload: OrderReviewRequest,
+    request: Request,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     _require_admin(current_user)
     order = get_recharge_order_or_404(session, order_no)
+    before = recharge_order_payload(order, include_user=True)
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="approve_recharge_order",
+        confirm_text=payload.confirm_text,
+        resource_type="recharge_order",
+        resource_id=order_no,
+        target_user_id=order.user_id,
+        target_username=order.username,
+        request=request,
+    )
     try:
         order, transaction = approve_recharge_order(
             session,
@@ -522,6 +759,20 @@ async def approve_order(
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     session.commit()
+    after = {**recharge_order_payload(order, include_user=True), "transaction": transaction}
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="approve_recharge_order",
+        resource_type="recharge_order",
+        resource_id=order_no,
+        target_user_id=order.user_id,
+        target_username=order.username,
+        request=request,
+        before=before,
+        after=after,
+        summary=f"Approved recharge order {order_no}",
+    )
     routes_admin.log_admin_action(
         session=session,
         username=current_user.get("sub"),
@@ -540,11 +791,24 @@ async def approve_order(
 async def reject_order(
     order_no: str,
     payload: OrderReviewRequest,
+    request: Request,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     _require_admin(current_user)
     order = get_recharge_order_or_404(session, order_no)
+    before = recharge_order_payload(order, include_user=True)
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="reject_recharge_order",
+        confirm_text=payload.confirm_text,
+        resource_type="recharge_order",
+        resource_id=order_no,
+        target_user_id=order.user_id,
+        target_username=order.username,
+        request=request,
+    )
     try:
         order = update_recharge_order_status(
             session,
@@ -557,6 +821,19 @@ async def reject_order(
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     session.commit()
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="reject_recharge_order",
+        resource_type="recharge_order",
+        resource_id=order_no,
+        target_user_id=order.user_id,
+        target_username=order.username,
+        request=request,
+        before=before,
+        after=recharge_order_payload(order, include_user=True),
+        summary=f"Rejected recharge order {order_no}",
+    )
     return {"success": True, "message": "order rejected", "data": recharge_order_payload(order, include_user=True)}
 
 
@@ -564,11 +841,24 @@ async def reject_order(
 async def expire_order(
     order_no: str,
     payload: OrderReviewRequest,
+    request: Request,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     _require_admin(current_user)
     order = get_recharge_order_or_404(session, order_no)
+    before = recharge_order_payload(order, include_user=True)
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="expire_recharge_order",
+        confirm_text=payload.confirm_text,
+        resource_type="recharge_order",
+        resource_id=order_no,
+        target_user_id=order.user_id,
+        target_username=order.username,
+        request=request,
+    )
     try:
         order = expire_recharge_order(
             session,
@@ -579,6 +869,19 @@ async def expire_order(
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     session.commit()
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="expire_recharge_order",
+        resource_type="recharge_order",
+        resource_id=order_no,
+        target_user_id=order.user_id,
+        target_username=order.username,
+        request=request,
+        before=before,
+        after=recharge_order_payload(order, include_user=True),
+        summary=f"Expired recharge order {order_no}",
+    )
     routes_admin.log_admin_action(
         session=session,
         username=current_user.get("sub"),
@@ -593,11 +896,24 @@ async def expire_order(
 async def mark_order_abnormal(
     order_no: str,
     payload: OrderReviewRequest,
+    request: Request,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     _require_admin(current_user)
     order = get_recharge_order_or_404(session, order_no)
+    before = recharge_order_payload(order, include_user=True)
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="mark_recharge_abnormal",
+        confirm_text=payload.confirm_text,
+        resource_type="recharge_order",
+        resource_id=order_no,
+        target_user_id=order.user_id,
+        target_username=order.username,
+        request=request,
+    )
     try:
         order = update_recharge_order_status(
             session,
@@ -609,6 +925,19 @@ async def mark_order_abnormal(
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     session.commit()
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="mark_recharge_abnormal",
+        resource_type="recharge_order",
+        resource_id=order_no,
+        target_user_id=order.user_id,
+        target_username=order.username,
+        request=request,
+        before=before,
+        after=recharge_order_payload(order, include_user=True),
+        summary=f"Marked recharge order {order_no} abnormal",
+    )
     return {"success": True, "message": "order marked abnormal", "data": recharge_order_payload(order, include_user=True)}
 
 

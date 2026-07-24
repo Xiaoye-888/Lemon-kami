@@ -460,6 +460,55 @@ def test_commercial_ops_stability_controls_are_exposed():
     assert "can_issue" in merchant_batches
 
 
+def test_phase2_sensitive_actions_use_fixed_confirmation_texts():
+    commercial_api = (PROJECT_ROOT / "admin/src/api/commercial.js").read_text(encoding="utf-8")
+    kami_api = (PROJECT_ROOT / "admin/src/api/kami.js").read_text(encoding="utf-8")
+    points_api = (PROJECT_ROOT / "admin/src/api/points.js").read_text(encoding="utf-8")
+    admin_orders = (PROJECT_ROOT / "admin/src/views/AdminRechargeOrders.vue").read_text(encoding="utf-8")
+    admin_settings = (PROJECT_ROOT / "admin/src/views/AdminRechargeSettings.vue").read_text(encoding="utf-8")
+    admin_merchants = (PROJECT_ROOT / "admin/src/views/AdminMerchants.vue").read_text(encoding="utf-8")
+    kamis = (PROJECT_ROOT / "admin/src/views/Kamis.vue").read_text(encoding="utf-8")
+    kami_batches = (PROJECT_ROOT / "admin/src/views/KamiBatches.vue").read_text(encoding="utf-8")
+
+    assert "confirm_text" in commercial_api
+    assert "data: { confirm_text" in commercial_api
+    assert "deletePaymentChannelQrCode(channel, confirmText)" in commercial_api
+    assert "getAdminAuditLogs" in commercial_api
+
+    assert "confirm_text" in points_api
+    assert "grantEndUserQuota(userId, data)" in points_api
+    assert "grantEndUserAppAuthorization(userId, data)" in points_api
+
+    for text in (
+        "确认审核入账",
+        "确认驳回订单",
+        "确认关闭订单",
+        "确认清理凭证",
+    ):
+        assert text in admin_orders
+    assert "confirm_text: confirmText" in admin_orders
+
+    for text in (
+        "确认修改充值配置",
+        "确认删除二维码",
+    ):
+        assert text in admin_settings
+    assert "payload.append('confirm_text', confirmText)" in admin_settings
+    assert "deletePaymentChannelQrCode(channelForm.channel, confirmText)" in admin_settings
+    assert "deleteRechargeOption(row.id, { confirm_text: confirmText })" in admin_settings
+    assert "deleteBonusRule(row.id, { confirm_text: confirmText })" in admin_settings
+
+    assert "确认调整额度" in admin_merchants
+    assert "确认授权应用" in admin_merchants
+    assert "confirm_text: confirmText" in admin_merchants
+
+    assert "confirm_text" in kami_api
+    assert "确认删除卡密" in kamis
+    assert "deleteKamis({ ...payload, confirm_text: confirmText })" in kamis
+    assert "确认删除批次" in kami_batches
+    assert "deleteKamiBatch(row.id, { confirm_text: confirmText })" in kami_batches
+
+
 def test_commercial_phase1_corrections_keep_identity_and_quota_scope_clear():
     auth_api = (PROJECT_ROOT / "admin/src/api/auth.js").read_text(encoding="utf-8")
     store = (PROJECT_ROOT / "admin/src/stores/user.js").read_text(encoding="utf-8")

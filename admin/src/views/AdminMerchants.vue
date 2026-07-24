@@ -108,6 +108,7 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import { getCommercialMerchants } from '../api/commercial'
 import { getApps } from '../api/admin'
 import {
@@ -141,6 +142,8 @@ const appAuthForm = reactive({
   app_id: '',
   remark: ''
 })
+const CONFIRM_GRANT_ISSUE_QUOTA = '确认调整额度'
+const CONFIRM_GRANT_APP_AUTHORIZATION = '确认授权应用'
 
 const normalizedQuery = () => {
   const params = { ...query }
@@ -172,14 +175,25 @@ function openQuotaDialog(row) {
   quotaDialogVisible.value = true
 }
 
+async function promptSensitiveConfirm(expected, title) {
+  const { value } = await ElMessageBox.prompt(`请输入「${expected}」以确认`, title, {
+    inputValue: '',
+    inputValidator: (value) => value === expected || `请输入${expected}`,
+    type: 'warning'
+  })
+  return value
+}
+
 async function submitIssueQuotaGrant() {
   if (!currentMerchant.value || !quotaForm.amount || quotaForm.amount <= 0) return
   quotaSaving.value = true
   try {
+    const confirmText = await promptSensitiveConfirm(CONFIRM_GRANT_ISSUE_QUOTA, '发放额度')
     await grantEndUserQuota(currentMerchant.value.id, {
       quota_type: 'kami_issue',
       amount: quotaForm.amount,
-      remark: quotaForm.remark || null
+      remark: quotaForm.remark || null,
+      confirm_text: confirmText
     })
     quotaDialogVisible.value = false
     await loadData()
@@ -210,9 +224,11 @@ async function submitAppAuthorization() {
   if (!currentMerchant.value || !appAuthForm.app_id) return
   appAuthSaving.value = true
   try {
+    const confirmText = await promptSensitiveConfirm(CONFIRM_GRANT_APP_AUTHORIZATION, '授权应用')
     await grantEndUserAppAuthorization(currentMerchant.value.id, {
       app_id: appAuthForm.app_id,
-      remark: appAuthForm.remark || null
+      remark: appAuthForm.remark || null,
+      confirm_text: confirmText
     })
     await loadAppAuthorizations(currentMerchant.value.id)
   } finally {

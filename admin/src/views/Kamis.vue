@@ -268,6 +268,16 @@ import {
 const route = useRoute()
 const router = useRouter()
 const loading = ref(false)
+const CONFIRM_DELETE_KAMI = '确认删除卡密'
+
+async function promptSensitiveConfirm(expected, title) {
+  const { value } = await ElMessageBox.prompt(`请输入「${expected}」以确认`, title, {
+    inputValue: '',
+    inputValidator: (value) => value === expected || `请输入${expected}`,
+    type: 'warning'
+  })
+  return value
+}
 const generating = ref(false)
 const kamis = ref([])
 const selectedKamis = ref([])
@@ -571,7 +581,8 @@ const handleDeleteSelected = async () => {
     }
     if (queryParams.spec_id && !queryParams.batch_no) payload.spec_id = queryParams.spec_id
     if (queryParams.batch_no) payload.batch_no = queryParams.batch_no
-    const res = await deleteKamis(payload)
+    const confirmText = await promptSensitiveConfirm(CONFIRM_DELETE_KAMI, '删除卡密')
+    const res = await deleteKamis({ ...payload, confirm_text: confirmText })
     const data = res.data
     ElMessage.success(`已删除 ${data.deleted_count} 个，未处理 ${data.skipped_count} 个`)
     await loadKamis()

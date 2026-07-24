@@ -178,6 +178,10 @@ const proofVisible = ref(false)
 const proofUrl = ref('')
 const detailVisible = ref(false)
 const selectedOrder = ref(null)
+const CONFIRM_APPROVE_RECHARGE_ORDER = '确认审核入账'
+const CONFIRM_REJECT_RECHARGE_ORDER = '确认驳回订单'
+const CONFIRM_EXPIRE_RECHARGE_ORDER = '确认关闭订单'
+const CONFIRM_CLEANUP_PROOF_FILES = '确认清理凭证'
 
 const query = reactive({
   status: '',
@@ -250,13 +254,23 @@ function formatSnapshot(snapshot) {
   return JSON.stringify(snapshot, null, 2)
 }
 
+async function promptSensitiveConfirm(expected, title) {
+  const { value } = await ElMessageBox.prompt(`请输入「${expected}」以确认`, title, {
+    inputValue: '',
+    inputValidator: (value) => value === expected || `请输入${expected}`,
+    type: 'warning'
+  })
+  return value
+}
+
 async function handleApprove(row) {
   try {
     await ElMessageBox.confirm(`确认通过订单 ${row.order_no} 并自动入账 ${row.credit_quota} 发卡额度？`, '审核通过', {
       type: 'warning'
     })
+    const confirmText = await promptSensitiveConfirm(CONFIRM_APPROVE_RECHARGE_ORDER, '审核通过')
     rowAction.value = `approve:${row.order_no}`
-    await approveRechargeOrder(row.order_no, { remark: '后台审核通过' })
+    await approveRechargeOrder(row.order_no, { remark: '后台审核通过', confirm_text: confirmText })
     ElMessage.success('订单已通过并入账')
     detailVisible.value = false
     await loadOrders()
@@ -274,8 +288,9 @@ async function handleReject(row) {
       inputValidator: (value) => Boolean(value?.trim()) || '请填写拒绝原因',
       type: 'warning'
     })
+    const confirmText = await promptSensitiveConfirm(CONFIRM_REJECT_RECHARGE_ORDER, '驳回订单')
     rowAction.value = `reject:${row.order_no}`
-    await rejectRechargeOrder(row.order_no, { reject_reason: value, remark: value })
+    await rejectRechargeOrder(row.order_no, { reject_reason: value, remark: value, confirm_text: confirmText })
     ElMessage.success('订单已拒绝')
     detailVisible.value = false
     await loadOrders()
@@ -292,8 +307,9 @@ async function handleExpire(row) {
       inputValue: '人工确认超时未入账',
       type: 'warning'
     })
+    const confirmText = await promptSensitiveConfirm(CONFIRM_EXPIRE_RECHARGE_ORDER, '标记过期')
     rowAction.value = `expire:${row.order_no}`
-    await expireRechargeOrder(row.order_no, { remark: value || '人工确认超时未入账' })
+    await expireRechargeOrder(row.order_no, { remark: value || '人工确认超时未入账', confirm_text: confirmText })
     ElMessage.success('订单已标记过期')
     detailVisible.value = false
     await loadOrders()
@@ -326,7 +342,8 @@ async function handleCleanupProofs() {
       '确认清理旧凭证',
       { type: 'warning' }
     )
-    const res = await cleanupRechargeProofs({ older_than_days: olderThanDays, dry_run: false })
+    const confirmText = await promptSensitiveConfirm(CONFIRM_CLEANUP_PROOF_FILES, '清理旧凭证')
+    const res = await cleanupRechargeProofs({ older_than_days: olderThanDays, dry_run: false, confirm_text: confirmText })
     ElMessage.success(`已清理 ${res.data?.deleted_proofs || 0} 个凭证文件`)
     await loadOrders()
   } catch (error) {

@@ -841,6 +841,17 @@ import { groupKamiSpecsByBenefit } from '../utils/kamiSpecGrouping'
 const route = useRoute()
 const router = useRouter()
 const loading = ref(false)
+const CONFIRM_DELETE_KAMI = '确认删除卡密'
+const CONFIRM_DELETE_KAMI_BATCH = '确认删除批次'
+
+async function promptSensitiveConfirm(expected, title) {
+  const { value } = await ElMessageBox.prompt(`请输入「${expected}」以确认`, title, {
+    inputValue: '',
+    inputValidator: (value) => value === expected || `请输入${expected}`,
+    type: 'warning'
+  })
+  return value
+}
 const batchLoading = ref(false)
 const detailLoading = ref(false)
 const savingSpec = ref(false)
@@ -1602,7 +1613,8 @@ const handleDeleteBatch = async (row) => {
     await ElMessageBox.confirm(`确定删除批次「${row.batch_no}」吗？只有空批次可以删除。`, '删除批次', {
       type: 'warning'
     })
-    await deleteKamiBatch(row.id)
+    const confirmText = await promptSensitiveConfirm(CONFIRM_DELETE_KAMI_BATCH, '删除批次')
+    await deleteKamiBatch(row.id, { confirm_text: confirmText })
     ElMessage.success('批次已删除')
     if (viewMode.value === 'batch' && currentBatch.value?.id === row.id) {
       if (currentSpec.value) await openSpecDetail(currentSpec.value)
@@ -1672,7 +1684,8 @@ const handleDeleteSelectedDetail = async () => {
     }
     if (viewMode.value === 'spec') payload.spec_id = currentSpec.value.id
     if (viewMode.value === 'batch') payload.batch_no = currentBatch.value.batch_no
-    const res = await deleteKamis(payload)
+    const confirmText = await promptSensitiveConfirm(CONFIRM_DELETE_KAMI, '删除卡密')
+    const res = await deleteKamis({ ...payload, confirm_text: confirmText })
     const data = res.data
     ElMessage.success(`已删除 ${data.deleted_count} 个，未处理 ${data.skipped_count} 个`)
     await loadDetailKamis()

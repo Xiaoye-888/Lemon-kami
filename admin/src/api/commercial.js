@@ -30,10 +30,12 @@ export function savePaymentChannelWithUpload(data) {
   })
 }
 
-export function deletePaymentChannelQrCode(channel) {
+export function deletePaymentChannelQrCode(channel, confirmText) {
   return request({
     url: `/admin/commercial/payment-channels/${channel}/qrcode`,
-    method: 'delete'
+    method: 'delete',
+    params: { confirm_text: confirmText },
+    data: { confirm_text: confirmText }
   })
 }
 
@@ -45,10 +47,12 @@ export function saveRechargeOption(data) {
   })
 }
 
-export function deleteRechargeOption(optionId) {
+export function deleteRechargeOption(optionId, data = {}) {
   return request({
     url: `/admin/commercial/recharge-options/${optionId}`,
-    method: 'delete'
+    method: 'delete',
+    params: data,
+    data
   })
 }
 
@@ -60,10 +64,12 @@ export function saveBonusRule(data) {
   })
 }
 
-export function deleteBonusRule(ruleId) {
+export function deleteBonusRule(ruleId, data = {}) {
   return request({
     url: `/admin/commercial/recharge-bonus-rules/${ruleId}`,
-    method: 'delete'
+    method: 'delete',
+    params: data,
+    data
   })
 }
 
@@ -126,6 +132,14 @@ export function cleanupRechargeProofs(data = {}) {
 export function getCommercialQuotaTransactions(params) {
   return request({
     url: '/admin/commercial/quota-transactions',
+    method: 'get',
+    params
+  })
+}
+
+export function getAdminAuditLogs(params) {
+  return request({
+    url: '/admin/commercial/audit-logs',
     method: 'get',
     params
   })

@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import or_
 from sqlmodel import Session, select
 from auth_utils import hash_password, verify_password
+from audit_service import record_admin_audit, require_sensitive_confirmation
 from database import get_session
 from redis_client import get_redis
 from models import (
@@ -499,6 +500,7 @@ class DeleteKamisRequest(BaseModel):
     spec_id: Optional[int] = None
     batch_no: Optional[str] = PydanticField(None, max_length=64)
     kami_codes: List[str] = PydanticField(..., min_length=1, max_length=1000)
+    confirm_text: Optional[str] = None
 
 
 class KamiBatchCreateRequest(BaseModel):
@@ -2965,6 +2967,8 @@ async def update_kami_batch(
 @router.delete("/kamis/batches/{batch_id}", summary="Delete kami batch")
 async def delete_kami_batch(
     batch_id: int,
+    request: Request,
+    confirm_text: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -2976,6 +2980,16 @@ async def delete_kami_batch(
     is_admin = current_user.get("is_admin", False)
     if not check_app_permission(session, batch.app_id, username, is_admin):
         raise HTTPException(status_code=403, detail="No permission to delete this batch")
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="delete_kami_batch",
+        confirm_text=confirm_text,
+        resource_type="kami_batch",
+        resource_id=batch_id,
+        request=request,
+        metadata={"app_id": batch.app_id, "batch_no": batch.batch_no},
+    )
 
     existing_kami = session.exec(
         select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
@@ -2988,6 +3002,16 @@ async def delete_kami_batch(
     payload_data = _kami_batch_payload(batch)
     session.delete(batch)
     session.commit()
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="delete_kami_batch",
+        resource_type="kami_batch",
+        resource_id=batch_id,
+        request=request,
+        after=payload_data,
+        summary=f"Deleted kami batch {batch_no}",
+    )
 
     log_admin_action(
         session=session,
@@ -3670,6 +3694,7 @@ async def export_kamis(
 @router.post("/kamis/delete", summary="批量删除卡密")
 async def delete_kamis(
     payload: DeleteKamisRequest,
+    request: Request,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
@@ -3686,6 +3711,21 @@ async def delete_kamis(
     kami_codes = list(dict.fromkeys(code for code in payload.kami_codes if code))
     if not kami_codes:
         raise HTTPException(status_code=400, detail="kami_codes is required")
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="delete_kami",
+        confirm_text=payload.confirm_text,
+        resource_type="kami",
+        resource_id=payload.app_id,
+        request=request,
+        metadata={
+            "app_id": payload.app_id,
+            "batch_no": payload.batch_no,
+            "spec_id": payload.spec_id,
+            "requested_count": len(kami_codes),
+        },
+    )
 
     statement = select(Kami).where(
         Kami.app_id == payload.app_id,
@@ -3735,6 +3775,24 @@ async def delete_kamis(
         session.delete(kami)
 
     session.commit()
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="delete_kami",
+        resource_type="kami",
+        resource_id=payload.app_id,
+        request=request,
+        after={
+            "app_id": payload.app_id,
+            "batch_no": payload.batch_no,
+            "requested_codes": kami_codes,
+            "deleted_codes": deleted_codes,
+            "skipped": skipped,
+            "deleted_count": len(deleted_codes),
+            "skipped_count": len(skipped),
+        },
+        summary=f"Deleted {len(deleted_codes)} kamis",
+    )
 
     log_admin_action(
         session=session,

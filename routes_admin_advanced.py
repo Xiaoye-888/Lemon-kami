@@ -1,11 +1,12 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import or_
 from sqlmodel import Session, select
 
 import routes_admin as legacy_admin
+from audit_service import record_admin_audit, require_sensitive_confirmation
 from commercial_service import delete_recharge_orders_for_users
 from database import get_session
 from datetime_utils import to_api_beijing_iso
@@ -36,11 +37,18 @@ class UserQuotaGrantRequest(BaseModel):
     biz_id: Optional[str] = PydanticField(None, max_length=128)
     remark: Optional[str] = None
     metadata: Optional[dict] = None
+    confirm_text: Optional[str] = None
 
 
 class UserAppAuthorizationGrantRequest(BaseModel):
     app_id: str = PydanticField(..., max_length=64)
     remark: Optional[str] = None
+    confirm_text: Optional[str] = None
+
+
+class EndUserDeleteConfirmRequest(BaseModel):
+    user_ids: list[int] = PydanticField(..., min_length=1)
+    confirm_text: Optional[str] = None
 
 
 def _require_admin(current_user: dict) -> None:
@@ -101,6 +109,7 @@ async def get_end_user_quotas(
 async def grant_end_user_quota(
     user_id: int,
     payload: UserQuotaGrantRequest,
+    request: Request,
     current_user: dict = Depends(legacy_admin.get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -108,6 +117,18 @@ async def grant_end_user_quota(
     user = session.get(EndUser, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="End user not found")
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="grant_issue_quota",
+        confirm_text=payload.confirm_text,
+        resource_type="end_user",
+        resource_id=user_id,
+        target_user_id=user.id,
+        target_username=user.username,
+        request=request,
+        metadata={"quota_type": payload.quota_type, "amount": payload.amount},
+    )
 
     account = get_or_create_user_quota_account(session, user.id, user.username)
     try:
@@ -126,6 +147,18 @@ async def grant_end_user_quota(
 
     session.commit()
     session.refresh(account)
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="grant_issue_quota",
+        resource_type="end_user",
+        resource_id=user_id,
+        target_user_id=user.id,
+        target_username=user.username,
+        request=request,
+        after={"account": user_quota_summary(account), "transaction": transaction},
+        summary=f"Granted {payload.amount} {payload.quota_type} quota to {user.username}",
+    )
     return {
         "success": True,
         "message": "quota granted",
@@ -178,6 +211,7 @@ async def list_end_user_app_authorizations(
 async def grant_end_user_app_authorization(
     user_id: int,
     payload: UserAppAuthorizationGrantRequest,
+    request: Request,
     current_user: dict = Depends(legacy_admin.get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -188,6 +222,17 @@ async def grant_end_user_app_authorization(
     app = session.exec(select(App).where(App.app_id == payload.app_id)).first()
     if not app:
         raise HTTPException(status_code=404, detail="App not found")
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="grant_app_authorization",
+        confirm_text=payload.confirm_text,
+        resource_type="user_app_authorization",
+        resource_id=payload.app_id,
+        target_user_id=user.id,
+        target_username=user.username,
+        request=request,
+    )
 
     authorization = grant_app_authorization(
         session=session,
@@ -197,6 +242,23 @@ async def grant_end_user_app_authorization(
         remark=payload.remark,
     )
     session.commit()
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="grant_app_authorization",
+        resource_type="user_app_authorization",
+        resource_id=payload.app_id,
+        target_user_id=user.id,
+        target_username=user.username,
+        request=request,
+        after={
+            "id": authorization.id,
+            "app_id": authorization.app_id,
+            "user_id": authorization.user_id,
+            "username": authorization.username,
+        },
+        summary=f"Granted app {payload.app_id} authorization to {user.username}",
+    )
     return {
         "success": True,
         "message": "app authorization granted",
@@ -215,6 +277,8 @@ async def grant_end_user_app_authorization(
 @router.delete("/apps/{app_id}", summary="Delete app")
 async def delete_app(
     app_id: str,
+    request: Request,
+    confirm_text: Optional[str] = Query(None),
     current_user: dict = Depends(legacy_admin.get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -222,6 +286,16 @@ async def delete_app(
     app = session.exec(select(App).where(App.app_id == app_id)).first()
     if not app:
         raise HTTPException(status_code=404, detail="App not found")
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="delete_app",
+        confirm_text=confirm_text,
+        resource_type="app",
+        resource_id=app_id,
+        request=request,
+        metadata={"app_name": app.name},
+    )
 
     auth_rows = session.exec(
         select(UserAppAuthorization).where(UserAppAuthorization.app_id == app_id)
@@ -231,6 +305,16 @@ async def delete_app(
     session.flush()
 
     result = await legacy_admin.delete_app(app_id, current_user=current_user, session=session)
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="delete_app",
+        resource_type="app",
+        resource_id=app_id,
+        request=request,
+        after=result.get("data") if isinstance(result, dict) else result,
+        summary=f"Deleted app {app_id}",
+    )
     if isinstance(result.get("data"), dict):
         result["data"]["deleted_user_app_authorizations"] = len(auth_rows)
     else:
@@ -240,7 +324,8 @@ async def delete_app(
 
 @router.post("/end-users/delete", summary="Hard delete end users")
 async def delete_end_users(
-    payload: legacy_admin.EndUserDeleteRequest,
+    payload: EndUserDeleteConfirmRequest,
+    request: Request,
     current_user: dict = Depends(legacy_admin.get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -248,6 +333,15 @@ async def delete_end_users(
     user_ids = list(dict.fromkeys(user_id for user_id in payload.user_ids if user_id))
     if not user_ids:
         raise HTTPException(status_code=400, detail="user_ids is required")
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="delete_merchant",
+        confirm_text=payload.confirm_text,
+        resource_type="end_user",
+        resource_id=",".join(str(user_id) for user_id in user_ids),
+        request=request,
+    )
 
     users = session.exec(select(EndUser).where(EndUser.id.in_(user_ids))).all()
     if not users:
@@ -337,4 +431,14 @@ async def delete_end_users(
         }
     )
     result["data"] = deleted_counts
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="delete_merchant",
+        resource_type="end_user",
+        resource_id=",".join(str(user_id) for user_id in user_ids),
+        request=request,
+        after=deleted_counts,
+        summary=f"Deleted {deleted_counts.get('deleted_users', 0)} users",
+    )
     return result
