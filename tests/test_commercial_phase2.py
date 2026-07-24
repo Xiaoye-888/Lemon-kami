@@ -243,6 +243,80 @@ def test_recharge_approval_requires_confirmation_and_writes_audit():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_recharge_approval_business_failure_writes_failed_audit_without_mutation():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    try:
+        with Session(engine) as session:
+            merchant = EndUser(
+                username="merchant-approved",
+                password_hash=hash_password("merchant-pass"),
+                status=1,
+            )
+            session.add(merchant)
+            session.commit()
+            session.refresh(merchant)
+            session.add(
+                RechargeOrder(
+                    order_no="RC_ALREADY_APPROVED",
+                    user_id=merchant.id,
+                    username=merchant.username,
+                    mode=RechargeMode.custom,
+                    channel=RechargeChannel.wechat,
+                    amount_cents=1000,
+                    base_quota=10,
+                    bonus_quota=0,
+                    credit_quota=10,
+                    status=RechargeOrderStatus.approved,
+                    reviewed_by="admin",
+                )
+            )
+            account = UserQuotaAccount(
+                user_id=merchant.id,
+                username=merchant.username,
+                kami_issue_balance=10,
+                total_kami_issue_granted=10,
+            )
+            session.add(account)
+            session.commit()
+            merchant_id = merchant.id
+
+        response = client.post(
+            "/api/v1/admin/commercial/recharge-orders/RC_ALREADY_APPROVED/approve",
+            json={"remark": "repeat approval", "confirm_text": "确认审核入账"},
+        )
+        assert response.status_code == 400
+
+        with Session(engine) as session:
+            saved_order = session.exec(
+                select(RechargeOrder).where(RechargeOrder.order_no == "RC_ALREADY_APPROVED")
+            ).one()
+            account = session.exec(
+                select(UserQuotaAccount).where(UserQuotaAccount.user_id == merchant_id)
+            ).one()
+            failed_log = session.exec(
+                select(AdminAuditLog).where(
+                    AdminAuditLog.action == "approve_recharge_order",
+                    AdminAuditLog.status == "failed",
+                )
+            ).one()
+
+            assert saved_order.status == RechargeOrderStatus.approved
+            assert account.kami_issue_balance == 10
+            assert account.total_kami_issue_granted == 10
+            assert failed_log.resource_type == "recharge_order"
+            assert failed_log.resource_id == "RC_ALREADY_APPROVED"
+            assert failed_log.target_user_id == merchant_id
+            assert failed_log.error_message
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_quota_grant_and_app_authorization_require_confirmation():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
@@ -319,6 +393,94 @@ def test_quota_grant_and_app_authorization_require_confirmation():
                 ("grant_app_authorization", "failed"),
                 ("grant_app_authorization", "success"),
             ]
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_revoke_app_authorization_requires_confirmation_and_audits_success():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin_advanced.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin_advanced.legacy_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    try:
+        with Session(engine) as session:
+            merchant = EndUser(
+                username="merchant-revoke",
+                password_hash=hash_password("merchant-pass"),
+                status=1,
+            )
+            other_merchant = EndUser(
+                username="merchant-other",
+                password_hash=hash_password("merchant-pass"),
+                status=1,
+            )
+            app = App(
+                app_id="phase2_revoke_app",
+                name="Phase2 Revoke App",
+                app_secret="secret",
+                rsa_public_key="public",
+                rsa_private_key="private",
+                status=1,
+                created_by="admin",
+            )
+            session.add_all([merchant, other_merchant, app])
+            session.commit()
+            session.refresh(merchant)
+            session.refresh(other_merchant)
+            authorization = UserAppAuthorization(
+                app_id=app.app_id,
+                user_id=merchant.id,
+                username=merchant.username,
+                granted_by="admin",
+                remark="temporary grant",
+            )
+            session.add(authorization)
+            session.commit()
+            session.refresh(authorization)
+            merchant_id = merchant.id
+            other_merchant_id = other_merchant.id
+            authorization_id = authorization.id
+
+        missing = client.request(
+            "DELETE",
+            f"/api/v1/admin/end-users/{merchant_id}/app-authorizations/{authorization_id}",
+            json={},
+        )
+        assert missing.status_code == 400
+        assert missing.json()["detail"]["expected"] == "确认取消授权"
+
+        wrong_user = client.request(
+            "DELETE",
+            f"/api/v1/admin/end-users/{other_merchant_id}/app-authorizations/{authorization_id}",
+            json={"confirm_text": "确认取消授权"},
+        )
+        assert wrong_user.status_code == 404
+
+        success = client.request(
+            "DELETE",
+            f"/api/v1/admin/end-users/{merchant_id}/app-authorizations/{authorization_id}",
+            json={"confirm_text": "确认取消授权"},
+        )
+        assert success.status_code == 200
+        assert success.json()["data"]["id"] == authorization_id
+
+        with Session(engine) as session:
+            assert session.get(UserAppAuthorization, authorization_id) is None
+            audit_logs = session.exec(
+                select(AdminAuditLog).where(
+                    AdminAuditLog.action == "revoke_app_authorization"
+                ).order_by(AdminAuditLog.id)
+            ).all()
+            assert [(log.status, log.resource_type, log.resource_id) for log in audit_logs] == [
+                ("failed", "user_app_authorization", str(authorization_id)),
+                ("failed", "user_app_authorization", str(authorization_id)),
+                ("success", "user_app_authorization", str(authorization_id)),
+            ]
+            assert audit_logs[-1].target_user_id == merchant_id
+            assert audit_logs[-1].target_username == "merchant-revoke"
     finally:
         fastapi_app.dependency_overrides.clear()
 

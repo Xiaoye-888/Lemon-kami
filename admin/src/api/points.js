@@ -89,6 +89,15 @@ export function grantEndUserAppAuthorization(userId, data) {
   })
 }
 
+export function revokeEndUserAppAuthorization(userId, authorizationId, data) {
+  // data.confirm_text carries the fixed sensitive-action confirmation text.
+  return request({
+    url: `/admin/end-users/${userId}/app-authorizations/${authorizationId}`,
+    method: 'delete',
+    data
+  })
+}
+
 export function getEndUserKamis(userId, params) {
   return request({
     url: `/admin/end-users/${userId}/kamis`,

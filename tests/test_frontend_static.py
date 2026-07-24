@@ -469,6 +469,7 @@ def test_phase2_sensitive_actions_use_fixed_confirmation_texts():
     admin_orders = (PROJECT_ROOT / "admin/src/views/AdminRechargeOrders.vue").read_text(encoding="utf-8")
     admin_settings = (PROJECT_ROOT / "admin/src/views/AdminRechargeSettings.vue").read_text(encoding="utf-8")
     admin_merchants = (PROJECT_ROOT / "admin/src/views/AdminMerchants.vue").read_text(encoding="utf-8")
+    end_users = (PROJECT_ROOT / "admin/src/views/EndUsers.vue").read_text(encoding="utf-8")
     kamis = (PROJECT_ROOT / "admin/src/views/Kamis.vue").read_text(encoding="utf-8")
     kami_batches = (PROJECT_ROOT / "admin/src/views/KamiBatches.vue").read_text(encoding="utf-8")
 
@@ -487,6 +488,8 @@ def test_phase2_sensitive_actions_use_fixed_confirmation_texts():
     assert "confirm_text" in points_api
     assert "grantEndUserQuota(userId, data)" in points_api
     assert "grantEndUserAppAuthorization(userId, data)" in points_api
+    assert "revokeEndUserAppAuthorization(userId, authorizationId, data)" in points_api
+    assert "method: 'delete'" in points_api
 
     for text in (
         "确认审核入账",
@@ -513,6 +516,12 @@ def test_phase2_sensitive_actions_use_fixed_confirmation_texts():
     assert "确认调整额度" in admin_merchants
     assert "确认授权应用" in admin_merchants
     assert "confirm_text: confirmText" in admin_merchants
+    assert "确认取消授权" in admin_merchants
+    assert "revokeEndUserAppAuthorization(currentMerchant.value.id, row.id, { confirm_text: confirmText })" in admin_merchants
+
+    assert "确认删除用户" in end_users
+    assert "confirm_text: confirmText" in end_users
+    assert "deleteEndUsers({" in end_users
 
     assert "confirm_text" in kami_api
     assert "确认删除卡密" in kamis

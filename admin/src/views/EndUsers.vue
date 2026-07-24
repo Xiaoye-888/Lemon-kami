@@ -290,6 +290,8 @@ const grantForm = reactive({
   remark: ''
 })
 
+const CONFIRM_DELETE_MERCHANT = '确认删除用户'
+
 const statItems = computed(() => [
   { label: '用户总数', value: stats.value.total },
   { label: '今日新增', value: stats.value.today_new },
@@ -386,9 +388,22 @@ const handleDeleteSelectedUsers = async () => {
         confirmButtonClass: 'el-button--danger'
       }
     )
+    const { value: confirmText } = await ElMessageBox.prompt(
+      `请输入“${CONFIRM_DELETE_MERCHANT}”以确认`,
+      '删除用户确认',
+      {
+        inputValue: '',
+        inputValidator: (value) => value === CONFIRM_DELETE_MERCHANT || `请输入${CONFIRM_DELETE_MERCHANT}`,
+        type: 'warning',
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger'
+      }
+    )
     deletingUsers.value = true
     await deleteEndUsers({
-      user_ids: selectedUsers.value.map((item) => item.id)
+      user_ids: selectedUsers.value.map((item) => item.id),
+      confirm_text: confirmText
     })
     ElMessage.success('用户及关联数据已删除')
     await loadData()

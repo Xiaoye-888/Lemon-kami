@@ -83,6 +83,19 @@
         <el-table :data="appAuthorizations" border stripe height="220">
           <el-table-column prop="app_name" label="应用名称" min-width="160" show-overflow-tooltip />
           <el-table-column prop="app_id" label="App ID" min-width="170" show-overflow-tooltip />
+          <el-table-column label="操作" width="100" fixed="right">
+            <template #default="{ row }">
+              <el-button
+                size="small"
+                type="danger"
+                plain
+                :loading="appAuthRevoking === row.id"
+                @click="handleRevokeAppAuthorization(row)"
+              >
+                撤销
+              </el-button>
+            </template>
+          </el-table-column>
           <el-table-column prop="granted_by" label="授权人" width="120" />
           <el-table-column prop="created_at" label="授权时间" width="180" />
         </el-table>
@@ -114,13 +127,15 @@ import { getApps } from '../api/admin'
 import {
   getEndUserAppAuthorizations,
   grantEndUserAppAuthorization,
-  grantEndUserQuota
+  grantEndUserQuota,
+  revokeEndUserAppAuthorization
 } from '../api/points'
 
 const loading = ref(false)
 const quotaSaving = ref(false)
 const appAuthLoading = ref(false)
 const appAuthSaving = ref(false)
+const appAuthRevoking = ref('')
 const quotaDialogVisible = ref(false)
 const appAuthDialogVisible = ref(false)
 const rows = ref([])
@@ -144,6 +159,8 @@ const appAuthForm = reactive({
 })
 const CONFIRM_GRANT_ISSUE_QUOTA = '确认调整额度'
 const CONFIRM_GRANT_APP_AUTHORIZATION = '确认授权应用'
+
+const CONFIRM_REVOKE_APP_AUTHORIZATION = '确认取消授权'
 
 const normalizedQuery = () => {
   const params = { ...query }
@@ -233,6 +250,18 @@ async function submitAppAuthorization() {
     await loadAppAuthorizations(currentMerchant.value.id)
   } finally {
     appAuthSaving.value = false
+  }
+}
+
+async function handleRevokeAppAuthorization(row) {
+  if (!currentMerchant.value || !row?.id) return
+  appAuthRevoking.value = row.id
+  try {
+    const confirmText = await promptSensitiveConfirm(CONFIRM_REVOKE_APP_AUTHORIZATION, '撤销应用授权')
+    await revokeEndUserAppAuthorization(currentMerchant.value.id, row.id, { confirm_text: confirmText })
+    await loadAppAuthorizations(currentMerchant.value.id)
+  } finally {
+    appAuthRevoking.value = ''
   }
 }
 

@@ -46,6 +46,10 @@ class UserAppAuthorizationGrantRequest(BaseModel):
     confirm_text: Optional[str] = None
 
 
+class SensitiveConfirmRequest(BaseModel):
+    confirm_text: Optional[str] = None
+
+
 class EndUserDeleteConfirmRequest(BaseModel):
     user_ids: list[int] = PydanticField(..., min_length=1)
     confirm_text: Optional[str] = None
@@ -53,6 +57,48 @@ class EndUserDeleteConfirmRequest(BaseModel):
 
 def _require_admin(current_user: dict) -> None:
     legacy_admin._require_admin(current_user)
+
+
+def _record_sensitive_business_failure(
+    session: Session,
+    *,
+    admin: dict,
+    action: str,
+    resource_type: str,
+    request: Request,
+    error: Exception,
+    resource_id: Optional[str] = None,
+    target_user_id: Optional[int] = None,
+    target_username: Optional[str] = None,
+    before: Optional[dict] = None,
+    metadata: Optional[dict] = None,
+    status_code: int = 400,
+) -> None:
+    if isinstance(error, HTTPException):
+        detail = error.detail
+        status_code = error.status_code
+    else:
+        detail = str(error)
+    error_message = detail if isinstance(detail, str) else str(detail)
+    session.rollback()
+    record_admin_audit(
+        session,
+        admin=admin,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        target_user_id=target_user_id,
+        target_username=target_username,
+        status="failed",
+        request=request,
+        before=before,
+        metadata=metadata,
+        error_message=error_message,
+        summary=f"Failed sensitive action {action}",
+    )
+    if isinstance(error, HTTPException):
+        raise error
+    raise HTTPException(status_code=status_code, detail=error_message)
 
 
 def _empty_quota_summary(user: EndUser) -> dict:
@@ -143,7 +189,18 @@ async def grant_end_user_quota(
             metadata=payload.metadata,
         )
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="grant_issue_quota",
+            resource_type="end_user",
+            resource_id=str(user_id),
+            target_user_id=user.id,
+            target_username=user.username,
+            request=request,
+            error=error,
+            metadata={"quota_type": payload.quota_type, "amount": payload.amount},
+        )
 
     session.commit()
     session.refresh(account)
@@ -219,9 +276,6 @@ async def grant_end_user_app_authorization(
     user = session.get(EndUser, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="End user not found")
-    app = session.exec(select(App).where(App.app_id == payload.app_id)).first()
-    if not app:
-        raise HTTPException(status_code=404, detail="App not found")
     require_sensitive_confirmation(
         session,
         admin=current_user,
@@ -233,14 +287,40 @@ async def grant_end_user_app_authorization(
         target_username=user.username,
         request=request,
     )
+    app = session.exec(select(App).where(App.app_id == payload.app_id)).first()
+    if not app:
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="grant_app_authorization",
+            resource_type="user_app_authorization",
+            resource_id=payload.app_id,
+            target_user_id=user.id,
+            target_username=user.username,
+            request=request,
+            error=HTTPException(status_code=404, detail="App not found"),
+        )
 
-    authorization = grant_app_authorization(
-        session=session,
-        app_id=payload.app_id,
-        user=user,
-        granted_by=current_user.get("sub"),
-        remark=payload.remark,
-    )
+    try:
+        authorization = grant_app_authorization(
+            session=session,
+            app_id=payload.app_id,
+            user=user,
+            granted_by=current_user.get("sub"),
+            remark=payload.remark,
+        )
+    except ValueError as error:
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="grant_app_authorization",
+            resource_type="user_app_authorization",
+            resource_id=payload.app_id,
+            target_user_id=user.id,
+            target_username=user.username,
+            request=request,
+            error=error,
+        )
     session.commit()
     record_admin_audit(
         session,
@@ -274,11 +354,95 @@ async def grant_end_user_app_authorization(
     }
 
 
+@router.delete("/end-users/{user_id}/app-authorizations/{authorization_id}", summary="Revoke user app authorization")
+async def revoke_end_user_app_authorization(
+    user_id: int,
+    authorization_id: int,
+    request: Request,
+    payload: Optional[SensitiveConfirmRequest] = None,
+    current_user: dict = Depends(legacy_admin.get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    user = session.get(EndUser, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="End user not found")
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="revoke_app_authorization",
+        confirm_text=payload.confirm_text if payload else None,
+        resource_type="user_app_authorization",
+        resource_id=str(authorization_id),
+        target_user_id=user.id,
+        target_username=user.username,
+        request=request,
+    )
+    authorization = session.get(UserAppAuthorization, authorization_id)
+    if not authorization or authorization.user_id != user.id:
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="revoke_app_authorization",
+            resource_type="user_app_authorization",
+            resource_id=str(authorization_id),
+            target_user_id=user.id,
+            target_username=user.username,
+            request=request,
+            error=HTTPException(status_code=404, detail="App authorization not found"),
+        )
+
+    before = {
+        "id": authorization.id,
+        "app_id": authorization.app_id,
+        "user_id": authorization.user_id,
+        "username": authorization.username,
+        "granted_by": authorization.granted_by,
+        "remark": authorization.remark,
+    }
+    try:
+        session.delete(authorization)
+        session.commit()
+    except Exception as error:
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="revoke_app_authorization",
+            resource_type="user_app_authorization",
+            resource_id=str(authorization_id),
+            target_user_id=user.id,
+            target_username=user.username,
+            request=request,
+            before=before,
+            error=error,
+            status_code=500,
+        )
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="revoke_app_authorization",
+        resource_type="user_app_authorization",
+        resource_id=str(authorization_id),
+        target_user_id=user.id,
+        target_username=user.username,
+        request=request,
+        before=before,
+        after={"deleted": True},
+        summary=f"Revoked app authorization {authorization_id} from {user.username}",
+    )
+    return {
+        "success": True,
+        "message": "app authorization revoked",
+        "data": {**before, "deleted": True},
+    }
+
+
 @router.delete("/apps/{app_id}", summary="Delete app")
 async def delete_app(
     app_id: str,
     request: Request,
     confirm_text: Optional[str] = Query(None),
+    payload: Optional[SensitiveConfirmRequest] = None,
     current_user: dict = Depends(legacy_admin.get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -290,7 +454,7 @@ async def delete_app(
         session,
         admin=current_user,
         action="delete_app",
-        confirm_text=confirm_text,
+        confirm_text=confirm_text or (payload.confirm_text if payload else None),
         resource_type="app",
         resource_id=app_id,
         request=request,
@@ -304,7 +468,19 @@ async def delete_app(
         session.delete(row)
     session.flush()
 
-    result = await legacy_admin.delete_app(app_id, current_user=current_user, session=session)
+    try:
+        result = await legacy_admin.delete_app(app_id, current_user=current_user, session=session)
+    except Exception as error:
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="delete_app",
+            resource_type="app",
+            resource_id=app_id,
+            request=request,
+            error=error,
+            metadata={"app_name": app.name},
+        )
     record_admin_audit(
         session,
         admin=current_user,
@@ -405,7 +581,20 @@ async def delete_end_users(
         session.delete(tx)
     session.flush()
 
-    recharge_cleanup = delete_recharge_orders_for_users(session, found_user_ids)
+    try:
+        recharge_cleanup = delete_recharge_orders_for_users(session, found_user_ids)
+    except Exception as error:
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="delete_merchant",
+            resource_type="end_user",
+            resource_id=",".join(str(user_id) for user_id in user_ids),
+            request=request,
+            error=error,
+            metadata={"user_ids": user_ids},
+            status_code=500,
+        )
 
     for account in user_quota_accounts:
         session.delete(account)
@@ -415,10 +604,35 @@ async def delete_end_users(
     for app in owned_apps:
         if not app.app_id:
             continue
-        await legacy_admin.delete_app(app.app_id, current_user=current_user, session=session)
+        try:
+            await legacy_admin.delete_app(app.app_id, current_user=current_user, session=session)
+        except Exception as error:
+            _record_sensitive_business_failure(
+                session,
+                admin=current_user,
+                action="delete_merchant",
+                resource_type="end_user",
+                resource_id=",".join(str(user_id) for user_id in user_ids),
+                request=request,
+                error=error,
+                metadata={"user_ids": user_ids, "owned_app_id": app.app_id},
+                status_code=500,
+            )
         deleted_app_count += 1
 
-    result = await legacy_admin.delete_end_users(payload, current_user=current_user, session=session)
+    try:
+        result = await legacy_admin.delete_end_users(payload, current_user=current_user, session=session)
+    except Exception as error:
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="delete_merchant",
+            resource_type="end_user",
+            resource_id=",".join(str(user_id) for user_id in user_ids),
+            request=request,
+            error=error,
+            metadata={"user_ids": user_ids},
+        )
     deleted_counts = result["data"]
     deleted_counts.update(
         {

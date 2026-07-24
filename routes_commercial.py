@@ -103,6 +103,48 @@ def _require_admin(current_user: dict) -> None:
     routes_admin._require_admin(current_user)
 
 
+def _record_sensitive_business_failure(
+    session: Session,
+    *,
+    admin: dict,
+    action: str,
+    resource_type: str,
+    request: Request,
+    error: Exception,
+    resource_id: Optional[str] = None,
+    target_user_id: Optional[int] = None,
+    target_username: Optional[str] = None,
+    before: Optional[dict] = None,
+    metadata: Optional[dict] = None,
+    status_code: int = 400,
+) -> None:
+    if isinstance(error, HTTPException):
+        detail = error.detail
+        status_code = error.status_code
+    else:
+        detail = str(error)
+    error_message = detail if isinstance(detail, str) else str(detail)
+    session.rollback()
+    record_admin_audit(
+        session,
+        admin=admin,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        target_user_id=target_user_id,
+        target_username=target_username,
+        status="failed",
+        request=request,
+        before=before,
+        metadata=metadata,
+        error_message=error_message,
+        summary=f"Failed sensitive action {action}",
+    )
+    if isinstance(error, HTTPException):
+        raise error
+    raise HTTPException(status_code=status_code, detail=error_message)
+
+
 def _merchant_user_payload(user: EndUser, account: Optional[UserQuotaAccount]) -> dict:
     return {
         "id": user.id,
@@ -232,7 +274,18 @@ async def save_payment_channel(
         request=request,
     )
     payload_data = payload.model_dump(exclude={"confirm_text"})
-    row = upsert_payment_channel(session, **payload_data)
+    try:
+        row = upsert_payment_channel(session, **payload_data)
+    except ValueError as error:
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="change_recharge_config",
+            resource_type="payment_channel",
+            resource_id=payload.channel,
+            request=request,
+            error=error,
+        )
     session.commit()
     session.refresh(row)
     record_admin_audit(
@@ -306,11 +359,28 @@ async def save_payment_channel_with_upload(
     except ValueError as error:
         if saved_qr_code_url:
             delete_payment_qrcode_by_url_if_safe(saved_qr_code_url)
-        raise HTTPException(status_code=400, detail=str(error))
-    except Exception:
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="change_recharge_config",
+            resource_type="payment_channel",
+            resource_id=channel,
+            request=request,
+            error=error,
+        )
+    except Exception as error:
         if saved_qr_code_url:
             delete_payment_qrcode_by_url_if_safe(saved_qr_code_url)
-        raise
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="change_recharge_config",
+            resource_type="payment_channel",
+            resource_id=channel,
+            request=request,
+            error=error,
+            status_code=500,
+        )
 
     if saved_qr_code_url and old_qr_code_url and old_qr_code_url != saved_qr_code_url:
         delete_payment_qrcode_by_url_if_safe(old_qr_code_url)
@@ -356,7 +426,16 @@ async def delete_payment_channel_qrcode(
     try:
         row, deleted_file = clear_payment_channel_qrcode(session, channel)
     except ValueError as error:
-        raise HTTPException(status_code=404, detail=str(error))
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="delete_payment_qrcode",
+            resource_type="payment_channel",
+            resource_id=channel,
+            request=request,
+            error=error,
+            status_code=404,
+        )
     session.commit()
     session.refresh(row)
     payload = {**payment_channel_payload(row), "deleted_file": deleted_file}
@@ -399,7 +478,14 @@ async def save_recharge_option(
     try:
         row = create_recharge_option(session, **payload.model_dump(exclude={"confirm_text"}))
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="change_recharge_config",
+            resource_type="recharge_option",
+            request=request,
+            error=error,
+        )
     session.commit()
     session.refresh(row)
     record_admin_audit(
@@ -443,7 +529,16 @@ async def delete_recharge_option(
     try:
         row, archived = delete_or_archive_recharge_option(session, option_id)
     except ValueError as error:
-        raise HTTPException(status_code=404, detail=str(error))
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="change_recharge_config",
+            resource_type="recharge_option",
+            resource_id=str(option_id),
+            request=request,
+            error=error,
+            status_code=404,
+        )
     data = {"id": option_id, "deleted": not archived, "archived": archived}
     session.commit()
     record_admin_audit(
@@ -485,7 +580,14 @@ async def save_bonus_rule(
     try:
         row = create_bonus_rule(session, **payload.model_dump(exclude={"confirm_text"}))
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="change_recharge_config",
+            resource_type="recharge_bonus_rule",
+            request=request,
+            error=error,
+        )
     session.commit()
     session.refresh(row)
     record_admin_audit(
@@ -529,7 +631,16 @@ async def delete_bonus_rule(
     try:
         row, archived = delete_or_archive_bonus_rule(session, rule_id)
     except ValueError as error:
-        raise HTTPException(status_code=404, detail=str(error))
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="change_recharge_config",
+            resource_type="recharge_bonus_rule",
+            resource_id=str(rule_id),
+            request=request,
+            error=error,
+            status_code=404,
+        )
     data = {"id": rule_id, "deleted": not archived, "archived": archived}
     session.commit()
     record_admin_audit(
@@ -692,6 +803,16 @@ async def cleanup_old_recharge_proofs(
             dry_run=payload.dry_run,
         )
     except ValueError as error:
+        if not payload.dry_run:
+            _record_sensitive_business_failure(
+                session,
+                admin=current_user,
+                action="cleanup_proof_files",
+                resource_type="recharge_proof",
+                request=request,
+                error=error,
+                metadata={"older_than_days": payload.older_than_days},
+            )
         raise HTTPException(status_code=400, detail=str(error))
     session.commit()
     if not payload.dry_run:
@@ -757,7 +878,18 @@ async def approve_order(
             remark=payload.remark,
         )
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="approve_recharge_order",
+            resource_type="recharge_order",
+            resource_id=order_no,
+            target_user_id=before.get("user_id"),
+            target_username=before.get("username"),
+            request=request,
+            before=before,
+            error=error,
+        )
     session.commit()
     after = {**recharge_order_payload(order, include_user=True), "transaction": transaction}
     record_admin_audit(
@@ -819,7 +951,18 @@ async def reject_order(
             reject_reason=payload.reject_reason,
         )
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="reject_recharge_order",
+            resource_type="recharge_order",
+            resource_id=order_no,
+            target_user_id=before.get("user_id"),
+            target_username=before.get("username"),
+            request=request,
+            before=before,
+            error=error,
+        )
     session.commit()
     record_admin_audit(
         session,
@@ -867,7 +1010,18 @@ async def expire_order(
             remark=payload.remark,
         )
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="expire_recharge_order",
+            resource_type="recharge_order",
+            resource_id=order_no,
+            target_user_id=before.get("user_id"),
+            target_username=before.get("username"),
+            request=request,
+            before=before,
+            error=error,
+        )
     session.commit()
     record_admin_audit(
         session,
@@ -923,7 +1077,18 @@ async def mark_order_abnormal(
             remark=payload.remark,
         )
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="mark_recharge_abnormal",
+            resource_type="recharge_order",
+            resource_id=order_no,
+            target_user_id=before.get("user_id"),
+            target_username=before.get("username"),
+            request=request,
+            before=before,
+            error=error,
+        )
     session.commit()
     record_admin_audit(
         session,
