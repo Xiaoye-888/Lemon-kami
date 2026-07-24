@@ -461,9 +461,11 @@ def test_commercial_ops_stability_controls_are_exposed():
 
 
 def test_phase2_sensitive_actions_use_fixed_confirmation_texts():
+    admin_api = (PROJECT_ROOT / "admin/src/api/admin.js").read_text(encoding="utf-8")
     commercial_api = (PROJECT_ROOT / "admin/src/api/commercial.js").read_text(encoding="utf-8")
     kami_api = (PROJECT_ROOT / "admin/src/api/kami.js").read_text(encoding="utf-8")
     points_api = (PROJECT_ROOT / "admin/src/api/points.js").read_text(encoding="utf-8")
+    apps = (PROJECT_ROOT / "admin/src/views/Apps.vue").read_text(encoding="utf-8")
     admin_orders = (PROJECT_ROOT / "admin/src/views/AdminRechargeOrders.vue").read_text(encoding="utf-8")
     admin_settings = (PROJECT_ROOT / "admin/src/views/AdminRechargeSettings.vue").read_text(encoding="utf-8")
     admin_merchants = (PROJECT_ROOT / "admin/src/views/AdminMerchants.vue").read_text(encoding="utf-8")
@@ -474,6 +476,13 @@ def test_phase2_sensitive_actions_use_fixed_confirmation_texts():
     assert "data: { confirm_text" in commercial_api
     assert "deletePaymentChannelQrCode(channel, confirmText)" in commercial_api
     assert "getAdminAuditLogs" in commercial_api
+    assert "deleteApp(appId, data = {})" in admin_api
+    assert "method: 'delete'" in admin_api
+    assert "data" in admin_api
+
+    assert "确认删除应用" in apps
+    assert "confirm_text: confirmText" in apps
+    assert "deleteApp(row.app_id, { confirm_text: confirmText })" in apps
 
     assert "confirm_text" in points_api
     assert "grantEndUserQuota(userId, data)" in points_api
@@ -482,10 +491,13 @@ def test_phase2_sensitive_actions_use_fixed_confirmation_texts():
     for text in (
         "确认审核入账",
         "确认驳回订单",
+        "确认标记异常",
         "确认关闭订单",
         "确认清理凭证",
     ):
         assert text in admin_orders
+    assert "markRechargeOrderAbnormal" in admin_orders
+    assert "handleMarkAbnormal" in admin_orders
     assert "confirm_text: confirmText" in admin_orders
 
     for text in (

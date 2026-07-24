@@ -130,6 +130,7 @@ const editForm = reactive({
   app_id: '',
   name: ''
 })
+const CONFIRM_DELETE_APP = '确认删除应用'
 
 const loadApps = async () => {
   loading.value = true
@@ -227,7 +228,13 @@ const handleDelete = async (row) => {
         distinguishCancelAndClose: true
       }
     )
-    const res = await deleteApp(row.app_id)
+    const { value } = await ElMessageBox.prompt(`请输入「${CONFIRM_DELETE_APP}」以确认`, '删除应用确认', {
+      inputValue: '',
+      inputValidator: (value) => value === CONFIRM_DELETE_APP || `请输入${CONFIRM_DELETE_APP}`,
+      type: 'error'
+    })
+    const confirmText = value
+    const res = await deleteApp(row.app_id, { confirm_text: confirmText })
     ElMessage.success(res.message || '删除成功')
     await loadApps()
   } catch (error) {

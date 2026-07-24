@@ -62,10 +62,12 @@ export function updateApp(appId, params) {
 }
 
 // 删除应用
-export function deleteApp(appId) {
+export function deleteApp(appId, data = {}) {
   return request({
     url: `/admin/apps/${appId}`,
-    method: 'delete'
+    method: 'delete',
+    params: data,
+    data
   })
 }
 

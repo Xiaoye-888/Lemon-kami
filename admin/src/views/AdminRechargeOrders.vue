@@ -43,7 +43,7 @@
             <el-button link type="primary" :disabled="!row.has_proof" @click="openProof(row)">查看</el-button>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="330" fixed="right">
+        <el-table-column label="操作" width="390" fixed="right">
           <template #default="{ row }">
             <el-button size="small" plain @click="openDetail(row)">详情</el-button>
             <el-button
@@ -75,6 +75,16 @@
               @click="handleExpire(row)"
             >
               过期
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              :disabled="row.status !== 'pending_review'"
+              :loading="rowAction === `abnormal:${row.order_no}`"
+              @click="handleMarkAbnormal(row)"
+            >
+              异常
             </el-button>
           </template>
         </el-table-column>
@@ -147,6 +157,15 @@
           >
             过期
           </el-button>
+          <el-button
+            type="danger"
+            plain
+            :disabled="selectedOrder.status !== 'pending_review'"
+            :loading="rowAction === `abnormal:${selectedOrder.order_no}`"
+            @click="handleMarkAbnormal(selectedOrder)"
+          >
+            异常
+          </el-button>
         </div>
       </div>
     </el-drawer>
@@ -166,6 +185,7 @@ import {
   cleanupRechargeProofs,
   expireRechargeOrder,
   getRechargeOrders,
+  markRechargeOrderAbnormal,
   rejectRechargeOrder
 } from '../api/commercial'
 
@@ -180,6 +200,7 @@ const detailVisible = ref(false)
 const selectedOrder = ref(null)
 const CONFIRM_APPROVE_RECHARGE_ORDER = '确认审核入账'
 const CONFIRM_REJECT_RECHARGE_ORDER = '确认驳回订单'
+const CONFIRM_MARK_RECHARGE_ABNORMAL = '确认标记异常'
 const CONFIRM_EXPIRE_RECHARGE_ORDER = '确认关闭订单'
 const CONFIRM_CLEANUP_PROOF_FILES = '确认清理凭证'
 
@@ -311,6 +332,28 @@ async function handleExpire(row) {
     rowAction.value = `expire:${row.order_no}`
     await expireRechargeOrder(row.order_no, { remark: value || '人工确认超时未入账', confirm_text: confirmText })
     ElMessage.success('订单已标记过期')
+    detailVisible.value = false
+    await loadOrders()
+  } catch (error) {
+    if (error !== 'cancel') console.error(error)
+  } finally {
+    rowAction.value = ''
+  }
+}
+
+async function handleMarkAbnormal(row) {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入异常备注，可留空', `标记订单 ${row.order_no} 异常`, {
+      inputValue: '人工标记异常',
+      type: 'warning'
+    })
+    const confirmText = await promptSensitiveConfirm(CONFIRM_MARK_RECHARGE_ABNORMAL, '标记异常')
+    rowAction.value = `abnormal:${row.order_no}`
+    await markRechargeOrderAbnormal(row.order_no, {
+      remark: value || '人工标记异常',
+      confirm_text: confirmText
+    })
+    ElMessage.success('订单已标记异常')
     detailVisible.value = false
     await loadOrders()
   } catch (error) {
