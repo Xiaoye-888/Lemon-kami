@@ -235,6 +235,7 @@ def test_finance_summary_uses_admin_reviewed_at_for_approved_income():
                         bonus_quota=0,
                         credit_quota=30,
                         status=RechargeOrderStatus.pending_review,
+                        created_at=datetime(2026, 7, 25, 12, 0, 0),
                     ),
                     RechargeOrder(
                         order_no="R202607250103",

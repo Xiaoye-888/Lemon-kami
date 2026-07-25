@@ -12,7 +12,7 @@
           <el-radio-button
             v-for="item in paymentChannels"
             :key="item.channel"
-            :label="item.channel"
+            :value="item.channel"
           >
             {{ item.display_name }}
           </el-radio-button>

@@ -438,6 +438,33 @@ def test_commercial_recharge_pages_expose_order_review_and_upload_flow():
     assert "customPreview" in merchant_recharge
 
 
+def test_merchant_account_route_uses_dedicated_account_page():
+    router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")
+    account_view_path = PROJECT_ROOT / "admin/src/views/MerchantAccount.vue"
+
+    assert account_view_path.exists()
+
+    merchant_routes = router.split("const merchantChildren = [", 1)[1].split("]\n\nconst legacyAdminRedirects", 1)[0]
+    account_route = re.search(r"\{\s*path:\s*'account'.*?\}", merchant_routes, re.S)
+
+    assert account_route is not None
+    assert "../views/MerchantAccount.vue" in account_route.group(0)
+    assert "../views/MerchantDashboard.vue" not in account_route.group(0)
+
+    account_view = account_view_path.read_text(encoding="utf-8")
+    assert "getMerchantMe" in account_view
+    assert "\u8d26\u53f7\u8bbe\u7f6e" in account_view
+    assert "\u57fa\u672c\u4fe1\u606f" in account_view
+    assert "\u5546\u6237\u63a7\u5236\u53f0" not in account_view
+
+
+def test_merchant_recharge_channel_radios_use_value_prop():
+    merchant_recharge = (PROJECT_ROOT / "admin/src/views/MerchantRecharge.vue").read_text(encoding="utf-8")
+
+    assert ':value="item.channel"' in merchant_recharge
+    assert ':label="item.channel"' not in merchant_recharge
+
+
 def test_commercial_ops_stability_controls_are_exposed():
     admin_orders = (PROJECT_ROOT / "admin/src/views/AdminRechargeOrders.vue").read_text(encoding="utf-8")
     admin_settings = (PROJECT_ROOT / "admin/src/views/AdminRechargeSettings.vue").read_text(encoding="utf-8")

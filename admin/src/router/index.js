@@ -36,7 +36,7 @@ const merchantChildren = [
   { path: 'batches', name: 'MerchantBatches', component: () => import('../views/MerchantBatches.vue'), meta: { title: '批次管理' } },
   { path: 'cards', name: 'MerchantCards', component: () => import('../views/MerchantCards.vue'), meta: { title: '我的卡密' } },
   { path: 'devices', name: 'MerchantDevices', component: () => import('../views/Devices.vue'), meta: { title: '设备记录' } },
-  { path: 'account', name: 'MerchantAccount', component: () => import('../views/MerchantDashboard.vue'), meta: { title: '账号设置' } }
+  { path: 'account', name: 'MerchantAccount', component: () => import('../views/MerchantAccount.vue'), meta: { title: '账号设置' } }
 ]
 
 const legacyAdminRedirects = [

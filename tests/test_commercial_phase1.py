@@ -1580,6 +1580,43 @@ def test_hard_delete_merchant_removes_recharge_orders_and_proof_files(tmp_path, 
         fastapi_app.dependency_overrides.clear()
 
 
+def test_hard_delete_merchant_requires_fixed_confirmation_text():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(
+            app_id=None,
+            username="merchant_delete_confirm",
+            password_hash=hash_password("pass123"),
+            status=1,
+        )
+        session.add(merchant)
+        session.commit()
+        merchant_id = merchant.id
+
+    try:
+        missing_confirm = client.post(
+            "/api/v1/admin/end-users/delete",
+            json={"user_ids": [merchant_id]},
+        )
+        assert missing_confirm.status_code == 400
+        assert missing_confirm.json()["detail"]["expected"] == CONFIRM_DELETE_MERCHANT
+
+        confirmed = client.post(
+            "/api/v1/admin/end-users/delete",
+            json={"user_ids": [merchant_id], "confirm_text": CONFIRM_DELETE_MERCHANT},
+        )
+        assert confirmed.status_code == 200
+        assert confirmed.json()["data"]["deleted_users"] == 1
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_admin_payment_channel_upload_saves_qrcode_and_replaces_old_file(tmp_path, monkeypatch):
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
