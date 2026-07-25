@@ -17,24 +17,8 @@ SECRET_KEYS = {
     "app_secret",
 }
 MASKED_VALUE_KEYS = {"kami", "kami_code", "code", "device_fingerprint", "fingerprint"}
-FORBIDDEN_REPORT_MARKERS = (
-    "token=",
-    "token:",
-    "password=",
-    "password:",
-    "cookie=",
-    "cookie:",
-    "Authorization:",
-    "Bearer ",
-    "app_secret",
-    "server password",
-    "private key",
-    "private_key",
-    "ssh key",
-    "ssh_key",
-)
 REPORT_FILENAME = "production-e2e-browser-report.md"
-RUN_PREFIX_RE = re.compile(r"^E2E_UI_QA_\d{8}_\d{6}_(?:[A-Za-z0-9]{6,16}_)?$")
+RUN_PREFIX_RE = re.compile(r"^E2E_UI_QA_\d{8}_\d{6}_[A-Za-z0-9]{6,16}_$")
 FORBIDDEN_REPORT_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
@@ -47,6 +31,20 @@ FORBIDDEN_REPORT_PATTERNS = tuple(
         r"\bserver\s+password\b",
         r"\b(?:private|ssh)[_-]?key\b",
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+        r"\bKAMI-[A-Za-z0-9]{8,}\b",
+        r"\bfingerprint-[A-Za-z0-9]{8,}\b",
+    )
+)
+CARD_CODE_RE = re.compile(r"\bKAMI-[A-Za-z0-9]{8,}\b")
+FINGERPRINT_RE = re.compile(r"\bfingerprint-[A-Za-z0-9]{8,}\b", re.IGNORECASE)
+STRING_SECRET_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bauthorization\s*:\s*bearer\s+[^\s&]+",
+        r"\bbearer\s+[^\s&]+",
+        r"([?&](?:token|password|access_token|refresh_token|session|cookie)=)[^&#\s]+",
+        r"\b(?:token|password|cookie|session|access_token|refresh_token)\s*[:=]\s*[^\s&]+",
+        r"\b(?:token|password|cookie|session|access_token|refresh_token)\s+[^\s&]+",
     )
 )
 
@@ -167,13 +165,24 @@ def _report_safe_value(value):
         return [_report_safe_value(item) for item in value]
     if isinstance(value, tuple):
         return tuple(_report_safe_value(item) for item in value)
+    if isinstance(value, str):
+        return sanitize_report_string(value)
     return value
 
 
 def _format_report_line(line):
     if isinstance(line, (dict, list, tuple)):
         return json.dumps(_report_safe_value(line), ensure_ascii=True, sort_keys=True)
-    return str(line)
+    return sanitize_report_string(line)
+
+
+def sanitize_report_string(value):
+    text = str(value)
+    text = CARD_CODE_RE.sub(lambda match: mask_middle(match.group(0)), text)
+    text = FINGERPRINT_RE.sub(lambda match: mask_middle(match.group(0)), text)
+    for pattern in STRING_SECRET_PATTERNS:
+        text = pattern.sub("<redacted>", text)
+    return text
 
 
 def _assert_report_content_safe(content):

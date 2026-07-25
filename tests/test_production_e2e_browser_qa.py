@@ -71,7 +71,14 @@ def test_run_prefix_is_unique_and_delete_safe():
 
 def test_cleanup_prefix_validation_rejects_malformed_prefixes():
     qa = load_qa_module()
-    malformed_prefixes = ["", "prod", "admin", "E2E_UI_QA_", "E2E_UI_QA_20260726_030000_bad!_"]
+    malformed_prefixes = [
+        "",
+        "prod",
+        "admin",
+        "E2E_UI_QA_",
+        "E2E_UI_QA_20260726_030000_",
+        "E2E_UI_QA_20260726_030000_bad!_",
+    ]
     for prefix in malformed_prefixes:
         try:
             qa.validate_run_prefix(prefix)
@@ -82,10 +89,18 @@ def test_cleanup_prefix_validation_rejects_malformed_prefixes():
 
         assert qa.is_owned_by_run(prefix + "resource", prefix) is False
 
+    assert (
+        qa.is_owned_by_run(
+            "E2E_UI_QA_20260726_030000_abc123_app",
+            "E2E_UI_QA_20260726_030000_",
+        )
+        is False
+    )
+
 
 def test_cleanup_guard_rejects_non_prefixed_resources():
     qa = load_qa_module()
-    prefix = "E2E_UI_QA_20260726_030000_"
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
     qa.assert_owned_by_run(prefix + "app", prefix)
     try:
         qa.assert_owned_by_run("production-app", prefix)
@@ -95,25 +110,23 @@ def test_cleanup_guard_rejects_non_prefixed_resources():
         raise AssertionError("cleanup guard allowed non-prefixed resource")
 
 
-def test_report_writer_rejects_forbidden_secret_words(tmp_path):
+def test_report_writer_sanitizes_forbidden_secret_words(tmp_path):
     qa = load_qa_module()
-    report = qa.QAReport(run_id="E2E_UI_QA_20260726_030000", artifact_dir=tmp_path)
+    report = qa.QAReport(run_id="E2E_UI_QA_20260726_030000_abc123", artifact_dir=tmp_path)
     report.add_section("Safe", ["health 200", "orders cleaned"])
     report.write()
     assert (tmp_path / "production-e2e-browser-report.md").exists()
 
     report.add_section("Unsafe", ["token=abc123"])
-    try:
-        report.write()
-    except qa.QASafetyError as error:
-        assert "forbidden sensitive marker" in str(error)
-    else:
-        raise AssertionError("report writer allowed token output")
+    content = report.render()
+    assert "token=abc123" not in content
+    assert "<redacted>" in content
+    report.write()
 
 
 def test_report_writer_redacts_structured_section_lines(tmp_path):
     qa = load_qa_module()
-    report = qa.QAReport(run_id="E2E_UI_QA_20260726_030000", artifact_dir=tmp_path)
+    report = qa.QAReport(run_id="E2E_UI_QA_20260726_030000_abc123", artifact_dir=tmp_path)
     report.add_section(
         "Structured",
         [
@@ -138,26 +151,47 @@ def test_report_writer_redacts_structured_section_lines(tmp_path):
     assert (tmp_path / "production-e2e-browser-report.md").exists()
 
 
-def test_report_writer_rejects_adversarial_secret_markers(tmp_path):
+def test_report_writer_sanitizes_free_form_sensitive_lines(tmp_path):
     qa = load_qa_module()
-    unsafe_lines = [
-        "ToKeN: fake-token-value",
-        "server password: fake-password-value",
-        "-----BEGIN PRIVATE KEY-----",
-        "ssh_key: fake-key-value",
-        "Bearer fake-bearer-value",
-        "app_secret=fake-app-secret-value",
+    sensitive_samples = [
+        "created card KAMI-ABCDEFG1234567 for smoke test",
+        "device fingerprint fingerprint-1234567890 observed",
+        "response cookie session=temporary-session-value",
+        "Authorization: Bearer bearer-like-value",
+        "received token temporary-token-value",
+        "url /callback?token=query-token-value&password=query-password-value",
     ]
+    report = qa.QAReport(run_id="E2E_UI_QA_20260726_030000_abc123", artifact_dir=tmp_path)
+    report.add_section("Sanitized", sensitive_samples)
 
-    for index, unsafe_line in enumerate(unsafe_lines):
-        report = qa.QAReport(run_id="E2E_UI_QA_20260726_030000", artifact_dir=tmp_path / str(index))
-        report.add_section("Unsafe", [unsafe_line])
-        try:
-            report.write()
-        except qa.QASafetyError as error:
-            assert "forbidden sensitive marker" in str(error)
-        else:
-            raise AssertionError(f"report writer allowed unsafe marker: {unsafe_line}")
+    content = report.render()
+    assert "KAM***567" in content
+    assert "KAMI-ABCDEFG1234567" not in content
+    assert "fin***890" in content
+    assert "fingerprint-1234567890" not in content
+    assert "session=temporary-session-value" not in content
+    assert "bearer-like-value" not in content
+    assert "temporary-token-value" not in content
+    assert "query-token-value" not in content
+    assert "query-password-value" not in content
+    assert "token=" not in content.lower()
+    assert "password=" not in content.lower()
+    assert "authorization:" not in content.lower()
+    assert "bearer " not in content.lower()
+    report.write()
+    assert (tmp_path / "production-e2e-browser-report.md").exists()
+
+
+def test_report_writer_rejects_unsanitized_private_key_markers(tmp_path):
+    qa = load_qa_module()
+    report = qa.QAReport(run_id="E2E_UI_QA_20260726_030000_abc123", artifact_dir=tmp_path)
+    report.add_section("Unsafe", ["-----BEGIN PRIVATE KEY-----"])
+    try:
+        report.write()
+    except qa.QASafetyError as error:
+        assert "forbidden sensitive marker" in str(error)
+    else:
+        raise AssertionError("report writer allowed private key marker")
 
 
 def test_browser_result_evaluation_flags_layout_and_runtime_failures():
