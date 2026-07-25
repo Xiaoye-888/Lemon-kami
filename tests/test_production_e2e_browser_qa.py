@@ -1,4 +1,5 @@
 import importlib.util
+from datetime import datetime
 from pathlib import Path
 
 
@@ -32,7 +33,13 @@ def test_secret_redaction_masks_sensitive_values():
 
 def test_run_prefix_is_unique_and_delete_safe():
     qa = load_qa_module()
-    prefix = qa.build_run_prefix()
+    first_prefix = qa.build_run_prefix(datetime(2026, 7, 26, 3, 0, 0))
+    second_prefix = qa.build_run_prefix(datetime(2026, 7, 26, 3, 0, 1))
+    assert first_prefix == "E2E_UI_QA_20260726_030000_"
+    assert second_prefix == "E2E_UI_QA_20260726_030001_"
+    assert first_prefix != second_prefix
+
+    prefix = qa.build_run_prefix(datetime(2026, 7, 26, 3, 0, 2))
     assert prefix.startswith("E2E_UI_QA_")
     assert prefix.endswith("_")
     assert qa.is_owned_by_run(prefix + "merchant", prefix) is True
@@ -69,7 +76,7 @@ def test_report_writer_rejects_forbidden_secret_words(tmp_path):
 
 def test_browser_result_evaluation_flags_layout_and_runtime_failures():
     qa = load_qa_module()
-    result = {
+    clean_result = {
         "route": "/merchant/recharge",
         "viewport": "1440x900",
         "console_errors": [],
@@ -78,9 +85,26 @@ def test_browser_result_evaluation_flags_layout_and_runtime_failures():
         "body_text_length": 1200,
         "layout": {"large_blank_ratio": 0.18, "horizontal_overflow": False, "overwide_cards": []},
     }
-    assert qa.evaluate_browser_result(result) == []
+    assert qa.evaluate_browser_result(clean_result) == []
 
-    result["layout"]["large_blank_ratio"] = 0.72
-    findings = qa.evaluate_browser_result(result)
-    assert findings
-    assert findings[0]["severity"] == "P2"
+    cases = [
+        ({"console_errors": ["ReferenceError: app is not defined"]}, "P0", "Console errors detected"),
+        ({"exceptions": ["Unhandled promise rejection"]}, "P0", "Runtime exceptions detected"),
+        ({"network_failures": ["GET /api/orders 500"]}, "P1", "Network failures detected"),
+        ({"body_text_length": 12}, "P1", "Page body text is unexpectedly sparse"),
+        ({"layout": {"horizontal_overflow": True}}, "P2", "Horizontal overflow detected"),
+        ({"layout": {"large_blank_ratio": 0.72}}, "P2", "Large blank page area detected"),
+        ({"layout": {"overwide_cards": [".card"]}}, "P2", "Overwide cards detected"),
+    ]
+
+    for patch, severity, message in cases:
+        result = {
+            **clean_result,
+            **patch,
+            "layout": {**clean_result["layout"], **patch.get("layout", {})},
+        }
+        findings = qa.evaluate_browser_result(result)
+
+        assert findings
+        assert findings[0]["severity"] == severity
+        assert findings[0]["message"] == message
