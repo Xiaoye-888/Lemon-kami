@@ -15,6 +15,30 @@ def load_qa_module():
     return module
 
 
+class FakeResponse:
+    def __init__(self, status_code=200, payload=None, text=None):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text if text is not None else ""
+
+    def json(self):
+        if isinstance(self._payload, Exception):
+            raise self._payload
+        return self._payload
+
+
+class FakeSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def request(self, method, url, **kwargs):
+        self.calls.append({"method": method, "url": url, "kwargs": kwargs})
+        if not self.responses:
+            raise AssertionError("unexpected API request")
+        return self.responses.pop(0)
+
+
 def test_secret_redaction_masks_sensitive_values():
     qa = load_qa_module()
     payload = {
@@ -63,6 +87,196 @@ def test_secret_redaction_masks_sensitive_values():
     assert redacted["nested"]["kami_code"].startswith("KAM")
     assert "***" in redacted["nested"]["kami_code"]
     assert redacted["nested"]["device_fingerprint"].endswith("890")
+
+
+def test_config_from_env_requires_exact_production_confirmation(monkeypatch):
+    qa = load_qa_module()
+    monkeypatch.setenv("LEMON_QA_BASE_URL", "https://qa.example.invalid")
+    monkeypatch.setenv("LEMON_QA_ADMIN_USERNAME", "fake-admin")
+    monkeypatch.setenv("LEMON_QA_ADMIN_PASSWORD", "fake-password")
+    monkeypatch.setenv("LEMON_QA_CONFIRM_PRODUCTION", "yes")
+
+    try:
+        qa.QAConfig.from_env()
+    except qa.QASafetyError as error:
+        message = str(error)
+        assert "LEMON_QA_CONFIRM_PRODUCTION" in message
+        assert "yes" not in message
+    else:
+        raise AssertionError("config accepted missing production confirmation")
+
+
+def test_config_from_env_rejects_missing_or_invalid_values_without_leaking(monkeypatch):
+    qa = load_qa_module()
+    fake_values = {
+        "LEMON_QA_BASE_URL": "ftp://fake-secret-host.invalid",
+        "LEMON_QA_ADMIN_USERNAME": " ",
+        "LEMON_QA_ADMIN_PASSWORD": "fake-password-should-not-leak",
+        "LEMON_QA_CONFIRM_PRODUCTION": "wrong-confirmation-should-not-leak",
+    }
+    for key, value in fake_values.items():
+        monkeypatch.setenv(key, value)
+
+    try:
+        qa.QAConfig.from_env()
+    except qa.QASafetyError as error:
+        message = str(error)
+        assert "LEMON_QA_BASE_URL" in message
+        assert "LEMON_QA_ADMIN_USERNAME" in message
+        assert "LEMON_QA_CONFIRM_PRODUCTION" in message
+        assert "ftp://fake-secret-host.invalid" not in message
+        assert "fake-password-should-not-leak" not in message
+        assert "wrong-confirmation-should-not-leak" not in message
+    else:
+        raise AssertionError("config accepted invalid env values")
+
+
+def test_config_from_env_rejects_missing_credentials_and_confirmation(monkeypatch):
+    qa = load_qa_module()
+    for key in (
+        "LEMON_QA_BASE_URL",
+        "LEMON_QA_ADMIN_USERNAME",
+        "LEMON_QA_ADMIN_PASSWORD",
+        "LEMON_QA_CONFIRM_PRODUCTION",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    try:
+        qa.QAConfig.from_env()
+    except qa.QASafetyError as error:
+        message = str(error)
+        assert "LEMON_QA_BASE_URL" in message
+        assert "LEMON_QA_ADMIN_USERNAME" in message
+        assert "LEMON_QA_ADMIN_PASSWORD" in message
+        assert "LEMON_QA_CONFIRM_PRODUCTION" in message
+    else:
+        raise AssertionError("config accepted missing env values")
+
+
+def test_config_from_env_builds_config_without_printing_values(monkeypatch, capsys):
+    qa = load_qa_module()
+    env = {
+        "LEMON_QA_BASE_URL": "https://qa.example.invalid/",
+        "LEMON_QA_ADMIN_USERNAME": "fake-admin",
+        "LEMON_QA_ADMIN_PASSWORD": "fake-password-not-printed",
+        "LEMON_QA_CONFIRM_PRODUCTION": qa.PRODUCTION_CONFIRMATION,
+    }
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    config = qa.QAConfig.from_env()
+
+    assert config.base_url == env["LEMON_QA_BASE_URL"]
+    assert config.admin_username == env["LEMON_QA_ADMIN_USERNAME"]
+    assert config.admin_password == env["LEMON_QA_ADMIN_PASSWORD"]
+    assert config.confirmation == qa.PRODUCTION_CONFIRMATION
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_auth_session_browser_storage_uses_frontend_keys():
+    qa = load_qa_module()
+    session = qa.AuthSession(
+        token="fake-token",
+        role="admin",
+        user_info={"id": 1, "username": "fake-admin"},
+    )
+
+    assert session.as_browser_storage() == {
+        "token": "fake-token",
+        "role": "admin",
+        "userInfo": {"id": 1, "username": "fake-admin"},
+    }
+
+
+def test_api_client_attaches_bearer_authorization_and_default_timeout():
+    qa = load_qa_module()
+    auth = qa.AuthSession(token="fake-token", role="admin", user_info={})
+    session = FakeSession([FakeResponse(payload={"success": True})])
+    client = qa.APIClient("https://qa.example.invalid/", auth=auth)
+    client.session = session
+
+    response = client.request("GET", "/api/v1/protected")
+
+    assert response.status_code == 200
+    call = session.calls[0]
+    assert call["url"] == "https://qa.example.invalid/api/v1/protected"
+    assert call["kwargs"]["headers"]["Authorization"] == "Bearer fake-token"
+    assert call["kwargs"]["timeout"] == 30
+
+
+def test_login_returns_auth_session_with_role_and_user_info(monkeypatch):
+    qa = load_qa_module()
+    session = FakeSession(
+        [
+            FakeResponse(payload={"success": True, "public_key": "unused-public-key"}),
+            FakeResponse(
+                payload={
+                    "success": True,
+                    "token": "fake-login-token",
+                    "role": "admin",
+                    "user_info": {"id": 1, "username": "fake-admin"},
+                }
+            ),
+        ]
+    )
+    original_init = qa.APIClient.__init__
+
+    def fake_init(self, base_url, auth=None):
+        original_init(self, base_url, auth)
+        self.session = session
+
+    monkeypatch.setattr(qa.APIClient, "__init__", fake_init)
+    auth = qa.login("https://qa.example.invalid", "fake-admin", "fake-password")
+
+    assert auth == qa.AuthSession(
+        token="fake-login-token",
+        role="admin",
+        user_info={"id": 1, "username": "fake-admin"},
+    )
+    assert session.calls[0]["method"] == "GET"
+    assert session.calls[0]["url"].endswith("/api/v1/auth/login/public-key")
+    assert session.calls[1]["method"] == "POST"
+    assert session.calls[1]["kwargs"]["json"] == {
+        "username": "fake-admin",
+        "password": "fake-password",
+        "encrypted": False,
+    }
+
+
+def test_login_requires_token_and_sanitizes_password_and_token_in_error(monkeypatch):
+    qa = load_qa_module()
+    session = FakeSession(
+        [
+            FakeResponse(payload={"success": True}),
+            FakeResponse(
+                payload={
+                    "success": True,
+                    "role": "admin",
+                    "user_info": {"token": "fake-nested-token-should-not-leak"},
+                },
+                text='{"token":"fake-token-should-not-leak","detail":"fake-password-should-not-leak"}',
+            ),
+        ]
+    )
+    original_init = qa.APIClient.__init__
+
+    def fake_init(self, base_url, auth=None):
+        original_init(self, base_url, auth)
+        self.session = session
+
+    monkeypatch.setattr(qa.APIClient, "__init__", fake_init)
+    try:
+        qa.login("https://qa.example.invalid", "fake-admin", "fake-password-should-not-leak")
+    except qa.QASafetyError as error:
+        message = str(error)
+        assert "token" in message.lower()
+        assert "fake-password-should-not-leak" not in message
+        assert "fake-token-should-not-leak" not in message
+        assert "fake-nested-token-should-not-leak" not in message
+    else:
+        raise AssertionError("login accepted a response without token")
 
 
 def test_run_prefix_is_unique_and_delete_safe():
