@@ -138,7 +138,7 @@ def _record_sensitive_business_failure(
         before=before,
         metadata=metadata,
         error_message=error_message,
-        summary=f"Failed sensitive action {action}",
+        summary=f"敏感操作失败：{action}",
     )
     if isinstance(error, HTTPException):
         raise error
@@ -296,7 +296,7 @@ async def save_payment_channel(
         resource_id=payload.channel,
         request=request,
         after=payment_channel_payload(row),
-        summary=f"Saved payment channel {payload.channel}",
+        summary=f"保存收款渠道 {payload.channel}",
     )
     routes_admin.log_admin_action(
         session=session,
@@ -393,7 +393,7 @@ async def save_payment_channel_with_upload(
         resource_id=channel,
         request=request,
         after=payment_channel_payload(row),
-        summary=f"Saved payment channel {channel}",
+        summary=f"保存收款渠道 {channel}",
     )
     routes_admin.log_admin_action(
         session=session,
@@ -447,7 +447,7 @@ async def delete_payment_channel_qrcode(
         resource_id=channel,
         request=request,
         after=payload,
-        summary=f"Deleted payment QR code for {channel}",
+        summary=f"删除收款二维码 {channel}",
     )
     routes_admin.log_admin_action(
         session=session,
@@ -496,7 +496,7 @@ async def save_recharge_option(
         resource_id=row.id,
         request=request,
         after=recharge_option_payload(row),
-        summary="Saved fixed recharge option",
+        summary="保存固定充值档位",
     )
     routes_admin.log_admin_action(
         session=session,
@@ -549,7 +549,7 @@ async def delete_recharge_option(
         resource_id=option_id,
         request=request,
         after=data,
-        summary=f"Deleted or archived fixed recharge option {option_id}",
+        summary=f"删除或归档固定充值档位 {option_id}",
     )
     routes_admin.log_admin_action(
         session=session,
@@ -598,7 +598,7 @@ async def save_bonus_rule(
         resource_id=row.id,
         request=request,
         after=recharge_bonus_rule_payload(row),
-        summary="Saved recharge bonus rule",
+        summary="保存充值赠送规则",
     )
     routes_admin.log_admin_action(
         session=session,
@@ -651,7 +651,7 @@ async def delete_bonus_rule(
         resource_id=rule_id,
         request=request,
         after=data,
-        summary=f"Deleted or archived recharge bonus rule {rule_id}",
+        summary=f"删除或归档充值赠送规则 {rule_id}",
     )
     routes_admin.log_admin_action(
         session=session,
@@ -823,7 +823,7 @@ async def cleanup_old_recharge_proofs(
             resource_type="recharge_proof",
             request=request,
             after=data,
-            summary=f"Cleaned recharge proof files older than {payload.older_than_days} days",
+            summary=f"清理超过 {payload.older_than_days} 天的充值凭证文件",
         )
     routes_admin.log_admin_action(
         session=session,
@@ -903,7 +903,7 @@ async def approve_order(
         request=request,
         before=before,
         after=after,
-        summary=f"Approved recharge order {order_no}",
+        summary=f"审核通过充值订单 {order_no}",
     )
     routes_admin.log_admin_action(
         session=session,
@@ -975,7 +975,7 @@ async def reject_order(
         request=request,
         before=before,
         after=recharge_order_payload(order, include_user=True),
-        summary=f"Rejected recharge order {order_no}",
+        summary=f"驳回充值订单 {order_no}",
     )
     return {"success": True, "message": "order rejected", "data": recharge_order_payload(order, include_user=True)}
 
@@ -1034,7 +1034,7 @@ async def expire_order(
         request=request,
         before=before,
         after=recharge_order_payload(order, include_user=True),
-        summary=f"Expired recharge order {order_no}",
+        summary=f"关闭充值订单 {order_no}",
     )
     routes_admin.log_admin_action(
         session=session,
@@ -1101,7 +1101,7 @@ async def mark_order_abnormal(
         request=request,
         before=before,
         after=recharge_order_payload(order, include_user=True),
-        summary=f"Marked recharge order {order_no} abnormal",
+        summary=f"标记充值订单异常 {order_no}",
     )
     return {"success": True, "message": "order marked abnormal", "data": recharge_order_payload(order, include_user=True)}
 

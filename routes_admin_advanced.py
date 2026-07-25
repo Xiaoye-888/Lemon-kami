@@ -94,7 +94,7 @@ def _record_sensitive_business_failure(
         before=before,
         metadata=metadata,
         error_message=error_message,
-        summary=f"Failed sensitive action {action}",
+        summary=f"敏感操作失败：{action}",
     )
     if isinstance(error, HTTPException):
         raise error
@@ -214,7 +214,7 @@ async def grant_end_user_quota(
         target_username=user.username,
         request=request,
         after={"account": user_quota_summary(account), "transaction": transaction},
-        summary=f"Granted {payload.amount} {payload.quota_type} quota to {user.username}",
+        summary=f"为用户 {user.username} 发放 {payload.amount} 个 {payload.quota_type} 额度",
     )
     return {
         "success": True,
@@ -337,7 +337,7 @@ async def grant_end_user_app_authorization(
             "user_id": authorization.user_id,
             "username": authorization.username,
         },
-        summary=f"Granted app {payload.app_id} authorization to {user.username}",
+        summary=f"授权用户 {user.username} 使用应用 {payload.app_id}",
     )
     return {
         "success": True,
@@ -428,7 +428,7 @@ async def revoke_end_user_app_authorization(
         request=request,
         before=before,
         after={"deleted": True},
-        summary=f"Revoked app authorization {authorization_id} from {user.username}",
+        summary=f"取消用户 {user.username} 的应用授权 {authorization_id}",
     )
     return {
         "success": True,
@@ -447,19 +447,27 @@ async def delete_app(
     session: Session = Depends(get_session),
 ):
     _require_admin(current_user)
-    app = session.exec(select(App).where(App.app_id == app_id)).first()
-    if not app:
-        raise HTTPException(status_code=404, detail="App not found")
+    effective_confirm_text = confirm_text or (payload.confirm_text if payload else None)
     require_sensitive_confirmation(
         session,
         admin=current_user,
         action="delete_app",
-        confirm_text=confirm_text or (payload.confirm_text if payload else None),
+        confirm_text=effective_confirm_text,
         resource_type="app",
         resource_id=app_id,
         request=request,
-        metadata={"app_name": app.name},
     )
+    app = session.exec(select(App).where(App.app_id == app_id)).first()
+    if not app:
+        _record_sensitive_business_failure(
+            session,
+            admin=current_user,
+            action="delete_app",
+            resource_type="app",
+            resource_id=app_id,
+            request=request,
+            error=HTTPException(status_code=404, detail="App not found"),
+        )
 
     auth_rows = session.exec(
         select(UserAppAuthorization).where(UserAppAuthorization.app_id == app_id)
@@ -469,7 +477,14 @@ async def delete_app(
     session.flush()
 
     try:
-        result = await legacy_admin.delete_app(app_id, current_user=current_user, session=session)
+        request.state.skip_delete_app_confirmation = True
+        request.state.skip_delete_app_audit = True
+        result = await legacy_admin.delete_app(
+            app_id,
+            request=request,
+            current_user=current_user,
+            session=session,
+        )
     except Exception as error:
         _record_sensitive_business_failure(
             session,
@@ -481,6 +496,9 @@ async def delete_app(
             error=error,
             metadata={"app_name": app.name},
         )
+    finally:
+        request.state.skip_delete_app_confirmation = False
+        request.state.skip_delete_app_audit = False
     record_admin_audit(
         session,
         admin=current_user,
@@ -489,7 +507,7 @@ async def delete_app(
         resource_id=app_id,
         request=request,
         after=result.get("data") if isinstance(result, dict) else result,
-        summary=f"Deleted app {app_id}",
+        summary=f"删除应用 {app_id}",
     )
     if isinstance(result.get("data"), dict):
         result["data"]["deleted_user_app_authorizations"] = len(auth_rows)
@@ -605,7 +623,14 @@ async def delete_end_users(
         if not app.app_id:
             continue
         try:
-            await legacy_admin.delete_app(app.app_id, current_user=current_user, session=session)
+            request.state.skip_delete_app_confirmation = True
+            request.state.skip_delete_app_audit = True
+            await legacy_admin.delete_app(
+                app.app_id,
+                request=request,
+                current_user=current_user,
+                session=session,
+            )
         except Exception as error:
             _record_sensitive_business_failure(
                 session,
@@ -618,6 +643,9 @@ async def delete_end_users(
                 metadata={"user_ids": user_ids, "owned_app_id": app.app_id},
                 status_code=500,
             )
+        finally:
+            request.state.skip_delete_app_confirmation = False
+            request.state.skip_delete_app_audit = False
         deleted_app_count += 1
 
     try:
@@ -653,6 +681,6 @@ async def delete_end_users(
         resource_id=",".join(str(user_id) for user_id in user_ids),
         request=request,
         after=deleted_counts,
-        summary=f"Deleted {deleted_counts.get('deleted_users', 0)} users",
+        summary=f"删除用户 {deleted_counts.get('deleted_users', 0)} 个",
     )
     return result

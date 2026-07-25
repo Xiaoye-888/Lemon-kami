@@ -485,6 +485,65 @@ def test_revoke_app_authorization_requires_confirmation_and_audits_success():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_direct_app_delete_requires_confirmation_and_audits_success_and_failure():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin_advanced.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin_advanced.legacy_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    try:
+        with Session(engine) as session:
+            session.add(
+                App(
+                    app_id="phase2_delete_app",
+                    name="Phase2 Delete App",
+                    app_secret="secret",
+                    rsa_public_key="public",
+                    rsa_private_key="private",
+                    status=1,
+                    created_by="admin",
+                )
+            )
+            session.commit()
+
+        missing_confirm = client.delete("/api/v1/admin/apps/phase2_delete_app")
+        assert missing_confirm.status_code == 400
+        assert missing_confirm.json()["detail"]["expected"] == "确认删除应用"
+
+        success = client.request(
+            "DELETE",
+            "/api/v1/admin/apps/phase2_delete_app",
+            json={"confirm_text": "确认删除应用"},
+        )
+        assert success.status_code == 200
+
+        not_found = client.request(
+            "DELETE",
+            "/api/v1/admin/apps/phase2_missing_app",
+            json={"confirm_text": "确认删除应用"},
+        )
+        assert not_found.status_code == 404
+
+        with Session(engine) as session:
+            assert session.exec(select(App).where(App.app_id == "phase2_delete_app")).first() is None
+            audit_logs = session.exec(
+                select(AdminAuditLog)
+                .where(AdminAuditLog.action == "delete_app")
+                .order_by(AdminAuditLog.id)
+            ).all()
+            assert [(log.status, log.resource_type, log.resource_id) for log in audit_logs] == [
+                ("failed", "app", "phase2_delete_app"),
+                ("success", "app", "phase2_delete_app"),
+                ("failed", "app", "phase2_missing_app"),
+            ]
+            assert audit_logs[1].summary == "删除应用 phase2_delete_app"
+            assert audit_logs[2].error_message == "App not found"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_admin_audit_logs_are_filterable_and_include_confirmation_texts():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

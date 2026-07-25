@@ -1728,20 +1728,66 @@ async def update_app_interface(
 @router.delete("/apps/{app_id}", summary="删除应用")
 async def delete_app(
     app_id: str,
+    request: Request,
+    payload: Optional[SensitiveConfirmRequest] = None,
+    confirm_text: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
+    skip_confirmation = bool(getattr(request.state, "skip_delete_app_confirmation", False))
+    skip_audit = bool(getattr(request.state, "skip_delete_app_audit", False))
+    effective_confirm_text = (
+        payload.confirm_text
+        if payload is not None and payload.confirm_text is not None
+        else confirm_text
+    )
+    if not skip_confirmation:
+        require_sensitive_confirmation(
+            session,
+            admin=current_user,
+            action="delete_app",
+            confirm_text=effective_confirm_text,
+            resource_type="app",
+            resource_id=app_id,
+            request=request,
+        )
+
     """删除应用（会级联删除关联的卡密、设备和日志，非 admin 只能删除自己的应用）"""
     statement = select(App).where(App.app_id == app_id)
     app = session.exec(statement).first()
 
     if not app:
+        if not skip_audit:
+            record_admin_audit(
+                session,
+                admin=current_user,
+                action="delete_app",
+                resource_type="app",
+                resource_id=app_id,
+                status="failed",
+                request=request,
+                error_message="App not found",
+                summary=f"删除应用失败：{app_id}",
+            )
         raise HTTPException(status_code=404, detail="应用不存在")
     
     # 权限检查：只有创建者或 admin 可以删除应用
     username = current_user.get("sub")
     is_admin = current_user.get("is_admin", False)
     if not is_admin and app.created_by != username:
+        if not skip_audit:
+            record_admin_audit(
+                session,
+                admin=current_user,
+                action="delete_app",
+                resource_type="app",
+                resource_id=app_id,
+                status="failed",
+                request=request,
+                metadata={"app_name": app.name},
+                error_message="No permission to delete this app",
+                summary=f"删除应用失败：{app_id}",
+            )
         raise HTTPException(status_code=403, detail="无权删除此应用，只有创建者可以删除")
 
     kamis = session.exec(select(Kami).where(Kami.app_id == app_id)).all()
@@ -1822,8 +1868,50 @@ async def delete_app(
 
     session.flush()
 
-    session.delete(app)
-    session.commit()
+    try:
+        session.delete(app)
+        session.commit()
+    except Exception as error:
+        error_message = str(error)
+        session.rollback()
+        if not skip_audit:
+            record_admin_audit(
+                session,
+                admin=current_user,
+                action="delete_app",
+                resource_type="app",
+                resource_id=app_id,
+                status="failed",
+                request=request,
+                metadata={"app_name": app.name},
+                error_message=error_message,
+                summary=f"删除应用失败：{app_id}",
+            )
+        raise HTTPException(status_code=400, detail=error_message)
+    if not skip_audit:
+        record_admin_audit(
+            session,
+            admin=current_user,
+            action="delete_app",
+            resource_type="app",
+            resource_id=app_id,
+            request=request,
+            after={
+                "app_name": app.name,
+                "kami_count": kami_count,
+                "device_count": device_count,
+                "binding_count": binding_count,
+                "legacy_access_count": legacy_access_count,
+                "event_log_count": len(event_logs),
+                "notice_count": len(notices),
+                "version_count": len(versions),
+                "interface_config_count": len(interface_configs),
+                "batch_count": len(batches),
+                "spec_count": len(specs),
+                "authorization_account_count": len(authorization_accounts),
+            },
+            summary=f"删除应用 {app_id}",
+        )
     
     # 记录日志
     username = current_user.get("sub")
@@ -2641,7 +2729,7 @@ async def delete_kami_spec(
                 "has_kami": bool(existing_kami),
             },
             error_message="kami spec still has batches or kamis",
-            summary=f"Failed to delete kami spec {spec_name}",
+            summary=f"删除卡密规格失败：{spec_name}",
         )
         raise HTTPException(status_code=400, detail="规格下仍有批次或卡密，请先删除批次和卡密后再删除规格。")
 
@@ -2662,7 +2750,7 @@ async def delete_kami_spec(
             before=payload_data,
             metadata={"app_id": app_id, "spec_name": spec_name},
             error_message=error_message,
-            summary=f"Failed to delete kami spec {spec_name}",
+            summary=f"删除卡密规格失败：{spec_name}",
         )
         raise HTTPException(status_code=400, detail=error_message)
 
@@ -2674,7 +2762,7 @@ async def delete_kami_spec(
         resource_id=str(spec_id),
         request=request,
         after=payload_data,
-        summary=f"Deleted kami spec {spec_name}",
+        summary=f"删除卡密规格 {spec_name}",
     )
     log_admin_action(
         session=session,
@@ -3065,13 +3153,44 @@ async def delete_kami_batch(
         select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
     ).first()
     if existing_kami:
+        error_message = "批次下仍有卡密，请先删除或转移卡密后再删除批次。"
+        record_admin_audit(
+            session,
+            admin=current_user,
+            action="delete_kami_batch",
+            resource_type="kami_batch",
+            resource_id=batch_id,
+            status="failed",
+            request=request,
+            metadata={"app_id": batch.app_id, "batch_no": batch.batch_no},
+            error_message=error_message,
+            summary=f"删除卡密批次失败：{batch.batch_no}",
+        )
         raise HTTPException(status_code=400, detail="该批次下仍有卡密，请先删除或转移卡密后再删除批次。")
 
     app_id = batch.app_id
     batch_no = batch.batch_no
     payload_data = _kami_batch_payload(batch)
-    session.delete(batch)
-    session.commit()
+    try:
+        session.delete(batch)
+        session.commit()
+    except Exception as error:
+        error_message = str(error)
+        session.rollback()
+        record_admin_audit(
+            session,
+            admin=current_user,
+            action="delete_kami_batch",
+            resource_type="kami_batch",
+            resource_id=batch_id,
+            status="failed",
+            request=request,
+            before=payload_data,
+            metadata={"app_id": app_id, "batch_no": batch_no},
+            error_message=error_message,
+            summary=f"删除卡密批次失败：{batch_no}",
+        )
+        raise HTTPException(status_code=400, detail=error_message)
     record_admin_audit(
         session,
         admin=current_user,
@@ -3080,7 +3199,7 @@ async def delete_kami_batch(
         resource_id=batch_id,
         request=request,
         after=payload_data,
-        summary=f"Deleted kami batch {batch_no}",
+        summary=f"删除卡密批次 {batch_no}",
     )
 
     log_admin_action(
@@ -3861,7 +3980,7 @@ async def delete_kamis(
             "deleted_count": len(deleted_codes),
             "skipped_count": len(skipped),
         },
-        summary=f"Deleted {len(deleted_codes)} kamis",
+        summary=f"删除卡密 {len(deleted_codes)} 个",
     )
 
     log_admin_action(

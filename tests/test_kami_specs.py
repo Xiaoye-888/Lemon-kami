@@ -60,6 +60,7 @@ def make_app(app_id="app_demo"):
 
 CONFIRM_DELETE_KAMI = "确认删除卡密"
 CONFIRM_DELETE_APP = "确认删除应用"
+CONFIRM_DELETE_KAMI_BATCH = "确认删除批次"
 
 
 def test_kami_spec_schema_exists():
@@ -869,5 +870,23 @@ def test_legacy_batch_create_and_generate_attach_spec():
             kami = session.exec(select(Kami).where(Kami.batch_no == "p68-batch")).first()
             assert batch.spec_id is not None
             assert kami.spec_id == batch.spec_id
+            batch_id = batch.id
+
+        delete_batch = client.delete(
+            f"/api/v1/admin/kamis/batches/{batch_id}",
+            params={"confirm_text": CONFIRM_DELETE_KAMI_BATCH},
+        )
+        assert delete_batch.status_code == 400
+
+        with Session(engine) as session:
+            failed_audit = session.exec(
+                select(AdminAuditLog).where(
+                    AdminAuditLog.action == "delete_kami_batch",
+                    AdminAuditLog.resource_id == str(batch_id),
+                    AdminAuditLog.status == "failed",
+                )
+            ).one()
+            assert failed_audit.resource_type == "kami_batch"
+            assert failed_audit.error_message
     finally:
         fastapi_app.dependency_overrides.clear()
