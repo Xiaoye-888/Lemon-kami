@@ -347,12 +347,11 @@ async def list_merchant_devices(
 ):
     apps = get_user_visible_apps(session, current_user)
     apps_by_id = {app.app_id: app for app in apps}
-    if not apps_by_id:
-        return {"success": True, "data": {"total": 0, "page": page, "page_size": page_size, "items": []}}
-
     selected_app_id = app_id.strip() if app_id else None
     if selected_app_id and selected_app_id not in apps_by_id:
         raise HTTPException(status_code=403, detail="No permission to view this app")
+    if not apps_by_id:
+        return {"success": True, "data": {"total": 0, "page": page, "page_size": page_size, "items": []}}
 
     allowed_app_ids = {selected_app_id} if selected_app_id else set(apps_by_id.keys())
     owned_app_ids = {

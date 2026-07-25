@@ -1061,6 +1061,7 @@ def test_admin_devices_require_admin_and_merchant_devices_are_scoped():
     with Session(engine) as session:
         merchant = EndUser(username="device-merchant", password_hash=hash_password("secret123"), status=1)
         other_merchant = EndUser(username="other-device-merchant", password_hash=hash_password("secret123"), status=1)
+        no_app_merchant = EndUser(username="no-app-device-merchant", password_hash=hash_password("secret123"), status=1)
         usage_user = EndUser(
             app_id="app_device_owned",
             username="usage-device-user",
@@ -1085,12 +1086,14 @@ def test_admin_devices_require_admin_and_merchant_devices_are_scoped():
         )
         session.add(merchant)
         session.add(other_merchant)
+        session.add(no_app_merchant)
         session.add(usage_user)
         session.add(app)
         session.add(other_app)
         session.commit()
         session.refresh(merchant)
         session.refresh(other_merchant)
+        session.refresh(no_app_merchant)
         session.refresh(usage_user)
         app.owner_user_id = merchant.id
         other_app.owner_user_id = other_merchant.id
@@ -1139,6 +1142,7 @@ def test_admin_devices_require_admin_and_merchant_devices_are_scoped():
         session.add(Device(app_id="app_device_other", uuid="device-other-1", fingerprint="fingerprint-other-1", last_ip="203.0.113.11"))
         session.commit()
         merchant_token = routes_user.create_user_access_token(merchant)
+        no_app_merchant_token = routes_user.create_user_access_token(no_app_merchant)
         admin_token = routes_admin.create_access_token({"sub": "admin", "user_id": 1, "is_admin": True})
 
     try:
@@ -1166,6 +1170,13 @@ def test_admin_devices_require_admin_and_merchant_devices_are_scoped():
         assert merchant_items[0]["app_source"] == "merchant_self_owned"
         assert merchant_items[0]["issuing_user"]["username"] == "device-merchant"
         assert merchant_items[0]["owning_user"]["username"] == "device-merchant"
+
+        no_app_forbidden_response = client.get(
+            "/api/v1/merchant/devices",
+            headers=auth_headers(no_app_merchant_token),
+            params={"app_id": "app_device_owned"},
+        )
+        assert no_app_forbidden_response.status_code == 403
 
         admin_devices_response = client.get(
             "/api/v1/admin/devices",
