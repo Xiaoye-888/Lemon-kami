@@ -4,6 +4,7 @@ from sqlmodel import SQLModel, Session, create_engine, select
 
 import routes_admin
 import routes_user
+from auth_utils import hash_password
 from main import app as fastapi_app
 from models import App, EndUser
 
@@ -74,5 +75,71 @@ def test_register_records_recent_login_for_admin_user_authorization_list():
         with Session(engine) as session:
             user = session.exec(select(EndUser).where(EndUser.username == "new-user")).one()
             assert user.last_login is not None
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_application_user_register_requires_app_id():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    try:
+        response = client.post(
+            "/api/v1/user/register",
+            json={"username": "floating-user", "password": "password123"},
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "APP_ID_REQUIRED"
+
+        with Session(engine) as session:
+            user = session.exec(select(EndUser).where(EndUser.username == "floating-user")).first()
+            assert user is None
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_accounts_cannot_use_application_user_api():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(
+            username="merchant-login-boundary",
+            password_hash=hash_password("password123"),
+            app_id=None,
+            status=1,
+        )
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        merchant_token = routes_user.create_user_access_token(merchant)
+
+    try:
+        login_response = client.post(
+            "/api/v1/user/login",
+            json={"username": "merchant-login-boundary", "password": "password123"},
+        )
+        assert login_response.status_code == 403
+        assert login_response.json()["detail"]["code"] == "MERCHANT_ACCOUNT_NOT_ALLOWED"
+
+        me_response = client.get(
+            "/api/v1/user/me",
+            headers={"Authorization": f"Bearer {merchant_token}"},
+        )
+        assert me_response.status_code == 403
+        assert me_response.json()["detail"]["code"] == "MERCHANT_ACCOUNT_NOT_ALLOWED"
+
+        balance_response = client.get(
+            "/api/v1/user/points/balance",
+            headers={"Authorization": f"Bearer {merchant_token}"},
+        )
+        assert balance_response.status_code == 403
+        assert balance_response.json()["detail"]["code"] == "MERCHANT_ACCOUNT_NOT_ALLOWED"
     finally:
         fastapi_app.dependency_overrides.clear()

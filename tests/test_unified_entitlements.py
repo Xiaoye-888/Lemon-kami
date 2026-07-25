@@ -8,6 +8,7 @@ from sqlalchemy.schema import CreateTable
 from sqlmodel import SQLModel, Session, create_engine, select
 
 import routes_admin
+import routes_merchant
 import routes_sdk
 import routes_user
 from authorization_service import grant_points, grant_time, grant_times, get_or_create_authorization_account
@@ -207,6 +208,7 @@ def test_admin_can_grant_user_quota_and_user_can_create_apps_without_app_create_
     fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
     fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
     fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
     client = TestClient(fastapi_app)
 
     with Session(engine) as session:
@@ -238,7 +240,7 @@ def test_admin_can_grant_user_quota_and_user_can_create_apps_without_app_create_
         assert quota_data["recharge_balance"] == 0
 
         create_response = client.post(
-            "/api/v1/user/apps",
+            "/api/v1/merchant/apps",
             headers={"Authorization": f"Bearer {user_token}"},
             json={"name": "Agent Console"},
         )
@@ -249,7 +251,7 @@ def test_admin_can_grant_user_quota_and_user_can_create_apps_without_app_create_
         assert created_app["created_by"] == "agent-owner"
 
         user_quota_response = client.get(
-            "/api/v1/user/quotas",
+            "/api/v1/merchant/quotas",
             headers={"Authorization": f"Bearer {user_token}"},
         )
         assert user_quota_response.status_code == 200
@@ -257,7 +259,7 @@ def test_admin_can_grant_user_quota_and_user_can_create_apps_without_app_create_
         assert user_quota["app_create_balance"] == 2
 
         apps_response = client.get(
-            "/api/v1/user/apps",
+            "/api/v1/merchant/apps",
             headers={"Authorization": f"Bearer {user_token}"},
         )
         assert apps_response.status_code == 200
@@ -274,6 +276,7 @@ def test_admin_app_authorization_grant_makes_app_visible_to_end_user():
     fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
     fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
     fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
     client = TestClient(fastapi_app)
 
     with Session(engine) as session:
@@ -311,7 +314,7 @@ def test_admin_app_authorization_grant_makes_app_visible_to_end_user():
         assert list_response.json()["data"][0]["app_id"] == "app_shared"
 
         visible_response = client.get(
-            "/api/v1/user/apps",
+            "/api/v1/merchant/apps",
             headers={"Authorization": f"Bearer {user_token}"},
         )
         assert visible_response.status_code == 200
@@ -327,6 +330,7 @@ def test_user_can_issue_kamis_by_consuming_issue_quota_and_list_them():
     fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
     fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
     fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
     client = TestClient(fastapi_app)
 
     with Session(engine) as session:
@@ -362,7 +366,7 @@ def test_user_can_issue_kamis_by_consuming_issue_quota_and_list_them():
         assert grant_response.json()["data"]["kami_issue_balance"] == 3
 
         issue_response = client.post(
-            "/api/v1/user/apps/app_issuer/kamis/batch",
+            "/api/v1/merchant/apps/app_issuer/kamis/batch",
             headers={"Authorization": f"Bearer {user_token}"},
             json={
                 "kami_type": "points",
@@ -381,14 +385,14 @@ def test_user_can_issue_kamis_by_consuming_issue_quota_and_list_them():
         assert len(issue_data["codes"]) == 2
 
         quota_response = client.get(
-            "/api/v1/user/quotas",
+            "/api/v1/merchant/quotas",
             headers={"Authorization": f"Bearer {user_token}"},
         )
         assert quota_response.status_code == 200
         assert quota_response.json()["data"]["kami_issue_balance"] == 1
 
         kamis_response = client.get(
-            "/api/v1/user/apps/app_issuer/kamis",
+            "/api/v1/merchant/apps/app_issuer/kamis",
             headers={"Authorization": f"Bearer {user_token}"},
         )
         assert kamis_response.status_code == 200

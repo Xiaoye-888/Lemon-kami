@@ -1200,6 +1200,130 @@ def test_issue_pricing_rules_drive_merchant_preview_issue_and_quota_snapshots():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_legacy_user_management_routes_are_gone_for_merchant_accounts():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="legacy-merchant", password_hash="hash", app_id=None, status=1)
+        session.add(merchant)
+        app = App(
+            app_id="app_legacy_admin",
+            name="Legacy Admin App",
+            app_secret="secret-should-not-leak",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by="admin",
+            status=1,
+        )
+        session.add(app)
+        session.commit()
+        session.refresh(merchant)
+        spec = KamiSpec(
+            app_id="app_legacy_admin",
+            spec_key="vip",
+            spec_name="VIP",
+            kami_type="points",
+            points_amount=100,
+            points_valid_days=30,
+            status=1,
+        )
+        session.add(spec)
+        session.add(
+            UserAppAuthorization(
+                app_id="app_legacy_admin",
+                user_id=merchant.id,
+                username=merchant.username,
+                granted_by="admin",
+            )
+        )
+        session.add(UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=20))
+        session.commit()
+        merchant_token = routes_user.create_user_access_token(merchant)
+
+    try:
+        apps_response = client.get(
+            "/api/v1/user/apps",
+            headers=auth_headers(merchant_token),
+        )
+        assert apps_response.status_code == 410
+        assert "secret-should-not-leak" not in apps_response.text
+
+        issue_response = client.post(
+            "/api/v1/user/apps/app_legacy_admin/kamis/batch",
+            headers=auth_headers(merchant_token),
+            json={
+                "kami_type": "points",
+                "points_amount": 999,
+                "points_valid_days": 365,
+                "count": 2,
+                "batch_no": "LEGACY-BYPASS",
+                "code_length": 8,
+            },
+        )
+        assert issue_response.status_code == 410
+
+        with Session(engine) as session:
+            rows = session.exec(select(Kami).where(Kami.batch_no == "LEGACY-BYPASS")).all()
+            assert rows == []
+            account = session.exec(
+                select(UserQuotaAccount).where(UserQuotaAccount.username == "legacy-merchant")
+            ).one()
+            assert account.kami_issue_balance == 20
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_application_users_cannot_use_quota_or_app_management_routes():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        app = App(
+            app_id="app_usage_only",
+            name="Usage Only",
+            app_secret="usage-secret",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by="admin",
+            status=1,
+        )
+        user = EndUser(username="usage-only", password_hash="hash", app_id="app_usage_only", status=1)
+        session.add(app)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        user_token = routes_user.create_user_access_token(user)
+
+    try:
+        quota_response = client.get(
+            "/api/v1/user/quotas",
+            headers=auth_headers(user_token),
+        )
+        assert quota_response.status_code == 410
+
+        apps_response = client.get(
+            "/api/v1/user/apps",
+            headers=auth_headers(user_token),
+        )
+        assert apps_response.status_code == 410
+
+        create_response = client.post(
+            "/api/v1/user/apps",
+            headers=auth_headers(user_token),
+            json={"name": "Unexpected App"},
+        )
+        assert create_response.status_code == 410
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_admin_devices_require_admin_and_merchant_devices_are_scoped():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
