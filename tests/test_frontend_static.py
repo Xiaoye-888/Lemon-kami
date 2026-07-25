@@ -558,6 +558,16 @@ def test_kami_batches_ignores_stale_route_app_id_before_loading_child_resources(
     assert "query: queryParams.app_id ? { app_id: queryParams.app_id } : {}" in kami_batches
 
 
+def test_kamis_list_ignores_stale_route_app_id_before_loading_child_resources():
+    kamis = (PROJECT_ROOT / "admin/src/views/Kamis.vue").read_text(encoding="utf-8")
+
+    assert "isKnownAppId" in kamis
+    assert "normalizeSelectedAppId" in kamis
+    assert "routeAppId && isKnownAppId(routeAppId)" in kamis
+    assert "routeAppWasStale" in kamis
+    assert "query: queryParams.app_id ? { app_id: queryParams.app_id } : {}" in kamis
+
+
 def test_commercial_phase1_corrections_keep_identity_and_quota_scope_clear():
     auth_api = (PROJECT_ROOT / "admin/src/api/auth.js").read_text(encoding="utf-8")
     store = (PROJECT_ROOT / "admin/src/stores/user.js").read_text(encoding="utf-8")

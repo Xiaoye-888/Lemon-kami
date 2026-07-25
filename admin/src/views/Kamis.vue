@@ -342,14 +342,34 @@ const filteredKamis = computed(() => {
 
 const filteredTotal = computed(() => (quickDate.value ? filteredKamis.value.length : total.value))
 
+const isKnownAppId = (appId) => apps.value.some((app) => app.app_id === appId)
+
+const normalizeSelectedAppId = async () => {
+  const routeAppId = route.query.app_id ? String(route.query.app_id) : ''
+  if (routeAppId && isKnownAppId(routeAppId)) {
+    queryParams.app_id = routeAppId
+  } else {
+    queryParams.app_id = apps.value[0]?.app_id || ''
+  }
+  if (routeAppId && routeAppId !== queryParams.app_id) {
+    await router.replace({
+      path: '/admin/kamis',
+      query: queryParams.app_id ? { app_id: queryParams.app_id } : {}
+    })
+    queryParams.spec_id = ''
+    queryParams.batch_no = ''
+    return true
+  }
+  return false
+}
+
 const loadApps = async () => {
   try {
     const res = await getApps()
     apps.value = res.data || []
-    if (route.query.app_id) queryParams.app_id = String(route.query.app_id)
-    if (route.query.spec_id) queryParams.spec_id = Number(route.query.spec_id)
-    if (route.query.batch_no) queryParams.batch_no = String(route.query.batch_no)
-    if (!queryParams.app_id && apps.value.length > 0) queryParams.app_id = apps.value[0].app_id
+    const routeAppWasStale = await normalizeSelectedAppId()
+    if (!routeAppWasStale && route.query.spec_id) queryParams.spec_id = Number(route.query.spec_id)
+    if (!routeAppWasStale && route.query.batch_no) queryParams.batch_no = String(route.query.batch_no)
     await loadKamis()
     openGenerateDialogFromRoute()
   } catch (error) {
