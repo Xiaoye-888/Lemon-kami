@@ -667,6 +667,125 @@ def test_report_writer_rejects_unsanitized_private_key_markers(tmp_path):
         raise AssertionError("report writer allowed private key marker")
 
 
+def test_format_finding_renders_safe_default_severity_route_and_message():
+    qa = load_qa_module()
+
+    line = qa.format_finding(
+        {
+            "route": "/merchant/recharge",
+            "viewport": "mobile",
+            "message": "Low text after token=report-secret and card KAMI-ABCDEFG1234567",
+        }
+    )
+
+    assert line.startswith("P3 [/merchant/recharge mobile] ")
+    assert "Low text after" in line
+    assert "report-secret" not in line
+    assert "KAMI-ABCDEFG1234567" not in line
+    assert "KAM***567" in line
+    assert "<redacted>" in line
+
+
+def test_add_analysis_sections_renders_findings_and_chinese_fallbacks(tmp_path):
+    qa = load_qa_module()
+    report = qa.QAReport(run_id="E2E_UI_QA_20260726_030000_abc123", artifact_dir=tmp_path)
+
+    qa.add_analysis_sections(
+        report,
+        [{"severity": "P2", "route": "/merchant/batches", "message": "Overwide cards detected"}],
+        [{"route": "/api/v1/sdk/verify", "message": "SDK verify failed token=hidden"}],
+    )
+    qa.add_analysis_sections(report, [], [])
+
+    content = report.render()
+
+    assert "## 产品经理视角" in content
+    assert "## 资深开发工程师视角" in content
+    assert "P2 [/merchant/batches] Overwide cards detected" in content
+    assert "P3 [/api/v1/sdk/verify] SDK verify failed <redacted>" in content
+    assert "产品体验未发现阻塞项" in content
+    assert "工程实现未发现阻塞项" in content
+    assert "hidden" not in content
+
+
+def test_analysis_findings_are_derived_from_browser_and_flow_data():
+    qa = load_qa_module()
+    browser_findings = [
+        {
+            "severity": "P2",
+            "role": "merchant",
+            "route": "/merchant/batches",
+            "viewport": "mobile",
+            "message": "Large blank page area detected",
+        },
+        {
+            "severity": "P0",
+            "role": "admin",
+            "route": "/admin/dashboard",
+            "viewport": "desktop",
+            "message": "Runtime exceptions detected",
+        },
+        {
+            "severity": "P1",
+            "role": "merchant",
+            "route": "/merchant/recharge",
+            "viewport": "desktop",
+            "message": "Network failures detected",
+        },
+    ]
+    flow_summaries = {
+        "self_owned": {"verify": {"success": False, "error": "SDK mismatch"}},
+        "cleanup": {"payment_restore": {"restored": False, "error": "restore failed token=hidden"}},
+    }
+
+    product_findings = qa.derive_product_findings(browser_findings, flow_summaries)
+    engineering_findings = qa.derive_engineering_findings(browser_findings, flow_summaries)
+
+    assert [finding["message"] for finding in product_findings] == [
+        "Large blank page area detected",
+        "Runtime exceptions detected",
+    ]
+    assert [finding["message"] for finding in engineering_findings] == [
+        "Runtime exceptions detected",
+        "Network failures detected",
+        "self_owned verify reported unsuccessful status",
+        "Payment config restore failed",
+    ]
+    assert engineering_findings[-1]["detail"] == "restore failed <redacted>"
+
+
+def test_browser_sweep_summary_groups_by_role_route_and_viewport():
+    qa = load_qa_module()
+    browser_results = [
+        {"role": "admin", "route": "/admin/dashboard", "viewport": "desktop"},
+        {"role": "merchant", "route": "/merchant/batches", "viewport": "mobile"},
+    ]
+    browser_findings = [
+        {"role": "admin", "route": "/admin/dashboard", "viewport": "desktop", "severity": "P0"},
+        {"role": "admin", "route": "/admin/dashboard", "viewport": "desktop", "severity": "P1"},
+        {"role": "merchant", "route": "/merchant/batches", "viewport": "mobile", "severity": "P2"},
+    ]
+
+    assert qa.summarize_browser_sweep(browser_results, browser_findings) == [
+        {
+            "role": "admin",
+            "route": "/admin/dashboard",
+            "viewport": "desktop",
+            "checks": 1,
+            "findings": 2,
+            "severity_counts": {"P0": 1, "P1": 1},
+        },
+        {
+            "role": "merchant",
+            "route": "/merchant/batches",
+            "viewport": "mobile",
+            "checks": 1,
+            "findings": 1,
+            "severity_counts": {"P2": 1},
+        },
+    ]
+
+
 def test_browser_routes_for_roles_are_declared():
     qa = load_qa_module()
     routes = qa.browser_routes()

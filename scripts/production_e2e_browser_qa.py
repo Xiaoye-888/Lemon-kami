@@ -1225,6 +1225,248 @@ def evaluate_browser_result(result):
     return findings
 
 
+def _finding_identity(finding):
+    return (
+        finding.get("role") or "<unknown>",
+        finding.get("route") or "<unknown>",
+        finding.get("viewport") or "<unknown>",
+    )
+
+
+def summarize_browser_sweep(browser_results: list[dict[str, Any]], browser_findings: list[dict[str, Any]]):
+    summary = {}
+    for result in browser_results:
+        key = (
+            result.get("role") or "<unknown>",
+            result.get("route") or "<unknown>",
+            result.get("viewport") or "<unknown>",
+        )
+        row = summary.setdefault(
+            key,
+            {
+                "role": key[0],
+                "route": key[1],
+                "viewport": key[2],
+                "checks": 0,
+                "findings": 0,
+                "severity_counts": {},
+            },
+        )
+        row["checks"] += 1
+
+    for finding in browser_findings:
+        key = _finding_identity(finding)
+        row = summary.setdefault(
+            key,
+            {
+                "role": key[0],
+                "route": key[1],
+                "viewport": key[2],
+                "checks": 0,
+                "findings": 0,
+                "severity_counts": {},
+            },
+        )
+        row["findings"] += 1
+        severity = str(finding.get("severity") or "P3").strip() or "P3"
+        row["severity_counts"][severity] = row["severity_counts"].get(severity, 0) + 1
+
+    return [summary[key] for key in sorted(summary)]
+
+
+def format_finding(finding: dict[str, Any]) -> str:
+    severity = str(finding.get("severity") or "P3").strip() or "P3"
+    route = finding.get("route")
+    viewport = finding.get("viewport")
+    message = finding.get("message") or finding.get("detail") or "Finding requires review"
+    suffix_parts = []
+    if route:
+        suffix_parts.append(str(route))
+    if viewport:
+        suffix_parts.append(str(viewport))
+    suffix = f" [{' '.join(suffix_parts)}]" if suffix_parts else ""
+    detail = finding.get("detail")
+    line = f"{severity}{suffix} {message}"
+    if detail and str(detail) != str(message):
+        line = f"{line} - {detail}"
+    return sanitize_report_string(line)
+
+
+def add_analysis_sections(
+    report: "QAReport",
+    product_findings: list[dict[str, Any]],
+    engineering_findings: list[dict[str, Any]],
+) -> None:
+    if product_findings:
+        product_lines = [format_finding(finding) for finding in product_findings]
+    else:
+        product_lines = ["产品体验未发现阻塞项。"]
+
+    if engineering_findings:
+        engineering_lines = [format_finding(finding) for finding in engineering_findings]
+    else:
+        engineering_lines = ["工程实现未发现阻塞项。"]
+
+    report.add_section("产品经理视角", product_lines)
+    report.add_section("资深开发工程师视角", engineering_lines)
+
+
+def _analysis_finding(finding, default_severity="P3"):
+    result = {
+        "severity": finding.get("severity") or default_severity,
+        "message": sanitize_report_string(finding.get("message") or "Finding requires review"),
+    }
+    for key in ("role", "route", "viewport"):
+        if finding.get(key):
+            result[key] = sanitize_report_string(finding[key])
+    if finding.get("detail"):
+        result["detail"] = sanitize_report_string(finding["detail"])
+    return result
+
+
+PRODUCT_BROWSER_MESSAGES = {
+    "Console errors detected",
+    "Runtime exceptions detected",
+    "HTTP errors detected",
+    "Route document returned bad status",
+    "Page body text is unexpectedly sparse",
+    "Horizontal overflow detected",
+    "Large blank page area detected",
+    "Overwide cards detected",
+}
+
+ENGINEERING_BROWSER_MESSAGES = {
+    "Console errors detected",
+    "Runtime exceptions detected",
+    "Network failures detected",
+    "HTTP errors detected",
+    "Route document returned bad status",
+}
+
+
+def derive_product_findings(
+    browser_findings: list[dict[str, Any]],
+    flow_summaries: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    findings = []
+    for finding in browser_findings:
+        message = finding.get("message")
+        if message in PRODUCT_BROWSER_MESSAGES:
+            findings.append(_analysis_finding(finding))
+
+    for finding in (flow_summaries or {}).get("product_findings", []) or []:
+        if isinstance(finding, dict):
+            findings.append(_analysis_finding(finding))
+    return findings
+
+
+def _append_if_unsuccessful_verify(findings, flow_name, flow_summary):
+    verify = flow_summary.get("verify") if isinstance(flow_summary, dict) else None
+    if not isinstance(verify, dict) or verify.get("success") is not False:
+        return
+    finding = {
+        "severity": "P1",
+        "route": "/api/v1/sdk/verify",
+        "message": f"{flow_name} verify reported unsuccessful status",
+    }
+    error = verify.get("error")
+    if error:
+        finding["detail"] = error
+    findings.append(_analysis_finding(finding))
+
+
+def derive_engineering_findings(
+    browser_findings: list[dict[str, Any]],
+    flow_summaries: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    findings = []
+    for finding in browser_findings:
+        message = finding.get("message")
+        if message in ENGINEERING_BROWSER_MESSAGES:
+            findings.append(_analysis_finding(finding))
+
+    flow_summaries = flow_summaries or {}
+    _append_if_unsuccessful_verify(findings, "self_owned", flow_summaries.get("self_owned") or {})
+    _append_if_unsuccessful_verify(findings, "authorized", flow_summaries.get("authorized") or {})
+
+    payment_restore = (flow_summaries.get("cleanup") or {}).get("payment_restore") or {}
+    if payment_restore.get("restored") is False or payment_restore.get("error"):
+        findings.append(
+            _analysis_finding(
+                {
+                    "severity": "P1",
+                    "message": "Payment config restore failed",
+                    "detail": payment_restore.get("error") or "restored flag was false",
+                }
+            )
+        )
+
+    cleanup_resources = (flow_summaries.get("cleanup") or {}).get("resources") or {}
+    if cleanup_resources.get("error"):
+        findings.append(
+            _analysis_finding(
+                {
+                    "severity": "P1",
+                    "message": "Temporary resource cleanup failed",
+                    "detail": cleanup_resources.get("error"),
+                }
+            )
+        )
+
+    permission = flow_summaries.get("permission_boundaries") or {}
+    if permission.get("error"):
+        findings.append(
+            _analysis_finding(
+                {
+                    "severity": "P1",
+                    "message": "Permission boundary check failed",
+                    "detail": permission.get("error"),
+                }
+            )
+        )
+    if permission.get("checked") is not None and permission.get("checked") != 2:
+        findings.append(
+            _analysis_finding(
+                {
+                    "severity": "P2",
+                    "message": "Permission boundary check count mismatch",
+                    "detail": f"checked={permission.get('checked')}",
+                }
+            )
+        )
+
+    recharge = flow_summaries.get("recharge") or {}
+    recharge_values = (recharge.get("quota_before"), recharge.get("quota_after"), recharge.get("credit_quota"))
+    if all(isinstance(value, int) for value in recharge_values):
+        before, after, credit = recharge_values
+        if after - before != credit:
+            findings.append(
+                _analysis_finding(
+                    {
+                        "severity": "P1",
+                        "message": "Recharge quota delta mismatch",
+                        "detail": f"expected {credit}, got {after - before}",
+                    }
+                )
+            )
+
+    if flow_summaries.get("flow_error"):
+        findings.append(
+            _analysis_finding(
+                {
+                    "severity": "P0",
+                    "message": "Production flow raised exception",
+                    "detail": flow_summaries.get("flow_error"),
+                }
+            )
+        )
+
+    for finding in flow_summaries.get("engineering_findings", []) or []:
+        if isinstance(finding, dict):
+            findings.append(_analysis_finding(finding))
+    return findings
+
+
 def _report_safe_value(value):
     if isinstance(value, dict):
         safe_value = {}
@@ -1398,6 +1640,9 @@ def run_production_flow(config: QAConfig):
     payment_restore_status = {"restored": False}
     cleanup_status = {}
     flow_error = None
+    browser_results = []
+    browser_findings = []
+    flow_summaries = {}
     try:
         temp_payment = ensure_temporary_payment_config(admin, prefix) or {}
         merchant = register_merchant(config.base_url, prefix)
@@ -1414,6 +1659,13 @@ def run_production_flow(config: QAConfig):
         after_recharge = get_issue_quota_balance(merchant)
         expected_credit = int(approved.get("credit_quota") or 9910)
         assert_quota_delta(before_recharge, after_recharge, expected_credit, "recharge credit")
+        recharge_summary = {
+            "order_no": order.get("order_no"),
+            "quota_before": before_recharge,
+            "quota_after": after_recharge,
+            "credit_quota": expected_credit,
+        }
+        flow_summaries["recharge"] = recharge_summary
 
         self_app = create_self_app(merchant, prefix)
         self_spec = create_self_spec(merchant, self_app.app_id)
@@ -1430,6 +1682,12 @@ def run_production_flow(config: QAConfig):
             app_secret=self_app.app_secret,
             rsa_public_key=self_app.rsa_public_key,
         ) if self_batch.codes else {"success": False, "card_code": None}
+        self_batch_summary = _report_batch_summary(self_batch, self_cards)
+        flow_summaries["self_owned"] = {
+            "batch": self_batch_summary,
+            "cards": self_cards,
+            "verify": self_verify,
+        }
 
         admin_app, admin_spec = create_admin_app_and_spec(admin, prefix)
         authorize_app_to_merchant(admin, merchant.user_id, admin_app.app_id)
@@ -1451,36 +1709,45 @@ def run_production_flow(config: QAConfig):
             app_secret=admin_app.app_secret,
             rsa_public_key=admin_app.rsa_public_key,
         ) if authorized_batch.codes else {"success": False, "card_code": None}
+        authorized_batch_summary = _report_batch_summary(authorized_batch, authorized_cards)
+        flow_summaries["authorized"] = {
+            "batch": authorized_batch_summary,
+            "cards": authorized_cards,
+            "verify": authorized_verify,
+        }
 
         boundaries = verify_permission_boundaries(admin, merchant, prefix)
+        flow_summaries["permission_boundaries"] = boundaries
         browser_results = run_browser_sweep(
             config.base_url,
             artifact_dir,
             admin_auth.as_browser_storage(),
             merchant.auth.as_browser_storage(),
         )
-        browser_findings = []
         for result in browser_results:
-            browser_findings.extend(evaluate_browser_result(result))
+            for finding in evaluate_browser_result(result):
+                if result.get("role"):
+                    finding["role"] = result.get("role")
+                browser_findings.append(finding)
 
         report.add_section("Deployment And Health", [{"base_url": config.base_url, "health": "checked"}])
-        report.add_section("Browser Sweep", [{"results": len(browser_results), "findings": browser_findings}])
         report.add_section(
-            "Recharge Flow",
+            "Browser Sweep",
             [
                 {
-                    "order_no": order.get("order_no"),
-                    "quota_before": before_recharge,
-                    "quota_after": after_recharge,
-                    "credit_quota": expected_credit,
+                    "results": len(browser_results),
+                    "summary": summarize_browser_sweep(browser_results, browser_findings),
+                    "findings": browser_findings,
                 }
             ],
         )
-        report.add_section("Self Owned Flow", [_report_batch_summary(self_batch, self_cards), self_verify])
-        report.add_section("Authorized Flow", [_report_batch_summary(authorized_batch, authorized_cards), authorized_verify])
+        report.add_section("Recharge Flow", [recharge_summary])
+        report.add_section("Self Owned Flow", [self_batch_summary, self_verify])
+        report.add_section("Authorized Flow", [authorized_batch_summary, authorized_verify])
         report.add_section("Permission Boundaries", [boundaries])
     except Exception as error:
         flow_error = error
+        flow_summaries["flow_error"] = sanitize_report_string(str(error))
         report.add_section("Flow Error", [sanitize_report_string(str(error))])
     finally:
         try:
@@ -1493,6 +1760,15 @@ def run_production_flow(config: QAConfig):
         except Exception as error:
             cleanup_status = {"error": sanitize_report_string(str(error))}
         report.add_section("Cleanup And Restore", [payment_restore_status, cleanup_status])
+        flow_summaries["cleanup"] = {
+            "payment_restore": payment_restore_status,
+            "resources": cleanup_status,
+        }
+        add_analysis_sections(
+            report,
+            derive_product_findings(browser_findings, flow_summaries),
+            derive_engineering_findings(browser_findings, flow_summaries),
+        )
         report_path = report.write()
     if flow_error is not None:
         raise QASafetyError(f"Production E2E flow failed; sanitized report written to {report_path}") from flow_error
