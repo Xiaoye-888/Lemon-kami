@@ -54,6 +54,13 @@ class FakeAPIClient:
         response = self.responses.pop(0)
         return response() if callable(response) else response
 
+    def request(self, method, path, **kwargs):
+        self.calls.append({"method": method, "path": path, "kwargs": kwargs})
+        if not self.responses:
+            return FakeResponse(payload={"success": True, "data": {}})
+        response = self.responses.pop(0)
+        return response() if callable(response) else response
+
 
 def install_fake_api_session(monkeypatch, qa, session):
     original_init = qa.APIClient.__init__
@@ -1326,3 +1333,333 @@ def test_restore_payment_snapshot_rejects_different_run_temporary_cleanup():
         assert "E2E_UI_QA_not_valid_Temporary channel" not in str(error)
     else:
         raise AssertionError("restore allowed non-prefixed temporary cleanup")
+
+
+def test_quota_delta_assertion_matches_expected_credit_and_debit():
+    qa = load_qa_module()
+    qa.assert_quota_delta(before=0, after=10, expected_delta=10, label="recharge credit")
+    qa.assert_quota_delta(before=10, after=7, expected_delta=-3, label="issue debit")
+
+    try:
+        qa.assert_quota_delta(before=10, after=7, expected_delta=-2, label="issue debit")
+    except qa.QASafetyError as error:
+        assert "issue debit" in str(error)
+        assert "expected -2" in str(error)
+        assert "got -3" in str(error)
+    else:
+        raise AssertionError("wrong quota delta was accepted")
+
+
+def test_card_code_redaction_keeps_report_safe():
+    qa = load_qa_module()
+    redacted = qa.redact_card_codes(["ABCDEFG123456", "KAMI-ABCDEFG1234567"])
+
+    assert redacted == ["ABC***456", "KAM***567"]
+    assert "ABCDEFG123456" not in qa._format_report_line(redacted)
+    assert "KAMI-ABCDEFG1234567" not in qa._format_report_line(redacted)
+
+
+def test_register_merchant_posts_auth_register_without_exposing_password():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    base_url = "https://qa.example.invalid"
+    public_client = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "token": "merchant-token",
+                "role": "merchant",
+                "user_info": {"id": 42, "username": prefix + "merchant"},
+            }
+        ]
+    )
+
+    merchant = qa.register_merchant(base_url, prefix, client=public_client)
+
+    assert merchant.user_id == 42
+    assert merchant.auth.role == "merchant"
+    call = public_client.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == "/api/v1/auth/register"
+    payload = call["kwargs"]["json"]
+    assert payload["username"].startswith(prefix)
+    assert payload["email"].endswith("@example.invalid")
+    assert "password" in payload
+    assert call["kwargs"]["sensitive_values"] == [payload["password"]]
+    assert payload["password"] not in repr(merchant)
+
+
+def test_submit_and_approve_recharge_use_upload_and_confirm_text():
+    qa = load_qa_module()
+    merchant = qa.MerchantContext(
+        prefix="E2E_UI_QA_20260726_030000_abc123_",
+        base_url="https://qa.example.invalid",
+        username="merchant",
+        user_id=42,
+        auth=qa.AuthSession("merchant-token", "merchant", {"id": 42}),
+        client=FakeAPIClient([FakeResponse(payload={"success": True, "data": {"order_no": "RC123"}})]),
+    )
+    admin = FakeAPIClient([{"success": True, "data": {"order_no": "RC123", "credit_quota": 9910}}])
+
+    order = qa.submit_recharge_order(
+        merchant,
+        {"channel": "other", "option_id": 20, "amount": 991},
+    )
+    approved = qa.approve_recharge_order(admin, order["order_no"])
+
+    upload_call = merchant.client.calls[0]
+    assert upload_call["method"] == "POST"
+    assert upload_call["path"] == "/api/v1/merchant/recharge/orders/upload"
+    assert upload_call["kwargs"]["data"] == {
+        "amount": "991",
+        "mode": "fixed",
+        "option_id": "20",
+        "channel": "other",
+        "remark": merchant.prefix + "temporary recharge proof",
+    }
+    proof_name, proof_bytes, proof_type = upload_call["kwargs"]["files"]["proof_file"]
+    assert proof_name == "qa-proof.png"
+    assert proof_bytes.startswith(b"\x89PNG")
+    assert proof_type == "image/png"
+    assert approved["credit_quota"] == 9910
+    assert admin.calls[0]["path"] == "/api/v1/admin/commercial/recharge-orders/RC123/approve"
+    assert admin.calls[0]["kwargs"]["json"]["confirm_text"] == "确认审核入账"
+
+
+def test_self_owned_app_spec_and_issue_flow_never_calls_merchant_spec_create():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    merchant_client = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "data": {
+                    "app_id": "app_self",
+                    "app_secret": "secret-self",
+                    "rsa_public_key": "public-self",
+                },
+            },
+            {"success": True, "data": {"total_cost": 2, "balance_after": 98}},
+            {"success": True, "data": {"batch_id": 7, "batch_no": prefix + "batch_abcd", "count": 2, "codes": ["KAMI-ABCDEFG1234567", "KAMI-HIJKLMN9876543"]}},
+        ]
+    )
+    merchant = qa.MerchantContext(
+        prefix=prefix,
+        base_url="https://qa.example.invalid",
+        username="merchant",
+        user_id=42,
+        auth=qa.AuthSession("merchant-token", "merchant", {"id": 42}),
+        client=merchant_client,
+    )
+
+    app = qa.create_self_app(merchant, prefix)
+    spec = qa.create_self_spec(merchant, app.app_id)
+    batch = qa.issue_batch(merchant, app.app_id, spec, prefix)
+
+    assert app.app_id == "app_self"
+    assert spec.spec_id is None
+    assert spec.issue_payload["kami_type"] == "points"
+    assert batch.batch_id == 7
+    assert batch.codes == ["KAMI-ABCDEFG1234567", "KAMI-HIJKLMN9876543"]
+    assert not any("/specs" in call["path"] and call["method"] == "POST" for call in merchant_client.calls)
+    assert [call["path"] for call in merchant_client.calls] == [
+        "/api/v1/merchant/apps",
+        "/api/v1/merchant/apps/app_self/kamis/preview",
+        "/api/v1/merchant/apps/app_self/kamis/batch",
+    ]
+    issue_payload = merchant_client.calls[2]["kwargs"]["json"]
+    assert issue_payload["batch_no"].startswith(prefix)
+    assert issue_payload["spec_id"] is None
+    assert issue_payload["points_amount"] == 10
+
+
+def test_fetch_batch_cards_returns_count_and_redacted_samples_only():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    merchant = qa.MerchantContext(
+        prefix=prefix,
+        base_url="https://qa.example.invalid",
+        username="merchant",
+        user_id=42,
+        auth=qa.AuthSession("merchant-token", "merchant", {"id": 42}),
+        client=FakeAPIClient(
+            [
+                {
+                    "success": True,
+                    "data": {
+                        "total": 2,
+                        "items": [
+                            {"kami_code": "KAMI-ABCDEFG1234567"},
+                            {"code": "KAMI-HIJKLMN9876543"},
+                        ],
+                    },
+                }
+            ]
+        ),
+    )
+    batch = qa.BatchResult(
+        app_id="app_self",
+        batch_id=7,
+        batch_no=prefix + "batch_abcd",
+        count=2,
+        codes=["KAMI-ABCDEFG1234567", "KAMI-HIJKLMN9876543"],
+        preview={},
+        issue={},
+    )
+
+    summary = qa.fetch_batch_cards(merchant, batch)
+
+    assert summary == {"count": 2, "sample_codes": ["KAM***567", "KAM***543"]}
+    call = merchant.client.calls[0]
+    assert call["path"] == "/api/v1/merchant/kamis"
+    assert call["kwargs"]["params"] == {
+        "app_id": "app_self",
+        "batch_no": prefix + "batch_abcd",
+        "page": 1,
+        "page_size": 20,
+    }
+    assert "KAMI-ABCDEFG1234567" not in qa._format_report_line(summary)
+
+
+def test_verify_one_card_is_injectable_and_reports_only_redacted_code():
+    qa = load_qa_module()
+    calls = []
+
+    def fake_verifier(**kwargs):
+        calls.append(kwargs)
+        return {"success": True, "kami_code": kwargs["card_code"], "device_fingerprint": "fingerprint-1234567890"}
+
+    summary = qa.verify_one_card(
+        "https://qa.example.invalid",
+        "app_self",
+        "KAMI-ABCDEFG1234567",
+        app_secret="secret-self",
+        rsa_public_key="public-self",
+        verifier=fake_verifier,
+    )
+
+    assert calls[0]["app_secret"] == "secret-self"
+    assert summary["card_code"] == "KAM***567"
+    assert summary["success"] is True
+    safe_line = qa._format_report_line(summary)
+    assert "KAMI-ABCDEFG1234567" not in safe_line
+    assert "secret-self" not in safe_line
+    assert "fingerprint-1234567890" not in safe_line
+
+
+def test_admin_app_spec_authorization_and_permission_boundaries_use_expected_routes():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    admin = FakeAPIClient(
+        [
+            {"success": True, "data": {"app_id": "app_admin", "app_secret": "secret-admin", "rsa_public_key": "public-admin"}},
+            {"success": True, "data": {"id": 77, "app_id": "app_admin", "kami_type": "points"}},
+            {"success": True, "data": {"id": 88}},
+            {"success": True, "data": {}},
+        ]
+    )
+    merchant_client = FakeAPIClient(
+        [
+            {"success": False, "detail": "forbidden"},
+            {"success": False, "detail": "forbidden"},
+        ]
+    )
+    merchant = qa.MerchantContext(
+        prefix=prefix,
+        base_url="https://qa.example.invalid",
+        username="merchant",
+        user_id=42,
+        auth=qa.AuthSession("merchant-token", "merchant", {"id": 42}),
+        client=merchant_client,
+    )
+
+    app, spec = qa.create_admin_app_and_spec(admin, prefix)
+    authorization = qa.authorize_app_to_merchant(admin, merchant.user_id, app.app_id)
+    boundary = qa.verify_permission_boundaries(admin, merchant, prefix)
+
+    assert app.app_id == "app_admin"
+    assert spec.spec_id == 77
+    assert authorization["id"] == 88
+    assert admin.calls[0]["path"] == "/api/v1/admin/apps"
+    assert admin.calls[0]["kwargs"]["params"]["name"].startswith(prefix)
+    assert admin.calls[1]["path"] == "/api/v1/admin/kami-specs"
+    assert admin.calls[1]["kwargs"]["json"]["app_id"] == "app_admin"
+    assert admin.calls[1]["kwargs"]["json"]["spec_group"] == "custom"
+    assert admin.calls[2]["path"] == "/api/v1/admin/end-users/42/app-authorizations"
+    assert admin.calls[2]["kwargs"]["json"]["confirm_text"] == "确认授权应用"
+    assert merchant_client.calls[0]["path"] == "/api/v1/admin/commercial/recharge-orders"
+    assert merchant_client.calls[0]["expected"] == (401, 403)
+    assert admin.calls[3]["path"] == "/api/v1/merchant/me"
+    assert admin.calls[3]["expected"] == (401, 403)
+    assert merchant_client.calls[1]["path"] == f"/api/v1/merchant/apps/{prefix}other_app/specs"
+    assert boundary["checked"] == 3
+
+
+def test_cleanup_prefix_only_deletes_prefixed_human_readable_resources():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    admin = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "data": {
+                    "items": [
+                        {"id": 42, "username": prefix + "merchant"},
+                        {"id": 43, "username": "real-merchant"},
+                    ]
+                },
+            },
+            {
+                "success": True,
+                "data": [
+                    {"app_id": "app_admin", "name": prefix + "Admin app"},
+                    {"app_id": "app_real", "name": "Production app"},
+                ],
+            },
+            {"success": True, "data": {"deleted_users": 1}},
+            {"success": True, "data": {"id": "app_admin"}},
+        ]
+    )
+
+    summary = qa.cleanup_run(admin, prefix)
+
+    assert summary["merchant_user_ids"] == [42]
+    assert summary["admin_app_ids"] == ["app_admin"]
+    assert [call["path"] for call in admin.calls] == [
+        "/api/v1/admin/commercial/merchants",
+        "/api/v1/admin/apps",
+        "/api/v1/admin/end-users/delete",
+        "/api/v1/admin/apps/app_admin",
+    ]
+    assert admin.calls[2]["kwargs"]["json"] == {"user_ids": [42]}
+    assert admin.calls[3]["kwargs"]["params"]["confirm_text"] == "确认删除应用"
+
+
+def test_main_supports_preflight_run_production_and_cleanup_modes(monkeypatch, tmp_path):
+    qa = load_qa_module()
+    calls = []
+
+    monkeypatch.setattr(qa, "run_preflight", lambda config: calls.append(("preflight", config.base_url)) or {"ok": True})
+    monkeypatch.setattr(qa, "run_production_flow", lambda config: calls.append(("run", config.base_url)) or tmp_path / "report.md")
+    monkeypatch.setattr(qa, "login", lambda base_url, username, password: qa.AuthSession("admin-token", "admin", {"username": username}))
+
+    monkeypatch.setenv("LEMON_QA_BASE_URL", "https://qa.example.invalid")
+    monkeypatch.setenv("LEMON_QA_ADMIN_USERNAME", "admin")
+    monkeypatch.setenv("LEMON_QA_ADMIN_PASSWORD", "password")
+    monkeypatch.delenv("LEMON_QA_CONFIRM_PRODUCTION", raising=False)
+
+    assert qa.main(["--preflight"]) == 0
+    assert calls == [("preflight", "https://qa.example.invalid")]
+
+    monkeypatch.setenv("LEMON_QA_CONFIRM_PRODUCTION", qa.PRODUCTION_CONFIRMATION)
+    assert qa.main(["--run-production"]) == 0
+    assert calls[-1] == ("run", "https://qa.example.invalid")
+
+    cleanup_client = FakeAPIClient(
+        [
+            {"success": True, "data": {"items": []}},
+            {"success": True, "data": []},
+        ]
+    )
+    monkeypatch.setattr(qa, "APIClient", lambda base_url, auth=None: cleanup_client)
+    assert qa.main(["--cleanup-prefix", "E2E_UI_QA_20260726_030000_abc123_"]) == 0
