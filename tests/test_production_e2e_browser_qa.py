@@ -2,6 +2,7 @@ import importlib.util
 import base64
 import hashlib
 import subprocess
+import requests
 from datetime import datetime
 from pathlib import Path
 
@@ -53,6 +54,12 @@ def install_fake_api_session(monkeypatch, qa, session):
 
 def secret_digest(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def assert_text_excludes_secrets(text, secrets):
+    for secret in secrets:
+        if secret in text:
+            raise AssertionError("sensitive value leaked")
 
 
 def test_secret_redaction_masks_sensitive_values():
@@ -222,6 +229,33 @@ def test_api_client_attaches_bearer_authorization_and_default_timeout():
     assert call["kwargs"]["timeout"] == 30
 
 
+def test_api_client_wraps_request_exception_without_leaking_auth_or_password():
+    qa = load_qa_module()
+    token = "fake-client-session-value"
+    password = "fake-request-passphrase"
+
+    class FailingSession:
+        def request(self, method, url, **kwargs):
+            raise requests.RequestException(
+                f"Authorization: Bearer {token}; password={password}; token={token}"
+            )
+
+    client = qa.APIClient(
+        "https://qa.example.invalid",
+        auth=qa.AuthSession(token=token, role="admin", user_info={}),
+    )
+    client.session = FailingSession()
+
+    try:
+        client.request("POST", "/api/v1/protected", json={"password": password})
+    except qa.QASafetyError as error:
+        message = str(error)
+        assert "API POST /api/v1/protected request failed" in message
+        assert_text_excludes_secrets(message, [token, password])
+    else:
+        raise AssertionError("request exception was not wrapped")
+
+
 def test_login_uses_aes_key_for_encrypted_payload_and_returns_auth_session(monkeypatch):
     qa = load_qa_module()
     from crypto import CryptoHelper
@@ -264,6 +298,25 @@ def test_login_uses_aes_key_for_encrypted_payload_and_returns_auth_session(monke
     )
     assert decrypted["username"] == "fake-admin"
     assert secret_digest(decrypted["password"]) == secret_digest(password)
+
+
+def test_login_rejects_advertised_aes_key_when_encryption_fails_without_posting(monkeypatch):
+    qa = load_qa_module()
+    username = "fake-admin"
+    password = "fake-passphrase"
+    session = FakeSession([FakeResponse(payload={"success": True, "aes_key": "not-valid-aes-key"})])
+    install_fake_api_session(monkeypatch, qa, session)
+
+    try:
+        qa.login("https://qa.example.invalid", username, password)
+    except qa.QASafetyError as error:
+        message = str(error)
+        assert "encrypted login payload" in message
+        assert_text_excludes_secrets(message, [username, password])
+    else:
+        raise AssertionError("login fell back after advertised AES encryption failed")
+
+    assert len(session.calls) == 1
 
 
 def test_login_falls_back_to_plaintext_payload_for_legacy_public_key_only_response(monkeypatch):
@@ -314,9 +367,14 @@ def test_login_requires_token_and_sanitizes_password_and_token_in_error(monkeypa
     except qa.QASafetyError as error:
         message = str(error)
         assert "token" in message.lower()
-        assert "fake-passphrase-should-not-leak" not in message
-        assert "fake-session-value-should-not-leak" not in message
-        assert "fake-nested-session-value-should-not-leak" not in message
+        assert_text_excludes_secrets(
+            message,
+            [
+                "fake-passphrase-should-not-leak",
+                "fake-session-value-should-not-leak",
+                "fake-nested-session-value-should-not-leak",
+            ],
+        )
     else:
         raise AssertionError("login accepted a response without token")
 

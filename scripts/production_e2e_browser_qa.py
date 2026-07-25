@@ -130,6 +130,19 @@ def _sanitize_api_error_text(value, sensitive_values=()):
     return sanitized
 
 
+def _extract_sensitive_values(value):
+    found = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if _is_sensitive_key(key) and isinstance(item, str):
+                found.append(item)
+            found.extend(_extract_sensitive_values(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            found.extend(_extract_sensitive_values(item))
+    return found
+
+
 class APIClient:
     def __init__(self, base_url: str, auth: AuthSession | None = None):
         self.base_url = base_url
@@ -143,7 +156,15 @@ class APIClient:
             headers["Authorization"] = f"Bearer {self.auth.token}"
         kwargs["headers"] = headers
         kwargs.setdefault("timeout", 30)
-        return self.session.request(method, url, **kwargs)
+        try:
+            return self.session.request(method, url, **kwargs)
+        except requests.RequestException as error:
+            sensitive_values = []
+            if self.auth:
+                sensitive_values.append(self.auth.token)
+            sensitive_values.extend(_extract_sensitive_values(kwargs))
+            safe_error = _sanitize_api_error_text(str(error), sensitive_values)
+            raise QASafetyError(f"API {method} {path} request failed; error={safe_error!r}") from error
 
     def json(self, method, path, expected=(200,), **kwargs):
         sensitive_values = list(kwargs.pop("sensitive_values", []) or [])
@@ -167,14 +188,15 @@ class APIClient:
 
 def _build_login_payload(username, password, key_data):
     aes_key = key_data.get("aes_key") if isinstance(key_data, dict) else None
-    if aes_key:
+    if aes_key and str(aes_key).strip():
         try:
             from crypto import CryptoHelper
 
             encrypted = CryptoHelper.aes_encrypt({"username": username, "password": password}, aes_key)
             return {**encrypted, "encrypted": True}
-        except Exception:
-            pass
+        except Exception as error:
+            safe_error = _sanitize_api_error_text(str(error), [username, password, aes_key])
+            raise QASafetyError(f"Failed to build encrypted login payload; error={safe_error!r}") from error
     return {"username": username, "password": password, "encrypted": False}
 
 
