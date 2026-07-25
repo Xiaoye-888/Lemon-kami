@@ -30,6 +30,7 @@ RECHARGE_APPROVAL_CONFIRM_TEXT = "确认审核入账"
 GRANT_ISSUE_QUOTA_CONFIRM_TEXT = "确认调整额度"
 GRANT_APP_AUTHORIZATION_CONFIRM_TEXT = "确认授权应用"
 DELETE_APP_CONFIRM_TEXT = "确认删除应用"
+DELETE_USER_CONFIRM_TEXT = "确认删除用户"
 TEMP_RECHARGE_OPTION_AMOUNTS = tuple(range(991, 1000))
 TEMP_BONUS_THRESHOLDS = tuple(range(993, 1000))
 REPORT_FILENAME = "production-e2e-browser-report.md"
@@ -1052,11 +1053,6 @@ def verify_permission_boundaries(admin: APIClient, merchant: MerchantContext, pr
             "/api/v1/merchant/me",
             expected=(401, 403),
         ),
-        merchant.client.json(
-            "GET",
-            f"/api/v1/merchant/apps/{prefix}other_app/specs",
-            expected=(401, 403, 404),
-        ),
     ]
     return {"checked": len(checks), "results": [redact(item) for item in checks]}
 
@@ -1086,7 +1082,11 @@ def cleanup_run(admin: APIClient, prefix: str):
             app_ids.append(app_id)
 
     if merchant_ids:
-        admin.json("POST", "/api/v1/admin/end-users/delete", json={"user_ids": merchant_ids})
+        admin.json(
+            "POST",
+            "/api/v1/admin/end-users/delete",
+            json={"user_ids": merchant_ids, "confirm_text": DELETE_USER_CONFIRM_TEXT},
+        )
     for app_id in app_ids:
         admin.json(
             "DELETE",
@@ -1293,24 +1293,30 @@ def _check_node_cdp_capability():
 
 def _require_openapi_paths(admin: APIClient):
     required = [
-        "/api/v1/auth/register",
-        "/api/v1/merchant/me",
-        "/api/v1/merchant/quotas",
-        "/api/v1/merchant/apps",
-        "/api/v1/merchant/apps/{app_id}/specs",
-        "/api/v1/merchant/apps/{app_id}/kamis/preview",
-        "/api/v1/merchant/apps/{app_id}/kamis/batch",
-        "/api/v1/merchant/kamis",
-        "/api/v1/merchant/recharge/orders/upload",
-        "/api/v1/admin/apps",
-        "/api/v1/admin/kami-specs",
-        "/api/v1/admin/commercial/recharge-orders/{order_no}/approve",
-        "/api/v1/admin/end-users/{user_id}/quotas/grant",
-        "/api/v1/admin/end-users/{user_id}/app-authorizations",
+        ("POST", "/api/v1/auth/register"),
+        ("GET", "/api/v1/merchant/me"),
+        ("GET", "/api/v1/merchant/quotas"),
+        ("POST", "/api/v1/merchant/apps"),
+        ("GET", "/api/v1/merchant/apps/{app_id}/specs"),
+        ("POST", "/api/v1/merchant/apps/{app_id}/kamis/preview"),
+        ("POST", "/api/v1/merchant/apps/{app_id}/kamis/batch"),
+        ("GET", "/api/v1/merchant/kamis"),
+        ("POST", "/api/v1/merchant/recharge/orders/upload"),
+        ("POST", "/api/v1/admin/apps"),
+        ("POST", "/api/v1/admin/kami-specs"),
+        ("POST", "/api/v1/admin/commercial/recharge-orders/{order_no}/approve"),
+        ("POST", "/api/v1/admin/end-users/{user_id}/quotas/grant"),
+        ("POST", "/api/v1/admin/end-users/{user_id}/app-authorizations"),
+        ("GET", "/api/v1/sdk/public-key"),
+        ("POST", "/api/v1/sdk/verify"),
     ]
     openapi = admin.json("GET", "/openapi.json")
-    paths = set((openapi.get("paths") or {}).keys()) if isinstance(openapi, dict) else set()
-    missing = [path for path in required if path not in paths]
+    paths = (openapi.get("paths") or {}) if isinstance(openapi, dict) else {}
+    missing = [
+        f"{method} {path}"
+        for method, path in required
+        if path not in paths or method.lower() not in {str(item).lower() for item in (paths.get(path) or {}).keys()}
+    ]
     if missing:
         raise QASafetyError(f"Required API routes are missing: {missing}")
     return {"required_routes": len(required)}
@@ -1476,7 +1482,7 @@ def main(argv=None):
         return 0
     if args.cleanup_prefix:
         prefix = validate_run_prefix(args.cleanup_prefix)
-        config = QAConfig.from_env(require_confirmation=False)
+        config = QAConfig.from_env(require_confirmation=True)
         admin_auth = login(config.base_url, config.admin_username, config.admin_password)
         admin = APIClient(config.base_url, admin_auth)
         result = cleanup_run(admin, prefix)

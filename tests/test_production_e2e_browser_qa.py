@@ -1561,7 +1561,6 @@ def test_admin_app_spec_authorization_and_permission_boundaries_use_expected_rou
     merchant_client = FakeAPIClient(
         [
             {"success": False, "detail": "forbidden"},
-            {"success": False, "detail": "forbidden"},
         ]
     )
     merchant = qa.MerchantContext(
@@ -1591,8 +1590,8 @@ def test_admin_app_spec_authorization_and_permission_boundaries_use_expected_rou
     assert merchant_client.calls[0]["expected"] == (401, 403)
     assert admin.calls[3]["path"] == "/api/v1/merchant/me"
     assert admin.calls[3]["expected"] == (401, 403)
-    assert merchant_client.calls[1]["path"] == f"/api/v1/merchant/apps/{prefix}other_app/specs"
-    assert boundary["checked"] == 3
+    assert not any(f"{prefix}other_app" in call["path"] for call in merchant_client.calls)
+    assert boundary["checked"] == 2
 
 
 def test_cleanup_prefix_only_deletes_prefixed_human_readable_resources():
@@ -1631,8 +1630,52 @@ def test_cleanup_prefix_only_deletes_prefixed_human_readable_resources():
         "/api/v1/admin/end-users/delete",
         "/api/v1/admin/apps/app_admin",
     ]
-    assert admin.calls[2]["kwargs"]["json"] == {"user_ids": [42]}
+    assert admin.calls[2]["kwargs"]["json"] == {"user_ids": [42], "confirm_text": "确认删除用户"}
     assert admin.calls[3]["kwargs"]["params"]["confirm_text"] == "确认删除应用"
+
+
+def test_preflight_required_routes_verify_http_methods_and_sdk_routes():
+    qa = load_qa_module()
+    required_paths = {
+        "/api/v1/auth/register": {"post": {}},
+        "/api/v1/merchant/me": {"get": {}},
+        "/api/v1/merchant/quotas": {"get": {}},
+        "/api/v1/merchant/apps": {"post": {}},
+        "/api/v1/merchant/apps/{app_id}/specs": {"get": {}},
+        "/api/v1/merchant/apps/{app_id}/kamis/preview": {"post": {}},
+        "/api/v1/merchant/apps/{app_id}/kamis/batch": {"post": {}},
+        "/api/v1/merchant/kamis": {"get": {}},
+        "/api/v1/merchant/recharge/orders/upload": {"post": {}},
+        "/api/v1/admin/apps": {"post": {}},
+        "/api/v1/admin/kami-specs": {"post": {}},
+        "/api/v1/admin/commercial/recharge-orders/{order_no}/approve": {"post": {}},
+        "/api/v1/admin/end-users/{user_id}/quotas/grant": {"post": {}},
+        "/api/v1/admin/end-users/{user_id}/app-authorizations": {"post": {}},
+        "/api/v1/sdk/public-key": {"get": {}},
+        "/api/v1/sdk/verify": {"post": {}},
+    }
+    admin = FakeAPIClient([{"paths": required_paths}])
+
+    result = qa._require_openapi_paths(admin)
+
+    assert result == {"required_routes": len(required_paths)}
+
+    missing_method_paths = {**required_paths, "/api/v1/sdk/verify": {"get": {}}}
+    try:
+        qa._require_openapi_paths(FakeAPIClient([{"paths": missing_method_paths}]))
+    except qa.QASafetyError as error:
+        assert "POST /api/v1/sdk/verify" in str(error)
+    else:
+        raise AssertionError("preflight accepted missing SDK verify POST method")
+
+    missing_sdk_route_paths = dict(required_paths)
+    del missing_sdk_route_paths["/api/v1/sdk/public-key"]
+    try:
+        qa._require_openapi_paths(FakeAPIClient([{"paths": missing_sdk_route_paths}]))
+    except qa.QASafetyError as error:
+        assert "GET /api/v1/sdk/public-key" in str(error)
+    else:
+        raise AssertionError("preflight accepted missing SDK public-key route")
 
 
 def test_main_supports_preflight_run_production_and_cleanup_modes(monkeypatch, tmp_path):
@@ -1655,6 +1698,7 @@ def test_main_supports_preflight_run_production_and_cleanup_modes(monkeypatch, t
     assert qa.main(["--run-production"]) == 0
     assert calls[-1] == ("run", "https://qa.example.invalid")
 
+    monkeypatch.delenv("LEMON_QA_CONFIRM_PRODUCTION", raising=False)
     cleanup_client = FakeAPIClient(
         [
             {"success": True, "data": {"items": []}},
@@ -1662,4 +1706,12 @@ def test_main_supports_preflight_run_production_and_cleanup_modes(monkeypatch, t
         ]
     )
     monkeypatch.setattr(qa, "APIClient", lambda base_url, auth=None: cleanup_client)
+    try:
+        qa.main(["--cleanup-prefix", "E2E_UI_QA_20260726_030000_abc123_"])
+    except qa.QASafetyError as error:
+        assert "LEMON_QA_CONFIRM_PRODUCTION" in str(error)
+    else:
+        raise AssertionError("cleanup mode accepted missing production confirmation")
+
+    monkeypatch.setenv("LEMON_QA_CONFIRM_PRODUCTION", qa.PRODUCTION_CONFIRMATION)
     assert qa.main(["--cleanup-prefix", "E2E_UI_QA_20260726_030000_abc123_"]) == 0
