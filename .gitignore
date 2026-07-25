@@ -61,6 +61,7 @@ logs/
 # Local/generated bundles
 backups/
 ob/
+qa-artifacts/
 *.tar
 *.tar.gz
 
