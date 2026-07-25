@@ -1109,11 +1109,27 @@ const loadAppInterfaceFlags = async () => {
   syncTypeWithInterfaceFlags()
 }
 
+const isKnownAppId = (appId) => apps.value.some((app) => app.app_id === appId)
+
+const normalizeSelectedAppId = async () => {
+  const routeAppId = route.query.app_id ? String(route.query.app_id) : ''
+  if (routeAppId && isKnownAppId(routeAppId)) {
+    queryParams.app_id = routeAppId
+  } else {
+    queryParams.app_id = apps.value[0]?.app_id || ''
+  }
+  if (routeAppId && routeAppId !== queryParams.app_id) {
+    await router.replace({
+      path: '/admin/kamis/batches',
+      query: queryParams.app_id ? { app_id: queryParams.app_id } : {}
+    })
+  }
+}
+
 const loadApps = async () => {
   const res = await getApps()
   apps.value = res.data || []
-  if (route.query.app_id) queryParams.app_id = String(route.query.app_id)
-  if (!queryParams.app_id && apps.value.length > 0) queryParams.app_id = apps.value[0].app_id
+  await normalizeSelectedAppId()
   specForm.app_id = queryParams.app_id
   await loadAppInterfaceFlags()
   await loadSpecs()
