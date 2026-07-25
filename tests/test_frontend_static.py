@@ -587,3 +587,23 @@ def test_phase2_finance_page_has_reviewed_at_income_scope_and_exports():
     assert "\u5bfc\u51fa\u989d\u5ea6\u6d41\u6c34" in finance_view
     assert "\u9000\u6b3e" not in finance_view
     assert "\u51b2\u6b63" not in finance_view
+
+
+def test_phase2_merchant_card_search_export_and_batch_stats_are_visible():
+    merchant_api = (PROJECT_ROOT / "admin/src/api/merchant.js").read_text(encoding="utf-8")
+    admin_kamis = (PROJECT_ROOT / "admin/src/views/Kamis.vue").read_text(encoding="utf-8")
+    merchant_cards = (PROJECT_ROOT / "admin/src/views/MerchantCards.vue").read_text(encoding="utf-8")
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+
+    assert "/merchant/kamis" in merchant_api
+    assert "/merchant/kamis/export" in merchant_api
+    assert "exportMerchantKamis" in merchant_api
+    assert "\u6279\u6b21\u53f7" in merchant_cards
+    assert "\u5bfc\u51fa" in merchant_cards
+    assert "normalizedParams(false)" in merchant_cards
+    assert "\u4f4e\u989d\u5ea6\u63d0\u9192" in merchant_batches
+    assert "lowBalanceWarning" in merchant_batches
+    assert "unused_count" in merchant_batches
+    assert "active_count" in merchant_batches
+    assert "device_bound_count" in merchant_batches
+    assert "if (queryParams.keyword) params.keyword = queryParams.keyword" in admin_kamis

@@ -7,6 +7,7 @@ from sqlmodel import SQLModel, Session, create_engine, select
 
 import routes_admin_advanced
 import routes_commercial
+import routes_merchant
 from auth_utils import hash_password
 from main import app as fastapi_app
 from models import (
@@ -14,6 +15,10 @@ from models import (
     AdminUser,
     App,
     EndUser,
+    Kami,
+    KamiBatch,
+    KamiDeviceBinding,
+    KamiStatus,
     OpsBackupRecord,
     RechargeChannel,
     RechargeMode,
@@ -366,6 +371,162 @@ def test_finance_exports_respect_filters_and_include_bom():
         assert "流水号" in transaction_text
         assert "Q202607250201" in transaction_text
         assert "merchant-a" in transaction_text
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_global_kami_search_is_scoped_and_export_matches_filter():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    try:
+        with Session(engine) as session:
+            _, merchant = seed_admin_and_merchant(session)
+            other = EndUser(username="merchant-b", password_hash=hash_password("merchant-pass"), status=1)
+            app = App(
+                app_id="phase2_kami_search_app",
+                name="Phase2 Kami Search App",
+                app_secret="secret",
+                rsa_public_key="public",
+                rsa_private_key="private",
+                owner_user_id=merchant.id,
+                status=1,
+            )
+            session.add_all([other, app])
+            session.commit()
+            session.refresh(other)
+            session.add_all(
+                [
+                    Kami(
+                        app_id=app.app_id,
+                        kami_code="MERCHANT-A-001",
+                        kami_type="points",
+                        status=KamiStatus.unused,
+                        created_by_user_id=merchant.id,
+                        batch_no="B-A",
+                    ),
+                    Kami(
+                        app_id=app.app_id,
+                        kami_code="MERCHANT-B-001",
+                        kami_type="points",
+                        status=KamiStatus.unused,
+                        created_by_user_id=other.id,
+                        batch_no="B-B",
+                    ),
+                ]
+            )
+            session.commit()
+            merchant_id = merchant.id
+            merchant_username = merchant.username
+
+        fastapi_app.dependency_overrides[routes_merchant.get_current_merchant] = lambda: EndUser(
+            id=merchant_id,
+            username=merchant_username,
+            password_hash="hash",
+            status=1,
+        )
+
+        listed = client.get("/api/v1/merchant/kamis", params={"keyword": "MERCHANT"})
+        assert listed.status_code == 200
+        codes = [item["kami_code"] for item in listed.json()["items"]]
+        assert codes == ["MERCHANT-A-001"]
+
+        exported = client.get("/api/v1/merchant/kamis/export", params={"keyword": "MERCHANT-A"})
+        assert exported.status_code == 200
+        assert exported.content.startswith(b"\xef\xbb\xbf")
+        text = exported.content.decode("utf-8-sig")
+        assert "MERCHANT-A-001" in text
+        assert "MERCHANT-B-001" not in text
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_batches_include_status_stats_and_low_quota_warning():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    try:
+        with Session(engine) as session:
+            _, merchant = seed_admin_and_merchant(session)
+            account = UserQuotaAccount(
+                user_id=merchant.id,
+                username=merchant.username,
+                kami_issue_balance=5,
+                total_kami_issue_granted=5,
+            )
+            app = App(
+                app_id="phase2_batch_stats_app",
+                name="Phase2 Batch Stats App",
+                app_secret="secret",
+                rsa_public_key="public",
+                rsa_private_key="private",
+                owner_user_id=merchant.id,
+                status=1,
+            )
+            batch = KamiBatch(
+                app_id=app.app_id,
+                batch_no="B-STATS",
+                kami_type="points",
+                points_amount=100,
+                code_prefix="B",
+            )
+            session.add_all([account, app, batch])
+            session.commit()
+            session.add_all(
+                [
+                    Kami(
+                        app_id=app.app_id,
+                        kami_code="B-STATS-1",
+                        kami_type="points",
+                        status=KamiStatus.unused,
+                        created_by_user_id=merchant.id,
+                        batch_no="B-STATS",
+                    ),
+                    Kami(
+                        app_id=app.app_id,
+                        kami_code="B-STATS-2",
+                        kami_type="points",
+                        status=KamiStatus.active,
+                        created_by_user_id=merchant.id,
+                        batch_no="B-STATS",
+                    ),
+                    KamiDeviceBinding(
+                        app_id=app.app_id,
+                        kami_code="B-STATS-2",
+                        device_uuid="device-a",
+                        fingerprint="fingerprint-a",
+                    ),
+                ]
+            )
+            session.commit()
+            merchant_id = merchant.id
+            merchant_username = merchant.username
+
+        fastapi_app.dependency_overrides[routes_merchant.get_current_merchant] = lambda: EndUser(
+            id=merchant_id,
+            username=merchant_username,
+            password_hash="hash",
+            status=1,
+        )
+
+        batches = client.get("/api/v1/merchant/apps/phase2_batch_stats_app/batches")
+        assert batches.status_code == 200
+        item = batches.json()["items"][0]
+        assert item["stats"]["total_count"] == 2
+        assert item["stats"]["unused_count"] == 1
+        assert item["stats"]["active_count"] == 1
+        assert item["stats"]["device_bound_count"] == 1
+
+        quotas = client.get("/api/v1/merchant/quotas")
+        assert quotas.status_code == 200
+        assert quotas.json()["issue_card"]["low_balance_warning"] is True
+        assert quotas.json()["issue_card"]["warning_threshold"] == 20
     finally:
         fastapi_app.dependency_overrides.clear()
 

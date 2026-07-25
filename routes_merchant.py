@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import or_
 from sqlmodel import Session, select
@@ -20,8 +20,15 @@ from commercial_service import (
     recharge_order_payload,
     user_quota_transactions_payload,
 )
+from config import settings
 from database import get_session
 from datetime_utils import to_api_beijing_iso
+from kami_query_service import (
+    batch_stats_payload,
+    kami_csv,
+    kami_search_payload,
+    merchant_kami_statement,
+)
 from models import (
     App,
     Device,
@@ -259,6 +266,17 @@ def _merchant_device_payload_matches_keyword(payload: dict, keyword: Optional[st
     return any(keyword_lower in str(value).lower() for value in values if value is not None)
 
 
+def _merchant_quota_response_payload(data: dict) -> dict:
+    threshold = settings.MERCHANT_LOW_ISSUE_QUOTA_THRESHOLD
+    issue_card = {
+        "balance": data.get("kami_issue_balance", 0),
+        "total_granted": data.get("total_kami_issue_granted", 0),
+        "warning_threshold": threshold,
+        "low_balance_warning": data.get("kami_issue_balance", 0) < threshold,
+    }
+    return {**data, "issue_card": issue_card}
+
+
 async def get_current_merchant(
     current_user: EndUser = Depends(routes_user.get_current_end_user),
 ) -> EndUser:
@@ -295,7 +313,8 @@ async def get_merchant_quotas(
 ):
     data = merchant_quota_summary(session, current_user)
     session.commit()
-    return {"success": True, "data": data}
+    payload = _merchant_quota_response_payload(data)
+    return {"success": True, "data": payload, "issue_card": payload["issue_card"]}
 
 
 @router.get("/quota-transactions", summary="List merchant quota transactions")
@@ -615,6 +634,60 @@ async def get_merchant_recharge_proof(
     return FileResponse(order.proof_file_path, media_type=order.proof_content_type or "application/octet-stream")
 
 
+@router.get("/kamis/export", summary="Export merchant issued kamis CSV")
+async def export_merchant_kamis(
+    app_id: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    batch_no: Optional[str] = Query(None),
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    try:
+        statement = merchant_kami_statement(
+            session,
+            user_id=current_user.id,
+            app_id=app_id,
+            keyword=keyword,
+            status=status,
+            batch_no=batch_no,
+        )
+        content = kami_csv(session, statement)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="merchant-kamis.csv"'},
+    )
+
+
+@router.get("/kamis", summary="List merchant issued kamis across visible apps")
+async def list_merchant_global_kamis(
+    app_id: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    batch_no: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    try:
+        statement = merchant_kami_statement(
+            session,
+            user_id=current_user.id,
+            app_id=app_id,
+            keyword=keyword,
+            status=status,
+            batch_no=batch_no,
+        )
+        payload = kami_search_payload(session, statement, page=page, page_size=page_size)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return {"success": True, "data": payload, **payload}
+
+
 @router.get("/apps", summary="List merchant apps")
 async def list_merchant_apps(
     current_user: EndUser = Depends(get_current_merchant),
@@ -796,15 +869,8 @@ async def list_merchant_batches(
     ).all()
     result = []
     for batch in batches:
-        count = len(
-            session.exec(
-                select(Kami).where(
-                    Kami.app_id == app_id,
-                    Kami.batch_no == batch.batch_no,
-                    Kami.created_by_user_id == current_user.id,
-                )
-            ).all()
-        )
+        stats = batch_stats_payload(session, batch, created_by_user_id=current_user.id)
+        count = stats["total_count"]
         if count <= 0:
             continue
         result.append(
@@ -815,7 +881,10 @@ async def list_merchant_batches(
                 "batch_no": batch.batch_no,
                 "kami_type": batch.kami_type.value if hasattr(batch.kami_type, "value") else batch.kami_type,
                 "count": count,
+                "stats": stats,
+                "unit_issue_cost": 1,
+                "total_issue_cost": count,
                 "created_at": to_api_beijing_iso(batch.created_at, naive="civil") if batch.created_at else None,
             }
         )
-    return {"success": True, "data": result}
+    return {"success": True, "data": result, "items": result}

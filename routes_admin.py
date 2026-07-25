@@ -3757,6 +3757,7 @@ async def export_kamis(
     kami_type: Optional[str] = Query(None, description="卡密类型"),
     spec_id: Optional[int] = Query(None, description="卡密规格ID"),
     batch_no: Optional[str] = Query(None, description="卡密批次号"),
+    keyword: Optional[str] = Query(None, description="Search kami code, batch number, or device code"),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
@@ -3785,6 +3786,15 @@ async def export_kamis(
         statement = statement.where(Kami.batch_no == batch_no)
     elif spec_id:
         statement = statement.where(Kami.spec_id == spec_id)
+    if keyword:
+        keyword_like = f"%{keyword}%"
+        statement = statement.where(
+            or_(
+                Kami.kami_code.like(keyword_like),
+                Kami.batch_no.like(keyword_like),
+                Kami.bind_uuid.like(keyword_like),
+            )
+        )
 
     kamis = session.exec(statement.order_by(Kami.id.desc())).all()
     device_summary_by_code = _kami_device_summary_by_code(session, kamis)

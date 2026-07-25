@@ -107,7 +107,24 @@ export function previewMerchantKamis(appId, data) {
   })
 }
 
-export function getMerchantKamis(appId) {
+export function getMerchantKamis(params) {
+  return request({
+    url: '/merchant/kamis',
+    method: 'get',
+    params
+  })
+}
+
+export function exportMerchantKamis(params) {
+  return request({
+    url: '/merchant/kamis/export',
+    method: 'get',
+    params,
+    responseType: 'blob'
+  })
+}
+
+export function getMerchantAppKamis(appId) {
   return request({
     url: `/merchant/apps/${appId}/kamis`,
     method: 'get'

@@ -542,6 +542,7 @@ const handleExportKamis = async () => {
   if (queryParams.spec_id && !queryParams.batch_no) params.spec_id = queryParams.spec_id
   if (queryParams.batch_no) params.batch_no = queryParams.batch_no
   if (queryParams.kami_type) params.kami_type = queryParams.kami_type
+  if (queryParams.keyword) params.keyword = queryParams.keyword
   const response = await exportKamis(params)
   downloadBlob(response, `kamis_${queryParams.app_id}_${queryParams.batch_no || (queryParams.spec_id ? `spec_${queryParams.spec_id}` : 'all')}.csv`)
 }

@@ -8,6 +8,15 @@
     <section class="batch-grid">
       <el-card shadow="never" class="panel">
         <template #header>生成卡密</template>
+        <el-alert
+          v-if="lowBalanceWarning"
+          class="quota-warning"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="低额度提醒"
+          :description="`当前发卡额度 ${issueCardQuota.balance}，低于预警值 ${issueCardQuota.warning_threshold}`"
+        />
         <el-form :model="form" label-width="92px">
           <el-form-item label="应用">
             <el-select v-model="form.app_id" placeholder="选择应用" style="width: 100%" @change="handleAppChange">
@@ -62,6 +71,12 @@
         <el-table :data="batches" v-loading="loading" border stripe>
           <el-table-column prop="batch_no" label="批次号" min-width="170" show-overflow-tooltip />
           <el-table-column prop="count" label="数量" width="80" />
+          <el-table-column prop="stats.unused_count" label="未用" width="72" />
+          <el-table-column prop="stats.active_count" label="激活" width="72" />
+          <el-table-column prop="stats.frozen_count" label="冻结" width="72" />
+          <el-table-column prop="stats.expired_count" label="过期" width="72" />
+          <el-table-column prop="stats.device_bound_count" label="绑定设备" width="96" />
+          <el-table-column prop="total_issue_cost" label="消耗额度" width="96" />
           <el-table-column prop="kami_type" label="类型" width="100" />
           <el-table-column prop="created_at" label="创建时间" width="170" />
         </el-table>
@@ -73,7 +88,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getMerchantAppSpecs, getMerchantApps, getMerchantBatches, issueMerchantKamis, previewMerchantKamis } from '../api/merchant'
+import { getMerchantAppSpecs, getMerchantApps, getMerchantBatches, getMerchantQuotas, issueMerchantKamis, previewMerchantKamis } from '../api/merchant'
 
 const loading = ref(false)
 const issuing = ref(false)
@@ -82,6 +97,11 @@ const apps = ref([])
 const specs = ref([])
 const batches = ref([])
 const issuePreview = ref(null)
+const issueCardQuota = ref({
+  balance: 0,
+  warning_threshold: 0,
+  low_balance_warning: false
+})
 
 const form = reactive({
   app_id: '',
@@ -97,6 +117,7 @@ const form = reactive({
 })
 
 const selectedApp = computed(() => apps.value.find((item) => item.app_id === form.app_id))
+const lowBalanceWarning = computed(() => issueCardQuota.value.low_balance_warning)
 const canIssueInputs = computed(() => {
   if (!form.app_id || form.count <= 0) return false
   if (selectedApp.value && !selectedApp.value.is_owned) return Boolean(form.spec_id)
@@ -140,6 +161,15 @@ async function loadApps() {
   if (!form.app_id && apps.value.length) form.app_id = apps.value[0].app_id
 }
 
+async function loadQuota() {
+  const res = await getMerchantQuotas()
+  issueCardQuota.value = res.data?.issue_card || {
+    balance: res.data?.kami_issue_balance || 0,
+    warning_threshold: 0,
+    low_balance_warning: false
+  }
+}
+
 async function loadSpecs() {
   specs.value = []
   form.spec_id = null
@@ -163,6 +193,7 @@ async function loadBatches() {
 async function loadAll() {
   loading.value = true
   try {
+    await loadQuota()
     await loadApps()
     await loadSpecs()
     await loadBatches()
@@ -228,6 +259,10 @@ onMounted(loadAll)
 
 .panel {
   border-radius: 8px;
+}
+
+.quota-warning {
+  margin-bottom: 14px;
 }
 
 .issue-preview {
