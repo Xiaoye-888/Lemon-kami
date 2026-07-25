@@ -3,6 +3,8 @@ from datetime import datetime
 import json
 from pathlib import Path
 import re
+import subprocess
+from typing import Any
 import uuid
 
 
@@ -18,6 +20,11 @@ SECRET_KEYS = {
 }
 MASKED_VALUE_KEYS = {"kami", "kami_code", "code", "device_fingerprint", "fingerprint"}
 REPORT_FILENAME = "production-e2e-browser-report.md"
+VIEWPORTS = [
+    {"name": "desktop", "width": 1440, "height": 900},
+    {"name": "wide", "width": 1920, "height": 1080},
+    {"name": "mobile", "width": 390, "height": 844},
+]
 RUN_PREFIX_RE = re.compile(r"^E2E_UI_QA_\d{8}_\d{6}_[A-Za-z0-9]{6,16}_$")
 FORBIDDEN_REPORT_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
@@ -54,6 +61,83 @@ STRING_SECRET_PATTERNS = tuple(
 
 class QASafetyError(RuntimeError):
     pass
+
+
+def browser_routes():
+    return {
+        "public": ["/", "/login", "/docs/api"],
+        "admin": [
+            "/admin/dashboard",
+            "/admin/commercial/merchants",
+            "/admin/commercial/recharge-orders",
+            "/admin/commercial/recharge-settings",
+            "/admin/commercial/issue-pricing",
+            "/admin/commercial/finance",
+            "/admin/commercial/audit-logs",
+            "/admin/ops",
+            "/admin/commercial/quota-transactions",
+            "/admin/apps/info",
+            "/admin/apps/notices",
+            "/admin/apps/versions",
+            "/admin/kamis/batches",
+            "/admin/kamis/list",
+            "/admin/devices",
+            "/admin/end-users",
+            "/admin/users",
+            "/admin/logs",
+            "/admin/interfaces/new",
+            "/admin/interfaces/list",
+            "/docs/api",
+        ],
+        "merchant": [
+            "/merchant/dashboard",
+            "/merchant/recharge",
+            "/merchant/orders",
+            "/merchant/transactions",
+            "/merchant/apps",
+            "/merchant/batches",
+            "/merchant/cards",
+            "/merchant/devices",
+            "/merchant/account",
+        ],
+    }
+
+
+def run_browser_sweep(base_url: str, artifact_dir: Path, admin_session: dict, merchant_session: dict) -> list[dict[str, Any]]:
+    helper = Path(__file__).resolve().with_name("browser_cdp_sweep.mjs")
+    if not helper.exists():
+        raise QASafetyError(f"Browser CDP helper is missing: {helper}")
+
+    payload = {
+        "baseUrl": base_url,
+        "artifactDir": str(artifact_dir),
+        "viewports": VIEWPORTS,
+        "routes": browser_routes(),
+        "sessions": {
+            "admin": admin_session,
+            "merchant": merchant_session,
+        },
+    }
+    raw_payload = json.dumps(payload, ensure_ascii=True)
+    completed = subprocess.run(
+        ["node", str(helper)],
+        input=raw_payload,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        stderr = sanitize_report_string(completed.stderr.strip())
+        stdout = sanitize_report_string(completed.stdout.strip())
+        raise QASafetyError(
+            f"Browser CDP sweep failed with exit {completed.returncode}; stderr={stderr!r}; stdout={stdout!r}"
+        )
+
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        stdout = sanitize_report_string(completed.stdout.strip())
+        raise QASafetyError(f"Browser CDP sweep returned invalid JSON: {error}; stdout={stdout!r}") from error
 
 
 def build_run_prefix(now=None, suffix=None):
@@ -154,11 +238,21 @@ def evaluate_browser_result(result):
         body_text_length = result.get("bodyTextLength", 0)
     if body_text_length < 40:
         findings.append(_finding("P1", route, viewport, "Page body text is unexpectedly sparse"))
-    if layout.get("horizontal_overflow"):
+    horizontal_overflow = layout.get("horizontal_overflow")
+    if horizontal_overflow is None:
+        horizontal_overflow = layout.get("horizontalOverflow")
+    large_blank_ratio = layout.get("large_blank_ratio")
+    if large_blank_ratio is None:
+        large_blank_ratio = layout.get("largeBlankRatio", 0)
+    overwide_cards = layout.get("overwide_cards")
+    if overwide_cards is None:
+        overwide_cards = layout.get("overwideCards")
+
+    if horizontal_overflow:
         findings.append(_finding("P2", route, viewport, "Horizontal overflow detected"))
-    if layout.get("large_blank_ratio", 0) >= 0.55:
+    if large_blank_ratio >= 0.55:
         findings.append(_finding("P2", route, viewport, "Large blank page area detected"))
-    if layout.get("overwide_cards"):
+    if overwide_cards:
         findings.append(_finding("P2", route, viewport, "Overwide cards detected"))
 
     return findings

@@ -233,6 +233,16 @@ def test_report_writer_rejects_unsanitized_private_key_markers(tmp_path):
         raise AssertionError("report writer allowed private key marker")
 
 
+def test_browser_routes_for_roles_are_declared():
+    qa = load_qa_module()
+    routes = qa.browser_routes()
+    assert "/login" in routes["public"]
+    assert "/admin/dashboard" in routes["admin"]
+    assert "/admin/commercial/recharge-settings" in routes["admin"]
+    assert "/merchant/dashboard" in routes["merchant"]
+    assert "/merchant/batches" in routes["merchant"]
+
+
 def test_browser_result_evaluation_flags_layout_and_runtime_failures():
     qa = load_qa_module()
     clean_result = {
@@ -269,3 +279,28 @@ def test_browser_result_evaluation_flags_layout_and_runtime_failures():
         assert findings
         assert findings[0]["severity"] == severity
         assert findings[0]["message"] == message
+
+
+def test_browser_result_evaluation_accepts_cdp_layout_keys():
+    qa = load_qa_module()
+    result = {
+        "route": "/admin/dashboard",
+        "viewport": "mobile",
+        "console_errors": [],
+        "exceptions": [],
+        "network_failures": [],
+        "bodyTextLength": 1200,
+        "layout": {
+            "horizontalOverflow": True,
+            "largeBlankRatio": 0.72,
+            "overwideCards": [{"className": "el-card", "width": 380}],
+        },
+    }
+
+    findings = qa.evaluate_browser_result(result)
+
+    assert [finding["message"] for finding in findings] == [
+        "Horizontal overflow detected",
+        "Large blank page area detected",
+        "Overwide cards detected",
+    ]
