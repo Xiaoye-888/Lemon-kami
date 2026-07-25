@@ -629,6 +629,11 @@ def test_report_writer_sanitizes_sensitive_key_names_in_diagnostic_text(tmp_path
         [
             "app_secret is required for SDK-compatible verification",
             '{"token":"token-value","app_secret": "secret-value","password":"password-value"}',
+            "app_secret=secret-equals-value",
+            "app_secret: secret-colon-value",
+            "private_key=private-key-value",
+            "ssh_key=ssh-key-value",
+            "secret=generic-secret-value",
         ],
     )
 
@@ -640,6 +645,11 @@ def test_report_writer_sanitizes_sensitive_key_names_in_diagnostic_text(tmp_path
     assert "token-value" not in content
     assert "secret-value" not in content
     assert "password-value" not in content
+    assert "secret-equals-value" not in content
+    assert "secret-colon-value" not in content
+    assert "private-key-value" not in content
+    assert "ssh-key-value" not in content
+    assert "generic-secret-value" not in content
     assert "<redacted>" in content
     report.write()
     assert (tmp_path / "production-e2e-browser-report.md").exists()

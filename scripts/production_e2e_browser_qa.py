@@ -99,6 +99,12 @@ QUOTED_SECRET_KV_RE = re.compile(
     + r")\1\s*:\s*([\"']).*?\3",
     re.IGNORECASE,
 )
+UNQUOTED_SECRET_KV_RE = re.compile(
+    r"(?<![A-Za-z0-9_])("
+    + "|".join(re.escape(key) for key in SENSITIVE_TEXT_KEY_NAMES)
+    + r")(?![A-Za-z0-9_])\s*[:=]\s*[^,\s;}\]]+",
+    re.IGNORECASE,
+)
 
 
 class QASafetyError(RuntimeError):
@@ -1245,8 +1251,11 @@ def sanitize_report_string(value):
     text = str(value)
     text = CARD_CODE_RE.sub(lambda match: mask_middle(match.group(0)), text)
     text = FINGERPRINT_RE.sub(lambda match: mask_middle(match.group(0)), text)
+    for pattern in STRING_SECRET_PATTERNS[:2]:
+        text = pattern.sub("<redacted>", text)
     text = QUOTED_SECRET_KV_RE.sub(r'"<redacted_key>":"<redacted>"', text)
-    for pattern in STRING_SECRET_PATTERNS:
+    text = UNQUOTED_SECRET_KV_RE.sub("<redacted>", text)
+    for pattern in STRING_SECRET_PATTERNS[2:]:
         text = pattern.sub("<redacted>", text)
     text = SENSITIVE_TEXT_KEY_RE.sub("<redacted_key>", text)
     return text
