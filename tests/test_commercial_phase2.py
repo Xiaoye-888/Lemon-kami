@@ -1132,3 +1132,91 @@ def test_admin_audit_logs_are_filterable_and_include_confirmation_texts():
         assert keyword_data["confirmation_texts"]["delete_payment_qrcode"] == "确认删除二维码"
     finally:
         fastapi_app.dependency_overrides.clear()
+
+
+def test_phase2_acceptance_recharge_approval_finance_audit_and_export_flow():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+    order_no = "R202607250401"
+
+    try:
+        with Session(engine) as session:
+            _, merchant = seed_admin_and_merchant(session)
+            session.add(
+                RechargeOrder(
+                    order_no=order_no,
+                    user_id=merchant.id,
+                    username=merchant.username,
+                    mode=RechargeMode.custom,
+                    channel=RechargeChannel.wechat,
+                    amount_cents=3000,
+                    base_quota=30,
+                    bonus_quota=5,
+                    credit_quota=35,
+                    status=RechargeOrderStatus.pending_review,
+                )
+            )
+            session.commit()
+
+        approved = client.post(
+            f"/api/v1/admin/commercial/recharge-orders/{order_no}/approve",
+            json={"confirm_text": CONFIRM_TEXT_BY_SCOPE["approve_recharge_order"]},
+        )
+        assert approved.status_code == 200, approved.text
+
+        with Session(engine) as session:
+            order = session.exec(
+                select(RechargeOrder).where(RechargeOrder.order_no == order_no)
+            ).one()
+            assert order.status == RechargeOrderStatus.approved
+            assert order.reviewed_at is not None
+            reviewed_day = order.reviewed_at.date().isoformat()
+
+            account = session.exec(
+                select(UserQuotaAccount).where(UserQuotaAccount.user_id == order.user_id)
+            ).one()
+            assert account.kami_issue_balance == 35
+            transaction = session.exec(
+                select(UserQuotaTransaction).where(
+                    UserQuotaTransaction.transaction_id == order.quota_transaction_id
+                )
+            ).one()
+            assert transaction.amount == 35
+            assert transaction.biz_id == f"recharge_order:{order_no}"
+
+        finance = client.get(
+            "/api/v1/admin/commercial/finance/summary",
+            params={"start_date": reviewed_day, "end_date": reviewed_day},
+        )
+        assert finance.status_code == 200
+        finance_data = finance.json()
+        assert finance_data["income_basis"] == "reviewed_at"
+        assert finance_data["approved_order_count"] == 1
+        assert finance_data["approved_amount"] == 30
+        assert finance_data["credited_issue_quota"] == 35
+        assert finance_data["bonus_issue_quota"] == 5
+
+        audits = client.get(
+            "/api/v1/admin/commercial/audit-logs",
+            params={"action": "approve_recharge_order"},
+        )
+        assert audits.status_code == 200
+        audit_items = audits.json()["data"]["items"]
+        assert audit_items[0]["status"] == "success"
+        assert audit_items[0]["resource_id"] == order_no
+        assert audit_items[0]["target_username"] == "merchant-a"
+
+        exported = client.get(
+            "/api/v1/admin/commercial/recharge-orders/export",
+            params={"status": "approved", "start_date": reviewed_day, "end_date": reviewed_day},
+        )
+        assert exported.status_code == 200
+        exported_text = exported.content.decode("utf-8-sig")
+        assert "订单号" in exported_text
+        assert order_no in exported_text
+    finally:
+        fastapi_app.dependency_overrides.clear()
