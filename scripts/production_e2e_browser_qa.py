@@ -871,6 +871,8 @@ def _issue_payload_from_spec(spec: SpecDescriptor, prefix: str, count=2):
         "code_length": 12,
         "charset": "upper_numeric",
     }
+    if spec.source == "admin_authorized":
+        return payload
     payload.update(spec.issue_payload)
     return payload
 
@@ -1040,7 +1042,27 @@ def create_admin_app_and_spec(admin: APIClient, prefix: str):
     spec_data = _payload_data(spec_response)
     if not spec_data.get("id"):
         raise QASafetyError("Admin spec creation response missing id")
-    spec = SpecDescriptor(spec_id=spec_data["id"], issue_payload={"spec_id": spec_data["id"]}, source="admin_authorized")
+    safe_spec_fields = {
+        "spec_id": spec_data["id"],
+    }
+    for key in (
+        "kami_type",
+        "points_amount",
+        "points_valid_days",
+        "spec_group",
+        "machine_bind_mode",
+        "authorization_owner",
+        "user_bind_mode",
+        "status",
+        "sort_order",
+        "remark",
+    ):
+        value = spec_data.get(key)
+        if value is None:
+            value = spec_payload.get(key)
+        if value is not None:
+            safe_spec_fields[key] = value
+    spec = SpecDescriptor(spec_id=spec_data["id"], issue_payload=safe_spec_fields, source="admin_authorized")
     return app, spec
 
 

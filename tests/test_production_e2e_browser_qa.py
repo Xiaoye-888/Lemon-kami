@@ -1792,7 +1792,13 @@ def test_flow_report_sections_include_self_and_authorized_spec_summaries(tmp_pat
     )
     authorized_spec = qa.SpecDescriptor(
         spec_id=77,
-        issue_payload={"spec_id": 77, "kami_type": "points"},
+        issue_payload={
+            "spec_id": 77,
+            "kami_type": "points",
+            "points_amount": 10,
+            "points_valid_days": 30,
+            "spec_group": "custom",
+        },
         source="admin_authorized",
     )
     self_batch = qa.BatchResult("app_self", 7, prefix + "self_batch", 2, [], {}, {})
@@ -1833,6 +1839,9 @@ def test_flow_report_sections_include_self_and_authorized_spec_summaries(tmp_pat
     assert "admin_authorized" in content
     assert '"spec_id": 77' in content
     assert '"kami_type": "points"' in content
+    assert '"points_amount": 10' in content
+    assert '"points_valid_days": 30' in content
+    assert '"spec_group": "custom"' in content
     assert "KAM***567" in content
     assert "KAM***543" in content
 
@@ -1868,6 +1877,19 @@ def test_admin_app_spec_authorization_and_permission_boundaries_use_expected_rou
 
     assert app.app_id == "app_admin"
     assert spec.spec_id == 77
+    assert spec.issue_payload["spec_id"] == 77
+    assert spec.issue_payload["kami_type"] == "points"
+    assert spec.issue_payload["points_amount"] == 10
+    assert spec.issue_payload["points_valid_days"] == 30
+    assert spec.issue_payload["spec_group"] == "custom"
+    issue_payload = qa._issue_payload_from_spec(spec, prefix, count=2)
+    assert issue_payload["spec_id"] == 77
+    assert issue_payload["count"] == 2
+    assert issue_payload["batch_no"].startswith(prefix)
+    assert "kami_type" not in issue_payload
+    assert "points_amount" not in issue_payload
+    assert "points_valid_days" not in issue_payload
+    assert "spec_group" not in issue_payload
     assert authorization["id"] == 88
     assert admin.calls[0]["path"] == "/api/v1/admin/apps"
     assert admin.calls[0]["kwargs"]["params"]["name"].startswith(prefix)
