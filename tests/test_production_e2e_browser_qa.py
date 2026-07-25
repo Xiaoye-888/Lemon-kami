@@ -1,4 +1,6 @@
 import importlib.util
+import base64
+import hashlib
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +39,20 @@ class FakeSession:
         if not self.responses:
             raise AssertionError("unexpected API request")
         return self.responses.pop(0)
+
+
+def install_fake_api_session(monkeypatch, qa, session):
+    original_init = qa.APIClient.__init__
+
+    def fake_init(self, base_url, auth=None):
+        original_init(self, base_url, auth)
+        self.session = session
+
+    monkeypatch.setattr(qa.APIClient, "__init__", fake_init)
+
+
+def secret_digest(value):
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def test_secret_redaction_masks_sensitive_values():
@@ -206,43 +222,75 @@ def test_api_client_attaches_bearer_authorization_and_default_timeout():
     assert call["kwargs"]["timeout"] == 30
 
 
-def test_login_returns_auth_session_with_role_and_user_info(monkeypatch):
+def test_login_uses_aes_key_for_encrypted_payload_and_returns_auth_session(monkeypatch):
     qa = load_qa_module()
+    from crypto import CryptoHelper
+
+    aes_key = base64.b64encode(b"0123456789abcdef").decode("ascii")
+    response_token = "fake-session-value"
+    password = "fake-passphrase"
     session = FakeSession(
         [
-            FakeResponse(payload={"success": True, "public_key": "unused-public-key"}),
+            FakeResponse(payload={"success": True, "aes_key": aes_key}),
             FakeResponse(
                 payload={
                     "success": True,
-                    "token": "fake-login-token",
+                    "token": response_token,
                     "role": "admin",
                     "user_info": {"id": 1, "username": "fake-admin"},
                 }
             ),
         ]
     )
-    original_init = qa.APIClient.__init__
+    install_fake_api_session(monkeypatch, qa, session)
+    auth = qa.login("https://qa.example.invalid", "fake-admin", password)
 
-    def fake_init(self, base_url, auth=None):
-        original_init(self, base_url, auth)
-        self.session = session
-
-    monkeypatch.setattr(qa.APIClient, "__init__", fake_init)
-    auth = qa.login("https://qa.example.invalid", "fake-admin", "fake-password")
-
-    assert auth == qa.AuthSession(
-        token="fake-login-token",
-        role="admin",
-        user_info={"id": 1, "username": "fake-admin"},
-    )
+    assert secret_digest(auth.token) == secret_digest(response_token)
+    assert auth.role == "admin"
+    assert auth.user_info == {"id": 1, "username": "fake-admin"}
     assert session.calls[0]["method"] == "GET"
     assert session.calls[0]["url"].endswith("/api/v1/auth/login/public-key")
     assert session.calls[1]["method"] == "POST"
-    assert session.calls[1]["kwargs"]["json"] == {
-        "username": "fake-admin",
-        "password": "fake-password",
-        "encrypted": False,
-    }
+    payload = session.calls[1]["kwargs"]["json"]
+    assert payload["encrypted"] is True
+    assert "encrypted_data" in payload
+    assert "iv" in payload
+    assert "username" not in payload
+    assert "password" not in payload
+    decrypted = CryptoHelper.aes_decrypt(
+        encrypted_data=payload["encrypted_data"],
+        key_b64=aes_key,
+        iv=payload["iv"],
+    )
+    assert decrypted["username"] == "fake-admin"
+    assert secret_digest(decrypted["password"]) == secret_digest(password)
+
+
+def test_login_falls_back_to_plaintext_payload_for_legacy_public_key_only_response(monkeypatch):
+    qa = load_qa_module()
+    password = "fake-passphrase"
+    session = FakeSession(
+        [
+            FakeResponse(payload={"success": True, "public_key": "unused-public-key"}),
+            FakeResponse(
+                payload={
+                    "success": True,
+                    "token": "fake-session-value",
+                    "role": "admin",
+                    "user_info": {"id": 1, "username": "fake-admin"},
+                }
+            ),
+        ]
+    )
+    install_fake_api_session(monkeypatch, qa, session)
+    auth = qa.login("https://qa.example.invalid", "fake-admin", password)
+
+    assert auth.role == "admin"
+    assert auth.user_info["username"] == "fake-admin"
+    payload = session.calls[1]["kwargs"]["json"]
+    assert payload["encrypted"] is False
+    assert payload["username"] == "fake-admin"
+    assert secret_digest(payload["password"]) == secret_digest(password)
 
 
 def test_login_requires_token_and_sanitizes_password_and_token_in_error(monkeypatch):
@@ -254,27 +302,21 @@ def test_login_requires_token_and_sanitizes_password_and_token_in_error(monkeypa
                 payload={
                     "success": True,
                     "role": "admin",
-                    "user_info": {"token": "fake-nested-token-should-not-leak"},
+                    "user_info": {"token": "fake-nested-session-value-should-not-leak"},
                 },
-                text='{"token":"fake-token-should-not-leak","detail":"fake-password-should-not-leak"}',
+                text='{"token":"fake-session-value-should-not-leak","detail":"fake-passphrase-should-not-leak"}',
             ),
         ]
     )
-    original_init = qa.APIClient.__init__
-
-    def fake_init(self, base_url, auth=None):
-        original_init(self, base_url, auth)
-        self.session = session
-
-    monkeypatch.setattr(qa.APIClient, "__init__", fake_init)
+    install_fake_api_session(monkeypatch, qa, session)
     try:
-        qa.login("https://qa.example.invalid", "fake-admin", "fake-password-should-not-leak")
+        qa.login("https://qa.example.invalid", "fake-admin", "fake-passphrase-should-not-leak")
     except qa.QASafetyError as error:
         message = str(error)
         assert "token" in message.lower()
-        assert "fake-password-should-not-leak" not in message
-        assert "fake-token-should-not-leak" not in message
-        assert "fake-nested-token-should-not-leak" not in message
+        assert "fake-passphrase-should-not-leak" not in message
+        assert "fake-session-value-should-not-leak" not in message
+        assert "fake-nested-session-value-should-not-leak" not in message
     else:
         raise AssertionError("login accepted a response without token")
 
