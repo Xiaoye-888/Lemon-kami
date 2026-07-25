@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import or_
 from sqlmodel import Session, select
@@ -41,6 +41,12 @@ from commercial_service import (
 )
 from database import get_session
 from datetime_utils import to_api_beijing_iso
+from finance_service import (
+    finance_summary_payload,
+    merchant_recharge_ranking_payload,
+    quota_transactions_csv,
+    recharge_orders_csv,
+)
 from models import (
     AdminAuditLog,
     EndUser,
@@ -767,6 +773,64 @@ async def list_recharge_orders(
     }
 
 
+@router.get("/finance/summary", summary="Commercial finance summary")
+async def finance_summary(
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    try:
+        data = finance_summary_payload(session, start_date, end_date)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return {"success": True, "data": data, **data}
+
+
+@router.get("/finance/merchant-ranking", summary="Commercial merchant recharge ranking")
+async def finance_merchant_ranking(
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    try:
+        data = merchant_recharge_ranking_payload(session, start_date, end_date, limit=limit)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return {"success": True, "data": data, **data}
+
+
+@router.get("/recharge-orders/export", summary="Export recharge orders CSV")
+async def export_recharge_orders(
+    status: Optional[str] = Query(None),
+    username: Optional[str] = Query(None),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    try:
+        content = recharge_orders_csv(
+            session,
+            status=status,
+            username=username,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="recharge-orders.csv"'},
+    )
+
+
 @router.get("/recharge-orders/{order_no}", summary="Get recharge order detail")
 async def get_recharge_order(
     order_no: str,
@@ -1104,6 +1168,33 @@ async def mark_order_abnormal(
         summary=f"标记充值订单异常 {order_no}",
     )
     return {"success": True, "message": "order marked abnormal", "data": recharge_order_payload(order, include_user=True)}
+
+
+@router.get("/quota-transactions/export", summary="Export issue quota transactions CSV")
+async def export_quota_transactions(
+    username: Optional[str] = Query(None),
+    transaction_type: Optional[str] = Query(None),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    try:
+        content = quota_transactions_csv(
+            session,
+            username=username,
+            transaction_type=transaction_type,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="quota-transactions.csv"'},
+    )
 
 
 @router.get("/quota-transactions", summary="List issue quota transactions")

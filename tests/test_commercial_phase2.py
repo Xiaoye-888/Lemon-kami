@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy import inspect, text
 from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
@@ -19,6 +21,9 @@ from models import (
     RechargeOrderStatus,
     UserAppAuthorization,
     UserQuotaAccount,
+    UserQuotaTransaction,
+    UserQuotaTransactionType,
+    UserQuotaType,
 )
 import database
 
@@ -41,6 +46,25 @@ def override_session_factory(engine):
 
 def override_admin_user():
     return {"sub": "admin", "user_id": 1, "is_admin": True}
+
+
+def seed_admin_and_merchant(session: Session, username: str = "merchant-a") -> tuple[AdminUser, EndUser]:
+    admin = AdminUser(
+        username="admin",
+        password_hash=hash_password("admin-pass"),
+        is_admin=True,
+        status=1,
+    )
+    merchant = EndUser(
+        username=username,
+        password_hash=hash_password("merchant-pass"),
+        status=1,
+    )
+    session.add_all([admin, merchant])
+    session.commit()
+    session.refresh(admin)
+    session.refresh(merchant)
+    return admin, merchant
 
 
 def test_phase2_schema_creates_audit_backup_and_proof_columns():
@@ -152,6 +176,198 @@ def test_phase2_schema_backfills_existing_sqlite_recharge_order_proof_columns(mo
     }
     assert "proof_file_deleted" in recharge_order_columns
     assert "proof_deleted_at" in recharge_order_columns
+
+
+def test_finance_summary_uses_admin_reviewed_at_for_approved_income():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    try:
+        with Session(engine) as session:
+            _, merchant = seed_admin_and_merchant(session)
+            session.add_all(
+                [
+                    RechargeOrder(
+                        order_no="R202607250101",
+                        user_id=merchant.id,
+                        username=merchant.username,
+                        mode=RechargeMode.custom,
+                        channel=RechargeChannel.wechat,
+                        amount_cents=1000,
+                        base_quota=10,
+                        bonus_quota=0,
+                        credit_quota=10,
+                        status=RechargeOrderStatus.approved,
+                        reviewed_at=datetime(2026, 7, 25, 10, 0, 0),
+                    ),
+                    RechargeOrder(
+                        order_no="R202607240101",
+                        user_id=merchant.id,
+                        username=merchant.username,
+                        mode=RechargeMode.custom,
+                        channel=RechargeChannel.wechat,
+                        amount_cents=2000,
+                        base_quota=20,
+                        bonus_quota=5,
+                        credit_quota=25,
+                        status=RechargeOrderStatus.approved,
+                        reviewed_at=datetime(2026, 7, 24, 10, 0, 0),
+                    ),
+                    RechargeOrder(
+                        order_no="R202607250102",
+                        user_id=merchant.id,
+                        username=merchant.username,
+                        mode=RechargeMode.custom,
+                        channel=RechargeChannel.wechat,
+                        amount_cents=3000,
+                        base_quota=30,
+                        bonus_quota=0,
+                        credit_quota=30,
+                        status=RechargeOrderStatus.pending_review,
+                    ),
+                    RechargeOrder(
+                        order_no="R202607250103",
+                        user_id=merchant.id,
+                        username=merchant.username,
+                        mode=RechargeMode.custom,
+                        channel=RechargeChannel.wechat,
+                        amount_cents=4000,
+                        base_quota=40,
+                        bonus_quota=0,
+                        credit_quota=40,
+                        status=RechargeOrderStatus.approved,
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = client.get(
+            "/api/v1/admin/commercial/finance/summary",
+            params={"start_date": "2026-07-25", "end_date": "2026-07-25"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["income_basis"] == "reviewed_at"
+        assert data["approved_order_count"] == 1
+        assert data["approved_amount"] == 10
+        assert data["credited_issue_quota"] == 10
+        assert data["bonus_issue_quota"] == 0
+        assert data["pending_review_count"] == 1
+        assert data["approved_without_reviewed_at_count"] == 1
+        assert data["refund_amount"] == 0
+        assert data["reversal_amount"] == 0
+        assert data["daily"] == [
+            {
+                "date": "2026-07-25",
+                "approved_order_count": 1,
+                "approved_amount": 10,
+                "credited_issue_quota": 10,
+                "bonus_issue_quota": 0,
+            }
+        ]
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_finance_exports_respect_filters_and_include_bom():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    try:
+        with Session(engine) as session:
+            _, merchant = seed_admin_and_merchant(session)
+            account = UserQuotaAccount(
+                user_id=merchant.id,
+                username=merchant.username,
+                kami_issue_balance=10,
+                total_kami_issue_granted=10,
+            )
+            session.add(account)
+            session.commit()
+            session.refresh(account)
+            session.add_all(
+                [
+                    RechargeOrder(
+                        order_no="R202607250201",
+                        user_id=merchant.id,
+                        username=merchant.username,
+                        mode=RechargeMode.custom,
+                        channel=RechargeChannel.wechat,
+                        amount_cents=1000,
+                        base_quota=10,
+                        bonus_quota=0,
+                        credit_quota=10,
+                        status=RechargeOrderStatus.approved,
+                        reviewed_at=datetime(2026, 7, 25, 10, 0, 0),
+                    ),
+                    RechargeOrder(
+                        order_no="R202607250202",
+                        user_id=merchant.id,
+                        username=merchant.username,
+                        mode=RechargeMode.custom,
+                        channel=RechargeChannel.wechat,
+                        amount_cents=2000,
+                        base_quota=20,
+                        bonus_quota=0,
+                        credit_quota=20,
+                        status=RechargeOrderStatus.rejected,
+                        reviewed_at=datetime(2026, 7, 25, 11, 0, 0),
+                    ),
+                    UserQuotaTransaction(
+                        transaction_id="Q202607250201",
+                        account_id=account.id,
+                        user_id=merchant.id,
+                        username=merchant.username,
+                        quota_type=UserQuotaType.kami_issue,
+                        transaction_type=UserQuotaTransactionType.grant,
+                        amount=10,
+                        balance_before=0,
+                        balance_after=10,
+                        biz_id="R202607250201",
+                        operator="admin",
+                        created_at=datetime(2026, 7, 25, 10, 1, 0),
+                    ),
+                ]
+            )
+            session.commit()
+
+        orders = client.get(
+            "/api/v1/admin/commercial/recharge-orders/export",
+            params={"status": "approved", "start_date": "2026-07-25", "end_date": "2026-07-25"},
+        )
+        assert orders.status_code == 200
+        assert orders.headers["content-type"].startswith("text/csv")
+        assert orders.content.startswith(b"\xef\xbb\xbf")
+        order_text = orders.content.decode("utf-8-sig")
+        assert "订单号" in order_text
+        assert "R202607250201" in order_text
+        assert "R202607250202" not in order_text
+
+        transactions = client.get(
+            "/api/v1/admin/commercial/quota-transactions/export",
+            params={
+                "username": merchant.username,
+                "transaction_type": "grant",
+                "start_date": "2026-07-25",
+                "end_date": "2026-07-25",
+            },
+        )
+        assert transactions.status_code == 200
+        assert transactions.content.startswith(b"\xef\xbb\xbf")
+        transaction_text = transactions.content.decode("utf-8-sig")
+        assert "流水号" in transaction_text
+        assert "Q202607250201" in transaction_text
+        assert "merchant-a" in transaction_text
+    finally:
+        fastapi_app.dependency_overrides.clear()
 
 
 def test_recharge_approval_requires_confirmation_and_writes_audit():

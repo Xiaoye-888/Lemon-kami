@@ -6,6 +6,7 @@ const adminChildren = [
   { path: 'commercial/recharge-orders', name: 'AdminRechargeOrders', component: () => import('../views/AdminRechargeOrders.vue'), meta: { title: '充值订单' } },
   { path: 'commercial/recharge-settings', name: 'AdminRechargeSettings', component: () => import('../views/AdminRechargeSettings.vue'), meta: { title: '充值配置' } },
   { path: 'commercial/merchants', name: 'AdminMerchants', component: () => import('../views/AdminMerchants.vue'), meta: { title: '发卡用户管理' } },
+  { path: 'commercial/finance', name: 'AdminFinance', component: () => import('../views/AdminFinance.vue'), meta: { title: '财务运营' } },
   { path: 'commercial/quota-transactions', name: 'AdminQuotaTransactions', component: () => import('../views/AdminQuotaTransactions.vue'), meta: { title: '发卡额度流水' } },
   { path: 'apps', redirect: '/admin/apps/info' },
   { path: 'apps/info', name: 'Apps', component: () => import('../views/Apps.vue'), meta: { title: '应用信息' } },

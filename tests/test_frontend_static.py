@@ -566,3 +566,24 @@ def test_commercial_phase1_corrections_keep_identity_and_quota_scope_clear():
     assert "recharge_balance" not in admin_merchants
     assert "app_create_balance" not in merchant_dashboard
     assert "recharge_balance" not in merchant_dashboard
+
+def test_phase2_finance_page_has_reviewed_at_income_scope_and_exports():
+    router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")
+    layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
+    finance_api = (PROJECT_ROOT / "admin/src/api/finance.js").read_text(encoding="utf-8")
+    finance_view = (PROJECT_ROOT / "admin/src/views/AdminFinance.vue").read_text(encoding="utf-8")
+
+    assert "/admin/commercial/finance" in layout
+    assert "\u8d22\u52a1\u8fd0\u8425" in layout
+    assert "path: 'commercial/finance'" in router
+    assert "AdminFinance" in router
+    assert "/admin/commercial/finance/summary" in finance_api
+    assert "/admin/commercial/finance/merchant-ranking" in finance_api
+    assert "/admin/commercial/recharge-orders/export" in finance_api
+    assert "/admin/commercial/quota-transactions/export" in finance_api
+    assert "\u5ba1\u6838\u901a\u8fc7\u65f6\u95f4" in finance_view
+    assert "reviewed_at" in finance_view
+    assert "\u5bfc\u51fa\u8ba2\u5355\u6d41\u6c34" in finance_view
+    assert "\u5bfc\u51fa\u989d\u5ea6\u6d41\u6c34" in finance_view
+    assert "\u9000\u6b3e" not in finance_view
+    assert "\u51b2\u6b63" not in finance_view
