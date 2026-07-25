@@ -55,6 +55,18 @@ git commit -m "your message"
 git push origin main
 ```
 
+如果当前 Windows 电脑必须通过本地代理访问 GitHub，建议改用动态代理推送脚本：
+
+```powershell
+.\scripts\push_github_with_proxy.ps1
+```
+
+它会读取 Windows 当前系统代理端口，测试端口可用性，更新 Git 代理配置，然后推送 `origin main`。只想验证连通性时可以运行：
+
+```powershell
+.\scripts\push_github_with_proxy.ps1 -DryRun
+```
+
 推送 `main` 后，GitHub Actions 会自动测试、构建 Docker 镜像，并部署到服务器。
 
 ## 部署配置在哪里
