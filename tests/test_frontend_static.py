@@ -642,6 +642,8 @@ def test_issue_pricing_admin_page_uses_business_pricing_language():
     assert "pricingScenario" in issue_pricing
     assert "pricingScope" in issue_pricing
     assert "effectivePreview" in issue_pricing
+    assert ':value="option.value"' in issue_pricing
+    assert ':label="option.value"' not in issue_pricing
 
 
 def test_merchant_issue_preview_shows_pricing_rule_source():

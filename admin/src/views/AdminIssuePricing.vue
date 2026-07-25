@@ -14,7 +14,7 @@
               <el-radio-button
                 v-for="option in scenarioOptions"
                 :key="option.value"
-                :label="option.value"
+                :value="option.value"
               >
                 {{ option.label }}
               </el-radio-button>
@@ -26,7 +26,7 @@
               <el-radio-button
                 v-for="option in scopeOptions"
                 :key="option.value"
-                :label="option.value"
+                :value="option.value"
               >
                 {{ option.label }}
               </el-radio-button>
