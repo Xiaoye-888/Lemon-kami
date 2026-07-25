@@ -609,6 +609,21 @@ def test_issue_pricing_admin_entry_and_api_are_visible():
     assert "getKamiSpecs({ app_id: appId" in issue_pricing
 
 
+def test_issue_pricing_admin_page_uses_business_pricing_language():
+    issue_pricing = (PROJECT_ROOT / "admin/src/views/AdminIssuePricing.vue").read_text(encoding="utf-8")
+
+    assert "发卡场景" in issue_pricing
+    assert "扣费范围" in issue_pricing
+    assert "生效预览" in issue_pricing
+    assert "命中顺序" in issue_pricing
+    assert "用户自建应用发卡" in issue_pricing
+    assert "管理员授权应用发卡" in issue_pricing
+    assert "指定用户 + 指定规格扣费" in issue_pricing
+    assert "pricingScenario" in issue_pricing
+    assert "pricingScope" in issue_pricing
+    assert "effectivePreview" in issue_pricing
+
+
 def test_merchant_issue_preview_shows_pricing_rule_source():
     merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
 

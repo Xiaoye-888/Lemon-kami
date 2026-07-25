@@ -9,14 +9,28 @@
       <el-card shadow="never" class="panel">
         <template #header>规则配置</template>
         <el-form :model="pricingForm" label-width="120px">
-          <el-form-item label="规则类型">
-            <el-select v-model="pricingForm.target_type" style="width: 100%">
-              <el-option label="自建应用默认" value="global_self_app" />
-              <el-option label="授权应用默认" value="global_authorized_app" />
-              <el-option label="授权规格默认" value="authorized_spec" />
-              <el-option label="用户自建专属" value="user_self_app" />
-              <el-option label="用户授权规格专属" value="user_authorized_spec" />
-            </el-select>
+          <el-form-item label="发卡场景">
+            <el-radio-group v-model="pricingScenario" class="pricing-radio-group" @change="handleScenarioChange">
+              <el-radio-button
+                v-for="option in scenarioOptions"
+                :key="option.value"
+                :label="option.value"
+              >
+                {{ option.label }}
+              </el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+
+          <el-form-item label="扣费范围">
+            <el-radio-group v-model="pricingScope" class="pricing-radio-group" @change="handleScopeChange">
+              <el-radio-button
+                v-for="option in scopeOptions"
+                :key="option.value"
+                :label="option.value"
+              >
+                {{ option.label }}
+              </el-radio-button>
+            </el-radio-group>
           </el-form-item>
 
           <el-form-item v-if="needsUser" label="发卡用户">
@@ -78,6 +92,13 @@
             <el-input v-model="pricingForm.remark" type="textarea" :rows="2" />
           </el-form-item>
         </el-form>
+
+        <el-alert class="preview-alert" type="info" :closable="false" show-icon>
+          <template #title>生效预览</template>
+          <div>{{ effectivePreview }}</div>
+          <div class="priority-line">命中顺序：{{ priorityPreview }}</div>
+        </el-alert>
+
         <div class="form-actions">
           <el-button @click="resetForm">重置</el-button>
           <el-button type="primary" :loading="saving" @click="handleSave">保存规则</el-button>
@@ -87,8 +108,11 @@
       <el-card shadow="never" class="panel panel--wide">
         <template #header>当前规则</template>
         <el-table :data="rules" v-loading="loading" border stripe>
-          <el-table-column prop="target_type" label="规则类型" min-width="150">
-            <template #default="{ row }">{{ targetLabel(row.target_type) }}</template>
+          <el-table-column prop="target_type" label="发卡场景" min-width="150">
+            <template #default="{ row }">{{ targetSceneLabel(row.target_type) }}</template>
+          </el-table-column>
+          <el-table-column prop="target_type" label="扣费范围" min-width="170">
+            <template #default="{ row }">{{ targetScopeLabel(row.target_type) }}</template>
           </el-table-column>
           <el-table-column prop="username" label="发卡用户" min-width="120">
             <template #default="{ row }">{{ row.username || '-' }}</template>
@@ -100,6 +124,9 @@
             <template #default="{ row }">{{ ruleSpecLabel(row) }}</template>
           </el-table-column>
           <el-table-column prop="unit_cost" label="单张消耗" width="110" />
+          <el-table-column prop="target_type" label="命中顺序" min-width="130">
+            <template #default="{ row }">{{ targetPriorityLabel(row.target_type) }}</template>
+          </el-table-column>
           <el-table-column prop="enabled" label="状态" width="90">
             <template #default="{ row }">
               <el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag>
@@ -148,6 +175,63 @@ const apps = ref([])
 const merchants = ref([])
 const specs = ref([])
 const specCache = ref({})
+const pricingScenario = ref('self')
+const pricingScope = ref('global')
+
+const scenarioOptions = [
+  { value: 'self', label: '用户自建应用发卡' },
+  { value: 'authorized', label: '管理员授权应用发卡' }
+]
+
+const scopeOptionsByScenario = {
+  self: [
+    { value: 'global', label: '全局默认扣费', targetType: 'global_self_app' },
+    { value: 'user', label: '指定用户扣费', targetType: 'user_self_app' }
+  ],
+  authorized: [
+    { value: 'global', label: '全局默认扣费', targetType: 'global_authorized_app' },
+    { value: 'spec', label: '指定规格扣费', targetType: 'authorized_spec' },
+    { value: 'user_spec', label: '指定用户 + 指定规格扣费', targetType: 'user_authorized_spec' }
+  ]
+}
+
+const targetTypeMeta = {
+  global_self_app: {
+    scenario: 'self',
+    scope: 'global',
+    sceneLabel: '用户自建应用发卡',
+    scopeLabel: '全局默认扣费',
+    priorityLabel: '自建第2优先级'
+  },
+  user_self_app: {
+    scenario: 'self',
+    scope: 'user',
+    sceneLabel: '用户自建应用发卡',
+    scopeLabel: '指定用户扣费',
+    priorityLabel: '自建第1优先级'
+  },
+  global_authorized_app: {
+    scenario: 'authorized',
+    scope: 'global',
+    sceneLabel: '管理员授权应用发卡',
+    scopeLabel: '全局默认扣费',
+    priorityLabel: '授权第3优先级'
+  },
+  authorized_spec: {
+    scenario: 'authorized',
+    scope: 'spec',
+    sceneLabel: '管理员授权应用发卡',
+    scopeLabel: '指定规格扣费',
+    priorityLabel: '授权第2优先级'
+  },
+  user_authorized_spec: {
+    scenario: 'authorized',
+    scope: 'user_spec',
+    sceneLabel: '管理员授权应用发卡',
+    scopeLabel: '指定用户 + 指定规格扣费',
+    priorityLabel: '授权第1优先级'
+  }
+}
 
 const pricingForm = reactive({
   target_type: 'global_self_app',
@@ -161,15 +245,55 @@ const pricingForm = reactive({
 
 const needsUser = computed(() => ['user_self_app', 'user_authorized_spec'].includes(pricingForm.target_type))
 const needsSpec = computed(() => ['authorized_spec', 'user_authorized_spec'].includes(pricingForm.target_type))
+const scopeOptions = computed(() => scopeOptionsByScenario[pricingScenario.value] || [])
+
+const effectivePreview = computed(() => {
+  const unitCost = pricingForm.unit_cost || 0
+  if (pricingForm.target_type === 'global_self_app') {
+    return `所有发卡用户在自建应用生成卡密时，每张扣 ${unitCost} 发卡额度。`
+  }
+  if (pricingForm.target_type === 'user_self_app') {
+    return `发卡用户【${selectedMerchantLabel()}】在自建应用生成卡密时，每张扣 ${unitCost} 发卡额度。`
+  }
+  if (pricingForm.target_type === 'global_authorized_app') {
+    return `所有发卡用户使用管理员授权应用生成卡密时，每张扣 ${unitCost} 发卡额度。`
+  }
+  if (pricingForm.target_type === 'authorized_spec') {
+    return `所有发卡用户在授权应用【${selectedAppLabel()}】生成规格【${selectedSpecLabel()}】时，每张扣 ${unitCost} 发卡额度。`
+  }
+  if (pricingForm.target_type === 'user_authorized_spec') {
+    return `发卡用户【${selectedMerchantLabel()}】在授权应用【${selectedAppLabel()}】生成规格【${selectedSpecLabel()}】时，每张扣 ${unitCost} 发卡额度。`
+  }
+  return `每张扣 ${unitCost} 发卡额度。`
+})
+
+const priorityPreview = computed(() => {
+  if (pricingScenario.value === 'self') {
+    return '指定用户扣费 > 全局默认扣费 > 系统默认 1'
+  }
+  return '指定用户 + 指定规格扣费 > 指定规格扣费 > 全局默认扣费 > 系统默认 1'
+})
 
 function targetLabel(value) {
   return {
-    global_self_app: '自建应用默认',
-    global_authorized_app: '授权应用默认',
-    authorized_spec: '授权规格默认',
-    user_self_app: '用户自建专属',
-    user_authorized_spec: '用户授权规格专属'
+    global_self_app: '用户自建应用：全局默认扣费',
+    global_authorized_app: '管理员授权应用：全局默认扣费',
+    authorized_spec: '管理员授权应用：指定规格扣费',
+    user_self_app: '用户自建应用：指定用户扣费',
+    user_authorized_spec: '管理员授权应用：指定用户 + 指定规格扣费'
   }[value] || value
+}
+
+function targetSceneLabel(value) {
+  return targetTypeMeta[value]?.sceneLabel || targetLabel(value)
+}
+
+function targetScopeLabel(value) {
+  return targetTypeMeta[value]?.scopeLabel || '-'
+}
+
+function targetPriorityLabel(value) {
+  return targetTypeMeta[value]?.priorityLabel || '-'
 }
 
 function specLabel(spec) {
@@ -186,6 +310,45 @@ function ruleSpecLabel(row) {
   if (!row.spec_id) return '-'
   const cached = specCache.value[row.spec_id]
   return cached ? specLabel(cached) : `#${row.spec_id}`
+}
+
+function selectedMerchantLabel() {
+  const merchant = merchants.value.find((item) => item.id === pricingForm.user_id)
+  if (merchant) return merchant.username
+  return pricingForm.user_id ? `#${pricingForm.user_id}` : '未选择用户'
+}
+
+function selectedAppLabel() {
+  return pricingForm.app_id ? appName(pricingForm.app_id) : '未选择应用'
+}
+
+function selectedSpecLabel() {
+  if (!pricingForm.spec_id) return '未选择规格'
+  const spec = specs.value.find((item) => item.id === pricingForm.spec_id) || specCache.value[pricingForm.spec_id]
+  return spec ? specLabel(spec) : `#${pricingForm.spec_id}`
+}
+
+function syncSelectorFromTargetType(targetType) {
+  const meta = targetTypeMeta[targetType] || targetTypeMeta.global_self_app
+  pricingScenario.value = meta.scenario
+  pricingScope.value = meta.scope
+}
+
+function applySelectorToTargetType() {
+  const option = scopeOptions.value.find((item) => item.value === pricingScope.value) || scopeOptions.value[0]
+  if (!option) return
+  pricingForm.target_type = option.targetType
+  if (!needsUser.value) pricingForm.user_id = null
+  if (!needsSpec.value) pricingForm.spec_id = null
+}
+
+function handleScenarioChange() {
+  pricingScope.value = scopeOptions.value[0]?.value || 'global'
+  applySelectorToTargetType()
+}
+
+function handleScopeChange() {
+  applySelectorToTargetType()
 }
 
 function mergeMerchantOptions(items) {
@@ -209,6 +372,7 @@ function mergeMerchantOptions(items) {
 
 function resetForm() {
   pricingForm.target_type = 'global_self_app'
+  syncSelectorFromTargetType(pricingForm.target_type)
   pricingForm.user_id = null
   pricingForm.app_id = apps.value[0]?.app_id || ''
   pricingForm.spec_id = null
@@ -333,6 +497,7 @@ async function handleSave() {
 
 async function editRule(row) {
   pricingForm.target_type = row.target_type
+  syncSelectorFromTargetType(row.target_type)
   pricingForm.user_id = row.user_id || null
   pricingForm.app_id = row.app_id || pricingForm.app_id || apps.value[0]?.app_id || ''
   pricingForm.unit_cost = row.unit_cost || 1
@@ -374,7 +539,11 @@ watch(
 
 watch(
   () => pricingForm.target_type,
-  () => {
+  (targetType) => {
+    const meta = targetTypeMeta[targetType]
+    if (meta && (pricingScenario.value !== meta.scenario || pricingScope.value !== meta.scope)) {
+      syncSelectorFromTargetType(targetType)
+    }
     if (!needsUser.value) pricingForm.user_id = null
     if (!needsSpec.value) pricingForm.spec_id = null
   }
@@ -420,6 +589,28 @@ onMounted(loadAll)
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.pricing-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pricing-radio-group :deep(.el-radio-button__inner) {
+  border-left: var(--el-border);
+  border-radius: 6px;
+  line-height: 1.2;
+  white-space: normal;
+}
+
+.preview-alert {
+  margin-bottom: 14px;
+}
+
+.priority-line {
+  margin-top: 6px;
+  color: #52627a;
 }
 
 @media (max-width: 980px) {
