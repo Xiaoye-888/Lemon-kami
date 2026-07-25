@@ -1,4 +1,5 @@
 import importlib.util
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -261,6 +262,8 @@ def test_browser_result_evaluation_flags_layout_and_runtime_failures():
         ({"console_errors": ["ReferenceError: app is not defined"]}, "P0", "Console errors detected"),
         ({"exceptions": ["Unhandled promise rejection"]}, "P0", "Runtime exceptions detected"),
         ({"network_failures": ["GET /api/orders 500"]}, "P1", "Network failures detected"),
+        ({"http_errors": [{"status": 500, "url": "/api/orders"}]}, "P1", "HTTP errors detected"),
+        ({"status": 404}, "P1", "Route document returned bad status"),
         ({"body_text_length": 12}, "P1", "Page body text is unexpectedly sparse"),
         ({"body_text_length": None, "bodyTextLength": 12}, "P1", "Page body text is unexpectedly sparse"),
         ({"layout": {"horizontal_overflow": True}}, "P2", "Horizontal overflow detected"),
@@ -279,6 +282,61 @@ def test_browser_result_evaluation_flags_layout_and_runtime_failures():
         assert findings
         assert findings[0]["severity"] == severity
         assert findings[0]["message"] == message
+
+
+def test_browser_result_evaluation_flags_non_2xx_document_status_without_sparse_noise():
+    qa = load_qa_module()
+    result = {
+        "route": "/admin/dashboard",
+        "viewport": "desktop",
+        "console_errors": [],
+        "exceptions": [],
+        "network_failures": [],
+        "http_errors": [],
+        "status": 500,
+        "bodyTextLength": 1200,
+        "layout": {"largeBlankRatio": 0.18, "horizontalOverflow": False, "overwideCards": []},
+    }
+
+    assert qa.evaluate_browser_result(result) == [
+        {
+            "severity": "P1",
+            "route": "/admin/dashboard",
+            "viewport": "desktop",
+            "message": "Route document returned bad status",
+        }
+    ]
+
+
+def test_run_browser_sweep_timeout_raises_sanitized_error(monkeypatch, tmp_path):
+    qa = load_qa_module()
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(
+            cmd=kwargs.get("args", args[0] if args else "node"),
+            timeout=kwargs.get("timeout"),
+            output="token=should-not-leak",
+            stderr="Authorization: Bearer should-not-leak",
+        )
+
+    monkeypatch.setattr(qa.subprocess, "run", fake_run)
+
+    try:
+        qa.run_browser_sweep(
+            "https://example.invalid",
+            tmp_path,
+            {"token": "admin-secret"},
+            {"token": "merchant-secret"},
+        )
+    except qa.QASafetyError as error:
+        message = str(error)
+        assert "timed out" in message
+        assert "should-not-leak" not in message
+        assert "admin-secret" not in message
+        assert "merchant-secret" not in message
+        assert "<redacted>" in message
+    else:
+        raise AssertionError("browser sweep timeout did not raise QASafetyError")
 
 
 def test_browser_result_evaluation_accepts_cdp_layout_keys():

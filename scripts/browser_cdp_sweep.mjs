@@ -7,6 +7,16 @@ import path from "node:path";
 
 const LOAD_TIMEOUT_MS = 30_000;
 const CDP_TIMEOUT_MS = 15_000;
+const SENSITIVE_PATTERNS = [
+  /\bKAMI-[A-Za-z0-9]{8,}\b/g,
+  /\bfingerprint-[A-Za-z0-9]{8,}\b/gi,
+  /\bauthorization\s*:\s*bearer\s+[^\s&"'`]+/gi,
+  /\bbearer\s+[^\s&"'`]+/gi,
+  /([?&](?:auth|auth_token|token|password|access_token|refresh_token|session|session_id|sessionid|cookie)=)[^&#\s"'`]+/gi,
+  /\b(?:auth|auth_token|token|password|cookie|session|session_id|sessionid|access_token|refresh_token)\s*[:=]\s*[^\s&"'`]+/gi,
+  /\b(?:auth|auth_token|token|password|cookie|session|session_id|sessionid|access_token|refresh_token)\s+[^\s&"'`]+/gi,
+  /localStorage\.setItem\(\s*["'](?:token|role|userInfo)["']\s*,\s*[^)]*\)/gi,
+];
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -48,6 +58,24 @@ function reservePort() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function maskMiddle(value, keep = 3) {
+  const text = String(value);
+  if (text.length <= keep * 2) {
+    return "***";
+  }
+  return `${text.slice(0, keep)}***${text.slice(-keep)}`;
+}
+
+function sanitizeDiagnostics(value) {
+  let text = String(value ?? "");
+  text = text.replace(SENSITIVE_PATTERNS[0], (match) => maskMiddle(match));
+  text = text.replace(SENSITIVE_PATTERNS[1], (match) => maskMiddle(match));
+  for (const pattern of SENSITIVE_PATTERNS.slice(2)) {
+    text = text.replace(pattern, "<redacted>");
+  }
+  return text;
 }
 
 async function terminateChrome(chromeProcess) {
@@ -112,7 +140,7 @@ class CdpConnection {
       clearTimeout(pending.timer);
       this.pending.delete(message.id);
       if (message.error) {
-        pending.reject(new Error(`${message.error.message || "CDP error"} ${message.error.data || ""}`.trim()));
+        pending.reject(new Error(sanitizeDiagnostics(`${message.error.message || "CDP error"} ${message.error.data || ""}`.trim())));
       } else {
         pending.resolve(message.result || {});
       }
@@ -141,6 +169,9 @@ class CdpConnection {
 
   onEvent(listener) {
     this.listeners.push(listener);
+    return () => {
+      this.listeners = this.listeners.filter((current) => current !== listener);
+    };
   }
 
   close() {
@@ -158,11 +189,20 @@ function slugFor(route) {
 }
 
 function localStorageScript(role, session) {
-  if (!role || !session) {
-    return "";
+  if (!role) {
+    return `
+try {
+  localStorage.removeItem("token");
+  localStorage.removeItem("role");
+  localStorage.removeItem("userInfo");
+} catch (error) {
+  console.error("Unable to clear browser QA auth state", error);
+}
+`;
   }
-  const token = session.token ?? "";
-  const userInfo = session.userInfo ?? session.user_info ?? {};
+  const safeSession = session || {};
+  const token = safeSession.token ?? "";
+  const userInfo = safeSession.userInfo ?? safeSession.user_info ?? {};
   const userInfoText = typeof userInfo === "string" ? userInfo : JSON.stringify(userInfo);
   return `
 try {
@@ -294,47 +334,48 @@ async function sweepPage(cdp, payload, routeCase, viewport) {
         pageState.resolveLoad?.();
       }
     };
-    cdp.onEvent(listener);
+    const removeListener = cdp.onEvent(listener);
+    try {
+      await cdp.send("Runtime.enable", {}, sessionId);
+      await cdp.send("Page.enable", {}, sessionId);
+      await cdp.send("Network.enable", {}, sessionId);
+      await cdp.send("Emulation.setDeviceMetricsOverride", {
+        width: viewport.width,
+        height: viewport.height,
+        deviceScaleFactor: 1,
+        mobile: viewport.width < 600,
+      }, sessionId);
 
-    await cdp.send("Runtime.enable", {}, sessionId);
-    await cdp.send("Page.enable", {}, sessionId);
-    await cdp.send("Network.enable", {}, sessionId);
-    await cdp.send("Emulation.setDeviceMetricsOverride", {
-      width: viewport.width,
-      height: viewport.height,
-      deviceScaleFactor: 1,
-      mobile: viewport.width < 600,
-    }, sessionId);
-
-    const script = localStorageScript(routeCase.authRole, payload.sessions?.[routeCase.authRole]);
-    if (script) {
+      const script = localStorageScript(routeCase.authRole, payload.sessions?.[routeCase.authRole]);
       await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: script }, sessionId);
+
+      const url = joinUrl(payload.baseUrl, routeCase.route);
+      await waitForLoad(cdp, sessionId, url, pageState);
+      const layout = await evaluateLayout(cdp, sessionId);
+
+      const screenshotName = `${routeCase.role}-${viewport.name}-${slugFor(routeCase.route)}.png`;
+      const screenshotPath = path.join(payload.artifactDir, "screenshots", screenshotName);
+      await captureScreenshot(cdp, sessionId, screenshotPath);
+
+      return {
+        role: routeCase.role,
+        route: routeCase.route,
+        viewport: viewport.name,
+        url,
+        status: pageState.status ?? 200,
+        screenshot: screenshotPath,
+        console_errors: pageState.consoleErrors,
+        exceptions: pageState.exceptions,
+        network_failures: pageState.networkFailures,
+        http_errors: pageState.httpErrors,
+        bodyTextLength: layout.bodyTextLength ?? 0,
+        bodyTextSample: layout.bodyTextSample ?? "",
+        layout,
+        toastText: layout.toastText ?? [],
+      };
+    } finally {
+      removeListener();
     }
-
-    const url = joinUrl(payload.baseUrl, routeCase.route);
-    await waitForLoad(cdp, sessionId, url, pageState);
-    const layout = await evaluateLayout(cdp, sessionId);
-
-    const screenshotName = `${routeCase.role}-${viewport.name}-${slugFor(routeCase.route)}.png`;
-    const screenshotPath = path.join(payload.artifactDir, "screenshots", screenshotName);
-    await captureScreenshot(cdp, sessionId, screenshotPath);
-
-    return {
-      role: routeCase.role,
-      route: routeCase.route,
-      viewport: viewport.name,
-      url,
-      status: pageState.status ?? 200,
-      screenshot: screenshotPath,
-      console_errors: pageState.consoleErrors,
-      exceptions: pageState.exceptions,
-      network_failures: pageState.networkFailures,
-      http_errors: pageState.httpErrors,
-      bodyTextLength: layout.bodyTextLength ?? 0,
-      bodyTextSample: layout.bodyTextSample ?? "",
-      layout,
-      toastText: layout.toastText ?? [],
-    };
   });
 }
 
@@ -407,9 +448,9 @@ async function main() {
     }
     process.stdout.write(JSON.stringify(results, null, 2));
   } catch (error) {
-    console.error(`${error.message || error}`);
+    console.error(sanitizeDiagnostics(error.message || error));
     if (chromeStderr.trim()) {
-      console.error(chromeStderr.trim().slice(-4000));
+      console.error(sanitizeDiagnostics(chromeStderr.trim()).slice(-4000));
     }
     process.exitCode = 1;
   } finally {
@@ -420,6 +461,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error.message || error);
+  console.error(sanitizeDiagnostics(error.message || error));
   process.exitCode = 1;
 });

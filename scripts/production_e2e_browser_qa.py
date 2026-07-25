@@ -20,6 +20,7 @@ SECRET_KEYS = {
 }
 MASKED_VALUE_KEYS = {"kami", "kami_code", "code", "device_fingerprint", "fingerprint"}
 REPORT_FILENAME = "production-e2e-browser-report.md"
+BROWSER_SWEEP_TIMEOUT_SECONDS = 300
 VIEWPORTS = [
     {"name": "desktop", "width": 1440, "height": 900},
     {"name": "wide", "width": 1920, "height": 1080},
@@ -119,13 +120,21 @@ def run_browser_sweep(base_url: str, artifact_dir: Path, admin_session: dict, me
         },
     }
     raw_payload = json.dumps(payload, ensure_ascii=True)
-    completed = subprocess.run(
-        ["node", str(helper)],
-        input=raw_payload,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            ["node", str(helper)],
+            input=raw_payload,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=BROWSER_SWEEP_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        stderr = sanitize_report_string((error.stderr or "").strip())
+        stdout = sanitize_report_string((error.output or "").strip())
+        raise QASafetyError(
+            f"Browser CDP sweep timed out after {error.timeout} seconds; stderr={stderr!r}; stdout={stdout!r}"
+        ) from error
     if completed.returncode != 0:
         stderr = sanitize_report_string(completed.stderr.strip())
         stdout = sanitize_report_string(completed.stdout.strip())
@@ -233,6 +242,11 @@ def evaluate_browser_result(result):
         findings.append(_finding("P0", route, viewport, "Runtime exceptions detected"))
     if result.get("network_failures"):
         findings.append(_finding("P1", route, viewport, "Network failures detected"))
+    if result.get("http_errors"):
+        findings.append(_finding("P1", route, viewport, "HTTP errors detected"))
+    status = result.get("status")
+    if status is not None and (status < 200 or status >= 400):
+        findings.append(_finding("P1", route, viewport, "Route document returned bad status"))
     body_text_length = result.get("body_text_length")
     if body_text_length is None:
         body_text_length = result.get("bodyTextLength", 0)
