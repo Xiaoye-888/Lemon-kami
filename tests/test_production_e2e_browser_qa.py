@@ -269,6 +269,36 @@ def test_api_client_wraps_request_exception_without_leaking_auth_or_password():
         raise AssertionError("request exception was not wrapped")
 
 
+def test_api_client_wraps_request_exception_without_leaking_payment_payload_values():
+    qa = load_qa_module()
+    dummy_qr_url = "https://example.invalid/dummy-payment-qr"
+    dummy_account_name = "dummy-payment-account"
+
+    class FailingSession:
+        def request(self, method, url, **kwargs):
+            raise requests.RequestException(
+                f"failed payload qr_code_url={dummy_qr_url}; account_name={dummy_account_name}"
+            )
+
+    client = qa.APIClient("https://qa.example.invalid")
+    client.session = FailingSession()
+
+    try:
+        client.request(
+            "POST",
+            "/api/v1/admin/commercial/payment-channels",
+            json={"qr_code_url": dummy_qr_url, "account_name": dummy_account_name},
+        )
+    except qa.QASafetyError as error:
+        message = str(error)
+        assert "payment-channels" in message
+        assert dummy_qr_url not in message
+        assert dummy_account_name not in message
+        assert "<redacted>" in message
+    else:
+        raise AssertionError("request exception leaked payment payload values")
+
+
 def test_login_uses_aes_key_for_encrypted_payload_and_returns_auth_session(monkeypatch):
     qa = load_qa_module()
     from crypto import CryptoHelper
@@ -861,6 +891,146 @@ def test_ensure_temporary_payment_config_skips_channel_when_other_has_sensitive_
     assert dummy_account_name not in qa._format_report_line(summary)
 
 
+def test_ensure_temporary_payment_config_avoids_non_owned_fixed_option_amount_collision():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    admin = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "data": {
+                    "channels": [],
+                    "options": [
+                        {
+                            "id": 100,
+                            "amount": 991,
+                            "credit_quota": 100,
+                            "label": "Production 991 option",
+                            "enabled": True,
+                        }
+                    ],
+                    "bonus_rules": [],
+                },
+            },
+            {"success": True, "data": {"channel": "other", "id": 10}},
+            {"success": True, "data": {"id": 20}},
+            {"success": True, "data": {"id": 30}},
+        ]
+    )
+
+    qa.ensure_temporary_payment_config(admin, prefix)
+
+    option_payload = next(
+        call["kwargs"]["json"]
+        for call in admin.calls
+        if call["path"] == "/api/v1/admin/commercial/recharge-options"
+    )
+    assert option_payload["amount"] == 992
+    assert option_payload["label"].startswith(prefix)
+
+
+def test_ensure_temporary_payment_config_raises_before_option_overwrite_when_reserved_amounts_blocked():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    blocked_options = [
+        {"id": index, "amount": amount, "credit_quota": 100, "label": f"Production {amount}"}
+        for index, amount in enumerate(range(991, 1000), start=1)
+    ]
+    admin = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "data": {"channels": [], "options": blocked_options, "bonus_rules": []},
+            }
+        ]
+    )
+
+    try:
+        qa.ensure_temporary_payment_config(admin, prefix)
+    except qa.QASafetyError as error:
+        message = str(error)
+        assert "safe temporary recharge option amount" in message
+        assert "Production 991" not in message
+    else:
+        raise AssertionError("temporary config overwrote a blocked option amount")
+
+    assert [call["method"] for call in admin.calls] == ["GET"]
+
+
+def test_ensure_temporary_payment_config_reuses_existing_same_prefix_bonus_rule():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    admin = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "data": {
+                    "channels": [],
+                    "options": [],
+                    "bonus_rules": [
+                        {
+                            "id": 300,
+                            "threshold_amount": 993,
+                            "bonus_quota": 99,
+                            "remark": prefix + "Temporary bonus rule",
+                            "enabled": True,
+                        }
+                    ],
+                },
+            },
+            {"success": True, "data": {"channel": "other", "id": 10}},
+            {"success": True, "data": {"id": 20}},
+        ]
+    )
+
+    summary = qa.ensure_temporary_payment_config(admin, prefix)
+
+    assert summary == {"channel": "other", "option_id": 20, "bonus_rule_id": 300}
+    assert not any(
+        call["path"] == "/api/v1/admin/commercial/recharge-bonus-rules"
+        and call["method"] == "POST"
+        for call in admin.calls
+    )
+
+
+def test_ensure_temporary_payment_config_avoids_non_owned_bonus_threshold_collision():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    admin = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "data": {
+                    "channels": [],
+                    "options": [],
+                    "bonus_rules": [
+                        {
+                            "id": 300,
+                            "threshold_amount": 993,
+                            "bonus_quota": 99,
+                            "remark": "Production bonus",
+                            "enabled": True,
+                        }
+                    ],
+                },
+            },
+            {"success": True, "data": {"channel": "other", "id": 10}},
+            {"success": True, "data": {"id": 20}},
+            {"success": True, "data": {"id": 30}},
+        ]
+    )
+
+    qa.ensure_temporary_payment_config(admin, prefix)
+
+    bonus_payload = next(
+        call["kwargs"]["json"]
+        for call in admin.calls
+        if call["path"] == "/api/v1/admin/commercial/recharge-bonus-rules"
+    )
+    assert bonus_payload["threshold_amount"] == 994
+    assert bonus_payload["remark"].startswith(prefix)
+
+
 def test_restore_payment_snapshot_restores_other_channel_deletes_temp_options_and_bonus_without_duplication():
     qa = load_qa_module()
     prefix = "E2E_UI_QA_20260726_030000_abc123_"
@@ -1126,7 +1296,7 @@ def test_restore_payment_snapshot_replays_colliding_temp_option_amount_from_snap
     assert delete_calls == []
 
 
-def test_restore_payment_snapshot_rejects_non_prefixed_temporary_cleanup():
+def test_restore_payment_snapshot_rejects_different_run_temporary_cleanup():
     qa = load_qa_module()
     prefix = "E2E_UI_QA_20260726_030000_abc123_"
     snapshot = qa.PaymentSnapshot(channels=[], fixed_options=[], bonus_rules=[])
@@ -1152,7 +1322,7 @@ def test_restore_payment_snapshot_rejects_non_prefixed_temporary_cleanup():
     try:
         qa.restore_payment_snapshot(admin, snapshot, prefix)
     except qa.QASafetyError as error:
-        assert "non-prefixed temporary payment config" in str(error)
+        assert "different-run temporary payment config" in str(error)
         assert "E2E_UI_QA_not_valid_Temporary channel" not in str(error)
     else:
         raise AssertionError("restore allowed non-prefixed temporary cleanup")

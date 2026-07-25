@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,8 @@ PAYMENT_SENSITIVE_KEYS = {"qr_code_url", "account_name"}
 MASKED_VALUE_KEYS = {"kami", "kami_code", "code", "device_fingerprint", "fingerprint"}
 PRODUCTION_CONFIRMATION = "I_UNDERSTAND_THIS_CREATES_TEMP_PRODUCTION_DATA"
 PAYMENT_CONFIG_CONFIRM_TEXT = "确认修改充值配置"
+TEMP_RECHARGE_OPTION_AMOUNTS = tuple(range(991, 1000))
+TEMP_BONUS_THRESHOLDS = tuple(range(993, 1000))
 REPORT_FILENAME = "production-e2e-browser-report.md"
 BROWSER_SWEEP_TIMEOUT_SECONDS = 300
 VIEWPORTS = [
@@ -143,7 +146,8 @@ def _extract_sensitive_values(value):
     found = []
     if isinstance(value, dict):
         for key, item in value.items():
-            if _is_sensitive_key(key) and isinstance(item, str):
+            normalized = str(key).lower()
+            if (_is_sensitive_key(key) or normalized in PAYMENT_SENSITIVE_KEYS) and isinstance(item, str):
                 found.append(item)
             found.extend(_extract_sensitive_values(item))
     elif isinstance(value, (list, tuple)):
@@ -369,6 +373,10 @@ def _payment_config_data(response):
     return data if isinstance(data, dict) else {}
 
 
+def _payment_config_options(data):
+    return data.get("fixed_options") if data.get("fixed_options") is not None else data.get("options") or []
+
+
 def load_payment_snapshot(admin: APIClient) -> PaymentSnapshot:
     response = admin.json("GET", "/api/v1/admin/commercial/recharge-config")
     data = _payment_config_data(response)
@@ -376,7 +384,7 @@ def load_payment_snapshot(admin: APIClient) -> PaymentSnapshot:
         channels=[dict(row) for row in data.get("channels") or [] if isinstance(row, dict)],
         fixed_options=[
             dict(row)
-            for row in (data.get("fixed_options") if data.get("fixed_options") is not None else data.get("options") or [])
+            for row in _payment_config_options(data)
             if isinstance(row, dict)
         ],
         bonus_rules=[dict(row) for row in data.get("bonus_rules") or [] if isinstance(row, dict)],
@@ -411,10 +419,49 @@ def _delete_bonus_rule(admin, rule_id):
     )
 
 
+def _decimal_amount(value):
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _row_amount_equals(row, key, amount):
+    return _decimal_amount(row.get(key)) == Decimal(str(amount))
+
+
+def _select_temp_option(config, prefix):
+    options = [row for row in _payment_config_options(config) if isinstance(row, dict)]
+    for amount in TEMP_RECHARGE_OPTION_AMOUNTS:
+        matches = [row for row in options if _row_amount_equals(row, "amount", amount)]
+        if not matches:
+            return {"amount": amount, "existing": None}
+        owned_matches = [row for row in matches if _payment_row_owned_by_run(row, prefix)]
+        if owned_matches and len(owned_matches) == len(matches):
+            return {"amount": amount, "existing": owned_matches[0]}
+    raise QASafetyError("No safe temporary recharge option amount is available in reserved QA range")
+
+
+def _select_temp_bonus_rule(config, prefix):
+    rules = [row for row in config.get("bonus_rules") or [] if isinstance(row, dict)]
+    owned_rules = [row for row in rules if _payment_row_owned_by_run(row, prefix)]
+    if owned_rules:
+        return {"threshold_amount": owned_rules[0].get("threshold_amount"), "existing": owned_rules[0]}
+    for threshold_amount in TEMP_BONUS_THRESHOLDS:
+        matches = [row for row in rules if _row_amount_equals(row, "threshold_amount", threshold_amount)]
+        if not matches:
+            return {"threshold_amount": threshold_amount, "existing": None}
+    raise QASafetyError("No safe temporary bonus rule threshold is available in reserved QA range")
+
+
 def ensure_temporary_payment_config(admin: APIClient, prefix: str) -> dict[str, Any] | None:
     validate_run_prefix(prefix)
     config_response = admin.json("GET", "/api/v1/admin/commercial/recharge-config")
     config = _payment_config_data(config_response)
+    option_selection = _select_temp_option(config, prefix)
+    bonus_selection = _select_temp_bonus_rule(config, prefix)
     other_channel = next(
         (
             row
@@ -443,33 +490,39 @@ def ensure_temporary_payment_config(admin: APIClient, prefix: str) -> dict[str, 
             },
         )
         channel_data = _payment_config_data(channel_response)
-    option_response = _post_recharge_option(
-        admin,
-        {
-            "amount": 991,
-            "credit_quota": 9910,
-            "label": f"{prefix}Temporary option",
-            "enabled": True,
-            "sort_order": 9001,
-            "remark": f"{prefix}Temporary recharge option",
-            "confirm_text": PAYMENT_CONFIG_CONFIRM_TEXT,
-        },
-    )
-    bonus_response = _post_bonus_rule(
-        admin,
-        {
-            "threshold_amount": 993,
-            "bonus_quota": 99,
-            "enabled": True,
-            "sort_order": 9002,
-            "remark": f"{prefix}Temporary bonus rule",
-            "confirm_text": PAYMENT_CONFIG_CONFIRM_TEXT,
-        },
-    )
+    option_data = option_selection["existing"] or {}
+    if not option_data:
+        option_response = _post_recharge_option(
+            admin,
+            {
+                "amount": option_selection["amount"],
+                "credit_quota": option_selection["amount"] * 10,
+                "label": f"{prefix}Temporary option",
+                "enabled": True,
+                "sort_order": 9001,
+                "remark": f"{prefix}Temporary recharge option",
+                "confirm_text": PAYMENT_CONFIG_CONFIRM_TEXT,
+            },
+        )
+        option_data = _payment_config_data(option_response)
+    bonus_data = bonus_selection["existing"] or {}
+    if not bonus_data:
+        bonus_response = _post_bonus_rule(
+            admin,
+            {
+                "threshold_amount": bonus_selection["threshold_amount"],
+                "bonus_quota": 99,
+                "enabled": True,
+                "sort_order": 9002,
+                "remark": f"{prefix}Temporary bonus rule",
+                "confirm_text": PAYMENT_CONFIG_CONFIRM_TEXT,
+            },
+        )
+        bonus_data = _payment_config_data(bonus_response)
     return {
         "channel": channel_data.get("channel"),
-        "option_id": _payment_config_data(option_response).get("id"),
-        "bonus_rule_id": _payment_config_data(bonus_response).get("id"),
+        "option_id": option_data.get("id"),
+        "bonus_rule_id": bonus_data.get("id"),
     }
 
 
@@ -534,7 +587,7 @@ def restore_payment_snapshot(admin: APIClient, snapshot: PaymentSnapshot, prefix
     for group in (current.channels, current.fixed_options, current.bonus_rules):
         for row in group:
             if _payment_row_mentions_qa_prefix(row) and not _payment_row_owned_by_run(row, prefix):
-                raise QASafetyError("Refusing non-prefixed temporary payment config cleanup")
+                raise QASafetyError("Refusing different-run temporary payment config cleanup")
 
     for row in snapshot.channels:
         payload = _channel_payload_from_row(row)
