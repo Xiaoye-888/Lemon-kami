@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy import inspect, text
 from sqlalchemy.pool import StaticPool
@@ -9,6 +10,7 @@ import routes_admin_advanced
 import routes_commercial
 import routes_merchant
 from auth_utils import hash_password
+from audit_service import CONFIRM_TEXT_BY_SCOPE
 from main import app as fastapi_app
 from models import (
     AdminAuditLog,
@@ -527,6 +529,140 @@ def test_merchant_batches_include_status_stats_and_low_quota_warning():
         assert quotas.status_code == 200
         assert quotas.json()["issue_card"]["low_balance_warning"] is True
         assert quotas.json()["issue_card"]["warning_threshold"] == 20
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_ops_health_backup_and_safe_download(tmp_path, monkeypatch):
+    import routes_ops
+
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+    monkeypatch.setattr("config.settings.BACKUP_ROOT", str(tmp_path / "backups"))
+    fastapi_app.dependency_overrides[routes_ops.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_ops.get_current_admin] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    try:
+        health = client.get("/api/v1/admin/ops/health")
+        assert health.status_code == 200
+        assert health.json()["database"]["ok"] is True
+
+        created = client.post(
+            "/api/v1/admin/ops/backups",
+            json={"backup_type": "database", "confirm_text": CONFIRM_TEXT_BY_SCOPE["create_ops_backup"]},
+        )
+        assert created.status_code == 200
+        backup_no = created.json()["backup_no"]
+
+        with Session(engine) as session:
+            record = session.exec(
+                select(OpsBackupRecord).where(OpsBackupRecord.backup_no == backup_no)
+            ).one()
+            assert record.status == "succeeded"
+            assert Path(record.file_path).exists()
+
+        denied = client.post(
+            "/api/v1/admin/ops/backups/../../etc/passwd/download",
+            json={"confirm_text": "纭涓嬭浇澶囦唤"},
+        )
+        assert denied.status_code in (400, 404)
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_ops_upload_cleanup_marks_terminal_proofs_only(tmp_path, monkeypatch):
+    import routes_ops
+
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+    uploads = tmp_path / "uploads"
+    proofs = uploads / "proofs"
+    proofs.mkdir(parents=True)
+    old_file = proofs / "old.jpg"
+    pending_file = proofs / "pending.jpg"
+    old_file.write_bytes(b"old")
+    pending_file.write_bytes(b"pending")
+    monkeypatch.setattr("commercial_service.UPLOAD_ROOT", uploads)
+    fastapi_app.dependency_overrides[routes_ops.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_ops.get_current_admin] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    try:
+        with Session(engine) as session:
+            _, merchant = seed_admin_and_merchant(session)
+            session.add_all(
+                [
+                    RechargeOrder(
+                        order_no="R202607250301",
+                        user_id=merchant.id,
+                        username=merchant.username,
+                        mode=RechargeMode.custom,
+                        channel=RechargeChannel.wechat,
+                        amount_cents=1000,
+                        base_quota=10,
+                        bonus_quota=0,
+                        credit_quota=10,
+                        status=RechargeOrderStatus.approved,
+                        proof_file_path=str(old_file),
+                        proof_file_name="old.jpg",
+                        proof_content_type="image/jpeg",
+                        reviewed_at=datetime(2026, 6, 1, 10, 0, 0),
+                        created_at=datetime(2026, 6, 1, 10, 0, 0),
+                    ),
+                    RechargeOrder(
+                        order_no="R202607250302",
+                        user_id=merchant.id,
+                        username=merchant.username,
+                        mode=RechargeMode.custom,
+                        channel=RechargeChannel.wechat,
+                        amount_cents=1000,
+                        base_quota=10,
+                        bonus_quota=0,
+                        credit_quota=10,
+                        status=RechargeOrderStatus.pending_review,
+                        proof_file_path=str(pending_file),
+                        proof_file_name="pending.jpg",
+                        proof_content_type="image/jpeg",
+                        created_at=datetime(2026, 6, 1, 10, 0, 0),
+                    ),
+                ]
+            )
+            session.commit()
+
+        preview = client.post(
+            "/api/v1/admin/ops/uploads/proofs/cleanup",
+            json={"older_than_days": 1, "dry_run": True},
+        )
+        assert preview.status_code == 200
+        assert preview.json()["matched_count"] == 1
+        assert old_file.exists()
+
+        cleanup = client.post(
+            "/api/v1/admin/ops/uploads/proofs/cleanup",
+            json={
+                "older_than_days": 1,
+                "dry_run": False,
+                "confirm_text": CONFIRM_TEXT_BY_SCOPE["cleanup_proof_files"],
+            },
+        )
+        assert cleanup.status_code == 200
+        assert cleanup.json()["deleted_count"] == 1
+        assert not old_file.exists()
+        assert pending_file.exists()
+
+        with Session(engine) as session:
+            approved_order = session.exec(
+                select(RechargeOrder).where(RechargeOrder.order_no == "R202607250301")
+            ).one()
+            pending_order = session.exec(
+                select(RechargeOrder).where(RechargeOrder.order_no == "R202607250302")
+            ).one()
+            assert approved_order.proof_file_deleted is True
+            assert approved_order.proof_deleted_at is not None
+            assert approved_order.proof_file_path is None
+            assert pending_order.proof_file_deleted is False
+            assert pending_order.proof_file_path == str(pending_file)
     finally:
         fastapi_app.dependency_overrides.clear()
 

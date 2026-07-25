@@ -607,3 +607,38 @@ def test_phase2_merchant_card_search_export_and_batch_stats_are_visible():
     assert "active_count" in merchant_batches
     assert "device_bound_count" in merchant_batches
     assert "if (queryParams.keyword) params.keyword = queryParams.keyword" in admin_kamis
+
+
+def test_phase2_ops_center_has_safe_backup_and_cleanup_controls():
+    router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")
+    layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
+    ops_api = (PROJECT_ROOT / "admin/src/api/ops.js").read_text(encoding="utf-8")
+    ops_view = (PROJECT_ROOT / "admin/src/views/AdminOps.vue").read_text(encoding="utf-8")
+
+    assert "/admin/ops" in layout
+    assert "\u8fd0\u7ef4\u4e2d\u5fc3" in layout
+    assert "path: 'ops'" in router
+    assert "AdminOps" in router
+    assert "/admin/ops/backups" in ops_api
+    assert "/admin/ops/uploads/proofs/cleanup" in ops_api
+    assert "\u786e\u8ba4\u521b\u5efa\u5907\u4efd" in ops_view
+    assert "\u786e\u8ba4\u4e0b\u8f7d\u5907\u4efd" in ops_view
+    assert "\u786e\u8ba4\u6e05\u7406\u51ed\u8bc1" in ops_view
+    assert "shell" not in ops_view.lower()
+
+
+def test_phase2_audit_page_is_admin_only_and_visible():
+    router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")
+    layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
+    audit_api = (PROJECT_ROOT / "admin/src/api/audit.js").read_text(encoding="utf-8")
+    audit_view = (PROJECT_ROOT / "admin/src/views/AdminAuditLogs.vue").read_text(encoding="utf-8")
+
+    assert "/admin/commercial/audit-logs" in layout
+    assert "\u64cd\u4f5c\u5ba1\u8ba1" in layout
+    assert "path: 'commercial/audit-logs'" in router
+    assert "AdminAuditLogs" in router
+    assert "/admin/commercial/audit-logs" in audit_api
+    assert "\u7ba1\u7406\u5458" in audit_view
+    assert "\u64cd\u4f5c\u7c7b\u578b" in audit_view
+    assert "\u64cd\u4f5c\u7ed3\u679c" in audit_view
+    assert "delete" not in audit_view.lower()

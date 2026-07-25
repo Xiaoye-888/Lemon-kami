@@ -908,8 +908,12 @@ def cleanup_recharge_proofs(
             if order.proof_file_path and Path(order.proof_file_path).exists():
                 deleted_proofs += 1
             continue
+        file_missing = bool(order.proof_file_path) and not Path(order.proof_file_path).exists()
         if _delete_proof_file_if_safe(order.proof_file_path):
             deleted_proofs += 1
+        if file_missing or order.proof_file_path:
+            order.proof_file_deleted = True
+            order.proof_deleted_at = get_now_naive()
         order.proof_file_path = None
         order.proof_file_name = None
         order.proof_content_type = None

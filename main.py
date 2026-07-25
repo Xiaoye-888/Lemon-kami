@@ -18,6 +18,7 @@ from routes_commercial import public_router as commercial_public_router
 from routes_commercial import router as commercial_router
 from routes_user import router as user_router
 from routes_merchant import router as merchant_router
+from routes_ops import router as ops_router
 from routes_docs import router as docs_router
 from config import settings
 
@@ -148,6 +149,7 @@ app.include_router(commercial_router)
 app.include_router(admin_router)
 app.include_router(user_router)
 app.include_router(merchant_router)
+app.include_router(ops_router)
 app.include_router(docs_router)
 
 
