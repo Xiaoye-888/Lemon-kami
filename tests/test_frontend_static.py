@@ -565,6 +565,7 @@ def test_kamis_list_ignores_stale_route_app_id_before_loading_child_resources():
     assert "normalizeSelectedAppId" in kamis
     assert "routeAppId && isKnownAppId(routeAppId)" in kamis
     assert "routeAppWasStale" in kamis
+    assert "path: '/admin/kamis/list'" in kamis
     assert "query: queryParams.app_id ? { app_id: queryParams.app_id } : {}" in kamis
 
 

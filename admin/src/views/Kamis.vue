@@ -353,7 +353,7 @@ const normalizeSelectedAppId = async () => {
   }
   if (routeAppId && routeAppId !== queryParams.app_id) {
     await router.replace({
-      path: '/admin/kamis',
+      path: '/admin/kamis/list',
       query: queryParams.app_id ? { app_id: queryParams.app_id } : {}
     })
     queryParams.spec_id = ''
