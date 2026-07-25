@@ -18,9 +18,11 @@ from main import app as fastapi_app
 from models import (
     AdminUser,
     App,
+    AppNotice,
     Device,
     EndUser,
     Kami,
+    KamiBatch,
     KamiDeviceBinding,
     RechargeChannel,
     RechargeBonusRule,
@@ -845,6 +847,234 @@ def test_merchant_can_create_self_owned_app_without_hidden_app_create_quota():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_merchant_dashboard_aggregates_workbench_data_for_visible_resources():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="dashboard-issuer", password_hash=hash_password("secret123"), status=1)
+        other = EndUser(username="other-dashboard-issuer", password_hash=hash_password("secret123"), status=1)
+        session.add_all([merchant, other])
+        session.commit()
+        session.refresh(merchant)
+        session.refresh(other)
+        self_app = App(
+            app_id="app_dashboard_self",
+            name="Dashboard Self App",
+            app_secret="secret-self",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+            status=1,
+        )
+        authorized_app = App(
+            app_id="app_dashboard_authorized",
+            name="Dashboard Authorized App",
+            app_secret="secret-authorized",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by="admin",
+            status=1,
+        )
+        other_app = App(
+            app_id="app_dashboard_other",
+            name="Dashboard Other App",
+            app_secret="secret-other",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by=other.username,
+            owner_user_id=other.id,
+            status=1,
+        )
+        session.add_all([self_app, authorized_app, other_app])
+        session.add(UserAppAuthorization(app_id=authorized_app.app_id, user_id=merchant.id, username=merchant.username, granted_by="admin"))
+        session.add(UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=7, total_kami_issue_granted=12))
+        session.add(
+            RechargeOrder(
+                order_no="RC_DASHBOARD_001",
+                user_id=merchant.id,
+                username=merchant.username,
+                amount_cents=1000,
+                credit_quota=10,
+                channel=RechargeChannel.wechat,
+                mode=RechargeMode.fixed,
+                status=RechargeOrderStatus.pending_review,
+            )
+        )
+        session.add(AppNotice(app_id=self_app.app_id, title="额度维护通知", content="请关注额度", level="important", enabled=True))
+        session.add(AppNotice(app_id=other_app.app_id, title="其他用户通知", content="不可见", level="important", enabled=True))
+        batch = KamiBatch(
+            app_id=self_app.app_id,
+            batch_no="DASH-BATCH-001",
+            kami_type="points",
+            points_amount=100,
+        )
+        session.add(batch)
+        session.commit()
+        session.add_all(
+            [
+                Kami(
+                    app_id=self_app.app_id,
+                    kami_code="DASH-CARD-001",
+                    kami_type="points",
+                    batch_no=batch.batch_no,
+                    points_amount=100,
+                    created_by_user_id=merchant.id,
+                ),
+                Kami(
+                    app_id=other_app.app_id,
+                    kami_code="OTHER-DASH-CARD-001",
+                    kami_type="points",
+                    batch_no="OTHER-DASH",
+                    points_amount=100,
+                    created_by_user_id=other.id,
+                ),
+            ]
+        )
+        session.commit()
+        token = routes_user.create_user_access_token(merchant)
+
+    try:
+        response = client.get("/api/v1/merchant/dashboard", headers=auth_headers(token))
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["quota"]["balance"] == 7
+        assert data["quota"]["total_granted"] == 12
+        assert data["apps"]["total"] == 2
+        assert data["apps"]["self_owned"] == 1
+        assert data["apps"]["authorized"] == 1
+        assert data["orders"]["pending_review"] == 1
+        assert data["cards"]["total"] == 1
+        assert [item["title"] for item in data["notifications"]] == ["额度维护通知"]
+        assert data["recent_batches"][0]["batch_no"] == "DASH-BATCH-001"
+        assert data["recent_orders"][0]["order_no"] == "RC_DASHBOARD_001"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_self_owned_specs_are_manageable_and_authorized_specs_are_read_only():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="spec-manager", password_hash=hash_password("secret123"), status=1)
+        other = EndUser(username="other-spec-manager", password_hash=hash_password("secret123"), status=1)
+        session.add_all([merchant, other])
+        session.commit()
+        session.refresh(merchant)
+        session.refresh(other)
+        self_app = App(
+            app_id="app_spec_self",
+            name="Spec Self App",
+            app_secret="secret-self",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        authorized_app = App(
+            app_id="app_spec_authorized",
+            name="Spec Authorized App",
+            app_secret="secret-authorized",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by="admin",
+        )
+        other_app = App(
+            app_id="app_spec_other",
+            name="Spec Other App",
+            app_secret="secret-other",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by=other.username,
+            owner_user_id=other.id,
+        )
+        session.add_all([self_app, authorized_app, other_app])
+        session.add(UserAppAuthorization(app_id=authorized_app.app_id, user_id=merchant.id, username=merchant.username, granted_by="admin"))
+        session.add_all(
+            [
+                KamiSpec(app_id=authorized_app.app_id, spec_key="enabled", spec_name="Enabled Spec", kami_type="points", points_amount=100, status=1),
+                KamiSpec(app_id=authorized_app.app_id, spec_key="disabled", spec_name="Disabled Spec", kami_type="points", points_amount=200, status=0),
+            ]
+        )
+        session.commit()
+        token = routes_user.create_user_access_token(merchant)
+
+    spec_payload = {
+        "kami_type": "points",
+        "points_amount": 88,
+        "points_valid_days": 30,
+        "machine_bind_mode": "one_card_multi_device",
+        "max_bind_devices": 2,
+        "authorization_owner": "device",
+        "user_bind_mode": "none",
+        "remark": "self owned spec",
+    }
+
+    try:
+        created = client.post(
+            "/api/v1/merchant/apps/app_spec_self/specs",
+            headers=auth_headers(token),
+            json=spec_payload,
+        )
+        assert created.status_code == 200
+        created_spec = created.json()["data"]
+        assert created_spec["app_id"] == "app_spec_self"
+        assert created_spec["points_amount"] == 88
+        assert created_spec["is_editable"] is True
+        assert created_spec["batch_count"] == 0
+        spec_id = created_spec["id"]
+
+        listed_self = client.get("/api/v1/merchant/apps/app_spec_self/specs", headers=auth_headers(token))
+        assert listed_self.status_code == 200
+        assert listed_self.json()["data"]["total"] == 1
+        assert listed_self.json()["data"]["items"][0]["is_editable"] is True
+
+        updated = client.put(
+            f"/api/v1/merchant/apps/app_spec_self/specs/{spec_id}",
+            headers=auth_headers(token),
+            json={"status": 0, "sort_order": 5, "remark": "paused"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["data"]["status"] == 0
+        assert updated.json()["data"]["sort_order"] == 5
+
+        deleted = client.delete(f"/api/v1/merchant/apps/app_spec_self/specs/{spec_id}", headers=auth_headers(token))
+        assert deleted.status_code == 200
+
+        authorized_list = client.get("/api/v1/merchant/apps/app_spec_authorized/specs", headers=auth_headers(token))
+        assert authorized_list.status_code == 200
+        authorized_items = authorized_list.json()["data"]["items"]
+        assert [item["spec_name"] for item in authorized_items] == ["Enabled Spec"]
+        assert authorized_items[0]["is_editable"] is False
+
+        forbidden_create = client.post(
+            "/api/v1/merchant/apps/app_spec_authorized/specs",
+            headers=auth_headers(token),
+            json=spec_payload,
+        )
+        assert forbidden_create.status_code == 403
+
+        forbidden_other = client.post(
+            "/api/v1/merchant/apps/app_spec_other/specs",
+            headers=auth_headers(token),
+            json=spec_payload,
+        )
+        assert forbidden_other.status_code == 403
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_duplicate_merchant_issue_batch_is_rejected_without_free_cards():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
@@ -1191,6 +1421,29 @@ def test_issue_pricing_rules_drive_merchant_preview_issue_and_quota_snapshots():
         assert authorized_issue.json()["data"]["total_cost"] == 10
         assert authorized_issue.json()["data"]["pricing_source"] == "user_authorized_spec"
         assert authorized_issue.json()["data"]["pricing_rule_id"] == authorized_rule.json()["data"]["id"]
+
+        self_batches = client.get(
+            "/api/v1/merchant/apps/app_priced_self/batches",
+            headers=auth_headers(token),
+        )
+        assert self_batches.status_code == 200
+        self_batch = self_batches.json()["items"][0]
+        assert self_batch["batch_no"] == "PRICED-SELF-001"
+        assert self_batch["unit_issue_cost"] == 3
+        assert self_batch["total_issue_cost"] == 6
+        assert self_batch["pricing_source"] == "user_self_app"
+
+        authorized_batches = client.get(
+            "/api/v1/merchant/apps/app_priced_authorized/batches",
+            headers=auth_headers(token),
+        )
+        assert authorized_batches.status_code == 200
+        authorized_batch = authorized_batches.json()["items"][0]
+        assert authorized_batch["batch_no"] == "PRICED-AUTH-001"
+        assert authorized_batch["spec_name"] == "Priced Lifetime"
+        assert authorized_batch["unit_issue_cost"] == 5
+        assert authorized_batch["total_issue_cost"] == 10
+        assert authorized_batch["pricing_source"] == "user_authorized_spec"
 
         with Session(engine) as session:
             account = session.exec(

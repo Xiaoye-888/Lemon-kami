@@ -367,8 +367,8 @@ def test_commercial_shared_login_and_role_routes_are_present():
     assert "role = ref" in store
     assert "localStorage.setItem('role'" in store
     assert "res.redirect" in store
-    assert "管理员 / 商户共用登录" in login
-    assert "使用管理员或商户账号登录" in login
+    assert "管理员 / 发卡用户共用登录" in login
+    assert "使用管理员或发卡用户账号登录" in login
     assert "path: '/admin'" in router
     assert "path: '/merchant'" in router
     assert "MerchantDashboard" in router
@@ -379,13 +379,30 @@ def test_commercial_admin_and_merchant_navigation_entries_are_visible():
     layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
 
     assert "商业版后台" in layout
-    assert "商户控制台" in layout
+    assert "发卡用户后台" in layout
+    assert "发卡工作台" in layout
     assert "充值订单" in layout
     assert "充值配置" in layout
     assert "发卡额度流水" in layout
     assert "我的订单" in layout
     assert "批次管理" in layout
     assert "我的卡密" in layout
+
+
+def test_merchant_console_uses_card_issuer_language_in_visible_shell():
+    layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
+    router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")
+    login = (PROJECT_ROOT / "admin/src/views/Login.vue").read_text(encoding="utf-8")
+    dashboard = (PROJECT_ROOT / "admin/src/views/MerchantDashboard.vue").read_text(encoding="utf-8")
+
+    combined = "\n".join([layout, router, login, dashboard])
+
+    assert "\u53d1\u5361\u7528\u6237\u540e\u53f0" in layout
+    assert "\u53d1\u5361\u7528\u6237" in layout
+    assert "\u53d1\u5361\u5de5\u4f5c\u53f0" in router
+    assert "\u53d1\u5361\u5de5\u4f5c\u53f0" in dashboard
+    assert "\u5546\u6237\u63a7\u5236\u53f0" not in combined
+    assert "\u5546\u6237\u8d26\u53f7" not in combined
 
 
 def test_main_layout_imports_every_menu_icon_it_uses():
@@ -463,6 +480,66 @@ def test_merchant_recharge_channel_radios_use_value_prop():
 
     assert ':value="item.channel"' in merchant_recharge
     assert ':label="item.channel"' not in merchant_recharge
+
+
+def test_merchant_recharge_layout_places_amount_left_and_payment_right():
+    merchant_recharge = (PROJECT_ROOT / "admin/src/views/MerchantRecharge.vue").read_text(encoding="utf-8")
+
+    assert 'class="panel amount-panel"' in merchant_recharge
+    assert 'class="panel payment-panel"' in merchant_recharge
+    assert merchant_recharge.index('class="panel amount-panel"') < merchant_recharge.index('class="panel payment-panel"')
+    assert "grid-template-columns: minmax(520px, 680px) minmax(340px, 420px)" in merchant_recharge
+    assert "grid-template-columns: repeat(auto-fill, minmax(132px, 160px))" in merchant_recharge
+    assert "justify-content: start" in merchant_recharge
+    assert "minmax(0, 1fr)" not in merchant_recharge.split(".recharge-grid", 1)[1].split("}", 1)[0]
+
+
+def test_merchant_apps_create_flow_uses_dialog_instead_of_inline_input():
+    merchant_apps = (PROJECT_ROOT / "admin/src/views/MerchantApps.vue").read_text(encoding="utf-8")
+
+    assert "<el-dialog" in merchant_apps
+    assert "createDialogVisible" in merchant_apps
+    assert "createResultVisible" in merchant_apps
+    assert "createForm" in merchant_apps
+    assert "@click=\"openCreateDialog\"" in merchant_apps
+    assert "handleCreateApp" in merchant_apps
+    toolbar_source = merchant_apps.split('class="page-toolbar"', 1)[1].split("</div>", 2)[0]
+    assert 'placeholder="\u5e94\u7528\u540d\u79f0"' not in toolbar_source
+    assert "newAppName" not in merchant_apps
+
+
+def test_merchant_batches_exposes_spec_first_workbench_and_scoped_apis():
+    merchant_api = (PROJECT_ROOT / "admin/src/api/merchant.js").read_text(encoding="utf-8")
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+
+    for api_name in (
+        "getMerchantDashboard",
+        "createMerchantAppSpec",
+        "updateMerchantAppSpec",
+        "deleteMerchantAppSpec",
+        "getMerchantSpecBatches",
+        "getMerchantSpecKamis",
+        "getMerchantBatchKamis",
+    ):
+        assert api_name in merchant_api
+
+    for view_token in (
+        "spec-workbench",
+        "specRows",
+        "selectedSpec",
+        "specDialogVisible",
+        "generateDialogVisible",
+        "batchDrawerVisible",
+        "loadSpecBatches",
+        "loadSpecKamis",
+        "openGenerateDialog",
+        "openSpecDialog",
+    ):
+        assert view_token in merchant_batches
+
+    assert "\u81ea\u5efa\u5e94\u7528" in merchant_batches
+    assert "\u6388\u6743\u5e94\u7528" in merchant_batches
+    assert "\u89c4\u683c\u4fe1\u606f" in merchant_batches
 
 
 def test_commercial_ops_stability_controls_are_exposed():
@@ -677,8 +754,8 @@ def test_issue_pricing_admin_page_uses_business_pricing_language():
 def test_merchant_issue_preview_shows_pricing_rule_source():
     merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
 
-    assert "issuePreview.unit_cost" in merchant_batches
-    assert "issuePreview.pricing_source" in merchant_batches
+    assert "issuePreview?.unit_cost" in merchant_batches
+    assert "issuePreview?.pricing_source" in merchant_batches
     assert "pricingLabel" in merchant_batches
     assert "用户授权规格专属" in merchant_batches
 

@@ -123,8 +123,8 @@ const themeStore = useThemeStore()
 const collapsed = ref(false)
 
 const isMerchant = computed(() => userStore.role === 'merchant' || route.path.startsWith('/merchant'))
-const shellTitle = computed(() => (isMerchant.value ? '商户控制台' : '商业版后台'))
-const roleLabel = computed(() => (isMerchant.value ? '商户账号' : '管理员账号'))
+const shellTitle = computed(() => (isMerchant.value ? '发卡用户后台' : '商业版后台'))
+const roleLabel = computed(() => (isMerchant.value ? '发卡用户' : '管理员账号'))
 const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => route.meta?.title || shellTitle.value)
 const isDark = computed(() => themeStore.isDark)
@@ -175,7 +175,7 @@ const adminMenuItems = [
 ]
 
 const merchantMenuItems = [
-  { index: '/merchant/dashboard', label: '商户控制台', icon: DataAnalysis },
+  { index: '/merchant/dashboard', label: '发卡工作台', icon: DataAnalysis },
   { index: '/merchant/recharge', label: '充值发卡额度', icon: Wallet },
   { index: '/merchant/orders', label: '我的订单', icon: Tickets },
   { index: '/merchant/transactions', label: '发卡额度流水', icon: Coin },

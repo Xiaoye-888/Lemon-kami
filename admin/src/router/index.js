@@ -28,7 +28,7 @@ const adminChildren = [
 ]
 
 const merchantChildren = [
-  { path: 'dashboard', name: 'MerchantDashboard', component: () => import('../views/MerchantDashboard.vue'), meta: { title: '商户控制台' } },
+  { path: 'dashboard', name: 'MerchantDashboard', component: () => import('../views/MerchantDashboard.vue'), meta: { title: '发卡工作台' } },
   { path: 'recharge', name: 'MerchantRecharge', component: () => import('../views/MerchantRecharge.vue'), meta: { title: '充值发卡额度' } },
   { path: 'orders', name: 'MerchantOrders', component: () => import('../views/MerchantOrders.vue'), meta: { title: '我的订单' } },
   { path: 'transactions', name: 'MerchantTransactions', component: () => import('../views/MerchantTransactions.vue'), meta: { title: '发卡额度流水' } },

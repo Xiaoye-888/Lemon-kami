@@ -14,6 +14,13 @@ export function getMerchantQuotas() {
   })
 }
 
+export function getMerchantDashboard() {
+  return request({
+    url: '/merchant/dashboard',
+    method: 'get'
+  })
+}
+
 export function getMerchantQuotaTransactions(params) {
   return request({
     url: '/merchant/quota-transactions',
@@ -91,6 +98,29 @@ export function getMerchantAppSpecs(appId) {
   })
 }
 
+export function createMerchantAppSpec(appId, data) {
+  return request({
+    url: `/merchant/apps/${appId}/specs`,
+    method: 'post',
+    data
+  })
+}
+
+export function updateMerchantAppSpec(appId, specId, data) {
+  return request({
+    url: `/merchant/apps/${appId}/specs/${specId}`,
+    method: 'put',
+    data
+  })
+}
+
+export function deleteMerchantAppSpec(appId, specId) {
+  return request({
+    url: `/merchant/apps/${appId}/specs/${specId}`,
+    method: 'delete'
+  })
+}
+
 export function issueMerchantKamis(appId, data) {
   return request({
     url: `/merchant/apps/${appId}/kamis/batch`,
@@ -135,5 +165,28 @@ export function getMerchantBatches(appId) {
   return request({
     url: `/merchant/apps/${appId}/batches`,
     method: 'get'
+  })
+}
+
+export function getMerchantSpecBatches(specId) {
+  return request({
+    url: `/merchant/kami-specs/${specId}/batches`,
+    method: 'get'
+  })
+}
+
+export function getMerchantSpecKamis(specId, params) {
+  return request({
+    url: `/merchant/kami-specs/${specId}/kamis`,
+    method: 'get',
+    params
+  })
+}
+
+export function getMerchantBatchKamis(batchId, params) {
+  return request({
+    url: `/merchant/batches/${batchId}/kamis`,
+    method: 'get',
+    params
   })
 }
