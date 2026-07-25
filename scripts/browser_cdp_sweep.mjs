@@ -7,6 +7,8 @@ import path from "node:path";
 
 const LOAD_TIMEOUT_MS = 30_000;
 const CDP_TIMEOUT_MS = 15_000;
+// Keep this below Python's 300s subprocess timeout so JS exits through cleanup first.
+const BROWSER_SWEEP_TIMEOUT_MS = 270_000;
 const SENSITIVE_PATTERNS = [
   /\bKAMI-[A-Za-z0-9]{8,}\b/g,
   /\bfingerprint-[A-Za-z0-9]{8,}\b/gi,
@@ -58,6 +60,21 @@ function reservePort() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withOverallDeadline(work) {
+  let timeoutId;
+  const deadline = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`Browser CDP sweep exceeded internal deadline of ${BROWSER_SWEEP_TIMEOUT_MS}ms`));
+    }, BROWSER_SWEEP_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function maskMiddle(value, keep = 3) {
@@ -436,16 +453,20 @@ async function main() {
 
   let cdp;
   try {
-    const version = await waitForJsonVersion(port, chrome);
-    cdp = new CdpConnection(version.webSocketDebuggerUrl);
-    await cdp.connect();
+    const sweepWork = (async () => {
+      const version = await waitForJsonVersion(port, chrome);
+      cdp = new CdpConnection(version.webSocketDebuggerUrl);
+      await cdp.connect();
 
-    const results = [];
-    for (const viewport of payload.viewports || []) {
-      for (const routeCase of routeCases(payload.routes || {})) {
-        results.push(await sweepPage(cdp, payload, routeCase, viewport));
+      const results = [];
+      for (const viewport of payload.viewports || []) {
+        for (const routeCase of routeCases(payload.routes || {})) {
+          results.push(await sweepPage(cdp, payload, routeCase, viewport));
+        }
       }
-    }
+      return results;
+    })();
+    const results = await withOverallDeadline(sweepWork);
     process.stdout.write(JSON.stringify(results, null, 2));
   } catch (error) {
     console.error(sanitizeDiagnostics(error.message || error));
