@@ -22,6 +22,7 @@ SECRET_KEYS = {
 }
 MASKED_VALUE_KEYS = {"kami", "kami_code", "code", "device_fingerprint", "fingerprint"}
 PRODUCTION_CONFIRMATION = "I_UNDERSTAND_THIS_CREATES_TEMP_PRODUCTION_DATA"
+PAYMENT_CONFIG_CONFIRM_TEXT = "确认修改充值配置"
 REPORT_FILENAME = "production-e2e-browser-report.md"
 BROWSER_SWEEP_TIMEOUT_SECONDS = 300
 VIEWPORTS = [
@@ -113,6 +114,13 @@ class AuthSession:
             "role": self.role,
             "userInfo": self.user_info,
         }
+
+
+@dataclass
+class PaymentSnapshot:
+    channels: list[dict[str, Any]]
+    fixed_options: list[dict[str, Any]]
+    bonus_rules: list[dict[str, Any]]
 
 
 def _sanitize_api_error_text(value, sensitive_values=()):
@@ -338,6 +346,227 @@ def is_owned_by_run(value, prefix):
 def assert_owned_by_run(value, prefix):
     if not is_owned_by_run(value, prefix):
         raise QASafetyError(f"Refusing cleanup for non-QA resource: {value!r}")
+
+
+def _payment_row_text_fields(row):
+    for key in ("display_name", "remark", "label"):
+        value = row.get(key) if isinstance(row, dict) else None
+        if isinstance(value, str):
+            yield value
+
+
+def _payment_row_owned_by_run(row, prefix):
+    return any(is_owned_by_run(value, prefix) for value in _payment_row_text_fields(row))
+
+
+def _payment_row_mentions_qa_prefix(row):
+    return any("E2E_UI_QA_" in value for value in _payment_row_text_fields(row))
+
+
+def _copy_public_payment_row(row):
+    safe_row = dict(row)
+    for key in ("qr_code_url", "account_name"):
+        if safe_row.get(key):
+            safe_row[key] = "<redacted>"
+    return safe_row
+
+
+def _payment_config_data(response):
+    data = response.get("data") if isinstance(response, dict) else None
+    return data if isinstance(data, dict) else {}
+
+
+def load_payment_snapshot(admin: APIClient) -> PaymentSnapshot:
+    response = admin.json("GET", "/api/v1/admin/commercial/recharge-config")
+    data = _payment_config_data(response)
+    return PaymentSnapshot(
+        channels=[_copy_public_payment_row(row) for row in data.get("channels") or [] if isinstance(row, dict)],
+        fixed_options=[
+            dict(row)
+            for row in (data.get("fixed_options") if data.get("fixed_options") is not None else data.get("options") or [])
+            if isinstance(row, dict)
+        ],
+        bonus_rules=[dict(row) for row in data.get("bonus_rules") or [] if isinstance(row, dict)],
+    )
+
+
+def _post_payment_channel(admin, payload):
+    return admin.json("POST", "/api/v1/admin/commercial/payment-channels", json=payload)
+
+
+def _post_recharge_option(admin, payload):
+    return admin.json("POST", "/api/v1/admin/commercial/recharge-options", json=payload)
+
+
+def _post_bonus_rule(admin, payload):
+    return admin.json("POST", "/api/v1/admin/commercial/recharge-bonus-rules", json=payload)
+
+
+def _delete_recharge_option(admin, option_id):
+    return admin.json(
+        "DELETE",
+        f"/api/v1/admin/commercial/recharge-options/{option_id}",
+        params={"confirm_text": PAYMENT_CONFIG_CONFIRM_TEXT},
+    )
+
+
+def _delete_bonus_rule(admin, rule_id):
+    return admin.json(
+        "DELETE",
+        f"/api/v1/admin/commercial/recharge-bonus-rules/{rule_id}",
+        params={"confirm_text": PAYMENT_CONFIG_CONFIRM_TEXT},
+    )
+
+
+def ensure_temporary_payment_config(admin: APIClient, prefix: str) -> dict[str, Any] | None:
+    validate_run_prefix(prefix)
+    config_response = admin.json("GET", "/api/v1/admin/commercial/recharge-config")
+    config = _payment_config_data(config_response)
+    other_channel = next(
+        (
+            row
+            for row in config.get("channels") or []
+            if isinstance(row, dict) and row.get("channel") == "other"
+        ),
+        None,
+    )
+    can_touch_other_channel = not (
+        isinstance(other_channel, dict)
+        and (other_channel.get("qr_code_url") or other_channel.get("account_name"))
+    )
+    channel_data = {}
+    if can_touch_other_channel:
+        channel_response = _post_payment_channel(
+            admin,
+            {
+                "channel": "other",
+                "display_name": f"{prefix}Temporary channel",
+                "qr_code_url": None,
+                "account_name": None,
+                "enabled": True,
+                "sort_order": 9000,
+                "remark": f"{prefix}Temporary payment channel",
+                "confirm_text": PAYMENT_CONFIG_CONFIRM_TEXT,
+            },
+        )
+        channel_data = _payment_config_data(channel_response)
+    option_response = _post_recharge_option(
+        admin,
+        {
+            "amount": 991,
+            "credit_quota": 9910,
+            "label": f"{prefix}Temporary option",
+            "enabled": True,
+            "sort_order": 9001,
+            "remark": f"{prefix}Temporary recharge option",
+            "confirm_text": PAYMENT_CONFIG_CONFIRM_TEXT,
+        },
+    )
+    bonus_response = _post_bonus_rule(
+        admin,
+        {
+            "threshold_amount": 993,
+            "bonus_quota": 99,
+            "enabled": True,
+            "sort_order": 9002,
+            "remark": f"{prefix}Temporary bonus rule",
+            "confirm_text": PAYMENT_CONFIG_CONFIRM_TEXT,
+        },
+    )
+    return {
+        "channel": channel_data.get("channel"),
+        "option_id": _payment_config_data(option_response).get("id"),
+        "bonus_rule_id": _payment_config_data(bonus_response).get("id"),
+    }
+
+
+def _channel_payload_from_row(row, *, enabled=None):
+    required = ("channel", "display_name")
+    if any(row.get(key) in (None, "") for key in required):
+        return None
+    return {
+        "channel": row["channel"],
+        "display_name": row["display_name"],
+        "qr_code_url": None if row.get("qr_code_url") == "<redacted>" else row.get("qr_code_url"),
+        "account_name": None if row.get("account_name") == "<redacted>" else row.get("account_name"),
+        "enabled": row.get("enabled") if enabled is None else enabled,
+        "sort_order": row.get("sort_order", 0),
+        "remark": row.get("remark"),
+        "confirm_text": PAYMENT_CONFIG_CONFIRM_TEXT,
+    }
+
+
+def _option_payload_from_row(row, *, enabled=None):
+    required = ("amount", "credit_quota")
+    if any(row.get(key) in (None, "") for key in required):
+        return None
+    return {
+        "amount": row["amount"],
+        "credit_quota": row["credit_quota"],
+        "label": row.get("label"),
+        "enabled": row.get("enabled") if enabled is None else enabled,
+        "sort_order": row.get("sort_order", 0),
+        "remark": row.get("remark"),
+        "confirm_text": PAYMENT_CONFIG_CONFIRM_TEXT,
+    }
+
+
+def _bonus_payload_from_row(row, *, enabled=None):
+    required = ("threshold_amount", "bonus_quota")
+    if any(row.get(key) in (None, "") for key in required):
+        return None
+    return {
+        "threshold_amount": row["threshold_amount"],
+        "bonus_quota": row["bonus_quota"],
+        "enabled": row.get("enabled") if enabled is None else enabled,
+        "sort_order": row.get("sort_order", 0),
+        "remark": row.get("remark"),
+        "confirm_text": PAYMENT_CONFIG_CONFIRM_TEXT,
+    }
+
+
+def _snapshot_keys(snapshot):
+    return {
+        "channels": {row.get("channel") for row in snapshot.channels if isinstance(row, dict)},
+        "fixed_options": {row.get("amount") for row in snapshot.fixed_options if isinstance(row, dict)},
+        "bonus_rules": {row.get("id") for row in snapshot.bonus_rules if isinstance(row, dict)},
+    }
+
+
+def restore_payment_snapshot(admin: APIClient, snapshot: PaymentSnapshot, prefix: str) -> None:
+    validate_run_prefix(prefix)
+    current = load_payment_snapshot(admin)
+    keys = _snapshot_keys(snapshot)
+
+    for group in (current.channels, current.fixed_options, current.bonus_rules):
+        for row in group:
+            if _payment_row_mentions_qa_prefix(row) and not _payment_row_owned_by_run(row, prefix):
+                raise QASafetyError("Refusing non-prefixed temporary payment config cleanup")
+
+    for row in snapshot.channels:
+        payload = _channel_payload_from_row(row)
+        if payload:
+            _post_payment_channel(admin, payload)
+    for row in snapshot.fixed_options:
+        payload = _option_payload_from_row(row)
+        if payload:
+            _post_recharge_option(admin, payload)
+
+    for row in current.channels:
+        if row.get("channel") not in keys["channels"] and _payment_row_owned_by_run(row, prefix):
+            payload = _channel_payload_from_row(row, enabled=False)
+            if payload:
+                _post_payment_channel(admin, payload)
+    for row in current.fixed_options:
+        if row.get("amount") not in keys["fixed_options"] and _payment_row_owned_by_run(row, prefix):
+            option_id = row.get("id")
+            if option_id is not None:
+                _delete_recharge_option(admin, option_id)
+    for row in current.bonus_rules:
+        if row.get("id") not in keys["bonus_rules"] and _payment_row_owned_by_run(row, prefix):
+            rule_id = row.get("id")
+            if rule_id is not None:
+                _delete_bonus_rule(admin, rule_id)
 
 
 def mask_middle(value, keep=3):

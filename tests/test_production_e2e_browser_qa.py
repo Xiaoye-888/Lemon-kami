@@ -42,6 +42,19 @@ class FakeSession:
         return self.responses.pop(0)
 
 
+class FakeAPIClient:
+    def __init__(self, responses=None):
+        self.responses = list(responses or [])
+        self.calls = []
+
+    def json(self, method, path, expected=(200,), **kwargs):
+        self.calls.append({"method": method, "path": path, "expected": expected, "kwargs": kwargs})
+        if not self.responses:
+            return {"success": True, "data": {}}
+        response = self.responses.pop(0)
+        return response() if callable(response) else response
+
+
 def install_fake_api_session(monkeypatch, qa, session):
     original_init = qa.APIClient.__init__
 
@@ -676,3 +689,392 @@ def test_browser_result_evaluation_accepts_cdp_layout_keys():
         "Large blank page area detected",
         "Overwide cards detected",
     ]
+
+
+def test_load_payment_snapshot_reads_and_redacts_recharge_config_options_alias():
+    qa = load_qa_module()
+    admin = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "data": {
+                    "channels": [
+                        {
+                            "id": 1,
+                            "channel": "wechat",
+                            "display_name": "Wechat",
+                            "qr_code_url": "https://pay.example.invalid/real-qr",
+                            "account_name": "real-payment-account",
+                            "enabled": True,
+                            "sort_order": 1,
+                            "remark": "production row",
+                        }
+                    ],
+                    "options": [
+                        {
+                            "id": 2,
+                            "amount": 100,
+                            "credit_quota": 1000,
+                            "label": "100 plan",
+                            "enabled": True,
+                            "sort_order": 2,
+                            "remark": "production option",
+                        }
+                    ],
+                    "bonus_rules": [
+                        {
+                            "id": 3,
+                            "threshold_amount": 200,
+                            "bonus_quota": 50,
+                            "enabled": False,
+                            "sort_order": 3,
+                            "remark": "production bonus",
+                        }
+                    ],
+                },
+            }
+        ]
+    )
+
+    snapshot = qa.load_payment_snapshot(admin)
+
+    assert isinstance(snapshot, qa.PaymentSnapshot)
+    assert admin.calls[0]["method"] == "GET"
+    assert admin.calls[0]["path"] == "/api/v1/admin/commercial/recharge-config"
+    assert snapshot.fixed_options == [
+        {
+            "id": 2,
+            "amount": 100,
+            "credit_quota": 1000,
+            "label": "100 plan",
+            "enabled": True,
+            "sort_order": 2,
+            "remark": "production option",
+        }
+    ]
+    assert snapshot.channels[0]["qr_code_url"] == "<redacted>"
+    assert snapshot.channels[0]["account_name"] == "<redacted>"
+    assert "real-qr" not in qa._format_report_line(snapshot.__dict__)
+    assert "real-payment-account" not in qa._format_report_line(snapshot.__dict__)
+
+
+def test_load_payment_snapshot_prefers_fixed_options_when_present():
+    qa = load_qa_module()
+    admin = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "data": {
+                    "channels": [],
+                    "fixed_options": [{"amount": 10, "credit_quota": 10, "enabled": True}],
+                    "options": [{"amount": 20, "credit_quota": 20, "enabled": True}],
+                    "bonus_rules": [],
+                },
+            }
+        ]
+    )
+
+    snapshot = qa.load_payment_snapshot(admin)
+
+    assert snapshot.fixed_options == [{"amount": 10, "credit_quota": 10, "enabled": True}]
+
+
+def test_ensure_temporary_payment_config_uses_valid_channel_enum_and_prefixed_safe_payloads():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    admin = FakeAPIClient(
+        [
+            {"success": True, "data": {"channels": [], "options": [], "bonus_rules": []}},
+            {"success": True, "data": {"channel": "other", "id": 10}},
+            {"success": True, "data": {"id": 20}},
+            {"success": True, "data": {"id": 30}},
+        ]
+    )
+
+    summary = qa.ensure_temporary_payment_config(admin, prefix)
+
+    assert summary == {"channel": "other", "option_id": 20, "bonus_rule_id": 30}
+    assert [call["path"] for call in admin.calls] == [
+        "/api/v1/admin/commercial/recharge-config",
+        "/api/v1/admin/commercial/payment-channels",
+        "/api/v1/admin/commercial/recharge-options",
+        "/api/v1/admin/commercial/recharge-bonus-rules",
+    ]
+    channel_payload = admin.calls[1]["kwargs"]["json"]
+    option_payload = admin.calls[2]["kwargs"]["json"]
+    bonus_payload = admin.calls[3]["kwargs"]["json"]
+    assert channel_payload["channel"] == "other"
+    assert channel_payload["display_name"].startswith(prefix)
+    assert channel_payload["remark"].startswith(prefix)
+    assert channel_payload["confirm_text"] == "确认修改充值配置"
+    assert channel_payload["qr_code_url"] is None
+    assert channel_payload["account_name"] is None
+    assert option_payload["label"].startswith(prefix)
+    assert option_payload["remark"].startswith(prefix)
+    assert option_payload["confirm_text"] == "确认修改充值配置"
+    assert bonus_payload["remark"].startswith(prefix)
+    assert bonus_payload["confirm_text"] == "确认修改充值配置"
+
+
+def test_ensure_temporary_payment_config_skips_channel_when_other_has_sensitive_payment_fields():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    admin = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "data": {
+                    "channels": [
+                        {
+                            "channel": "other",
+                            "display_name": "Production Other",
+                            "qr_code_url": "https://pay.example.invalid/real-qr",
+                            "account_name": "real-payment-account",
+                            "enabled": True,
+                        }
+                    ],
+                    "options": [],
+                    "bonus_rules": [],
+                },
+            },
+            {"success": True, "data": {"id": 20}},
+            {"success": True, "data": {"id": 30}},
+        ]
+    )
+
+    summary = qa.ensure_temporary_payment_config(admin, prefix)
+
+    assert summary == {"channel": None, "option_id": 20, "bonus_rule_id": 30}
+    assert [call["path"] for call in admin.calls] == [
+        "/api/v1/admin/commercial/recharge-config",
+        "/api/v1/admin/commercial/recharge-options",
+        "/api/v1/admin/commercial/recharge-bonus-rules",
+    ]
+    assert "real-qr" not in qa._format_report_line(summary)
+    assert "real-payment-account" not in qa._format_report_line(summary)
+
+
+def test_restore_payment_snapshot_restores_other_channel_deletes_temp_options_and_bonus_without_duplication():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    snapshot = qa.PaymentSnapshot(
+        channels=[
+            {
+                "id": 1,
+                "channel": "other",
+                "display_name": "Other production channel",
+                "qr_code_url": "<redacted>",
+                "account_name": "<redacted>",
+                "enabled": True,
+                "sort_order": 1,
+                "remark": "production channel",
+            }
+        ],
+        fixed_options=[
+            {
+                "id": 2,
+                "amount": 100,
+                "credit_quota": 1000,
+                "label": "100 plan",
+                "enabled": False,
+                "sort_order": 2,
+                "remark": "production option",
+            }
+        ],
+        bonus_rules=[
+            {
+                "id": 3,
+                "threshold_amount": 200,
+                "bonus_quota": 50,
+                "enabled": True,
+                "sort_order": 3,
+                "remark": "production bonus",
+            }
+        ],
+    )
+    admin = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "data": {
+                    "channels": [
+                        {
+                            "id": 9,
+                            "channel": "other",
+                            "display_name": prefix + "Temporary channel",
+                            "qr_code_url": None,
+                            "account_name": None,
+                            "enabled": True,
+                            "sort_order": 9000,
+                            "remark": prefix + "Temporary channel",
+                        },
+                        {
+                            "id": 10,
+                            "channel": "alipay",
+                            "display_name": "Production Alipay",
+                            "enabled": True,
+                            "sort_order": 4,
+                            "remark": "not ours",
+                        },
+                    ],
+                    "fixed_options": [
+                        *snapshot.fixed_options,
+                        {
+                            "id": 11,
+                            "amount": 991,
+                            "credit_quota": 9910,
+                            "label": prefix + "Temporary option",
+                            "enabled": True,
+                            "sort_order": 9001,
+                            "remark": prefix + "Temporary option",
+                        },
+                        {
+                            "id": 12,
+                            "amount": 992,
+                            "credit_quota": 9920,
+                            "label": "Production option",
+                            "enabled": True,
+                            "sort_order": 5,
+                            "remark": "not ours",
+                        },
+                    ],
+                    "bonus_rules": [
+                        *snapshot.bonus_rules,
+                        {
+                            "id": 13,
+                            "threshold_amount": 993,
+                            "bonus_quota": 99,
+                            "enabled": True,
+                            "sort_order": 9002,
+                            "remark": prefix + "Temporary bonus",
+                        },
+                        {
+                            "id": 14,
+                            "threshold_amount": 994,
+                            "bonus_quota": 44,
+                            "enabled": True,
+                            "sort_order": 6,
+                            "remark": "not ours",
+                        },
+                    ],
+                },
+            }
+        ]
+    )
+
+    qa.restore_payment_snapshot(admin, snapshot, prefix)
+
+    post_calls = [call for call in admin.calls if call["method"] == "POST"]
+    delete_calls = [call for call in admin.calls if call["method"] == "DELETE"]
+    assert [call["path"] for call in post_calls] == [
+        "/api/v1/admin/commercial/payment-channels",
+        "/api/v1/admin/commercial/recharge-options",
+    ]
+    assert [call["path"] for call in delete_calls] == [
+        "/api/v1/admin/commercial/recharge-options/11",
+        "/api/v1/admin/commercial/recharge-bonus-rules/13",
+    ]
+    assert all(
+        call["kwargs"]["params"] == {"confirm_text": "确认修改充值配置"} for call in delete_calls
+    )
+    payloads = [call["kwargs"]["json"] for call in post_calls]
+    assert payloads[0] == {
+        "channel": "other",
+        "display_name": "Other production channel",
+        "qr_code_url": None,
+        "account_name": None,
+        "enabled": True,
+        "sort_order": 1,
+        "remark": "production channel",
+        "confirm_text": "确认修改充值配置",
+    }
+    assert payloads[1]["amount"] == 100
+    assert payloads[1]["enabled"] is False
+    assert not any(payload.get("threshold_amount") == 200 for payload in payloads)
+    assert not any(payload.get("channel") == "alipay" for payload in payloads)
+    assert not any(payload.get("amount") == 992 for payload in payloads)
+    assert not any(payload.get("threshold_amount") == 994 for payload in payloads)
+
+
+def test_restore_payment_snapshot_replays_colliding_temp_option_amount_from_snapshot():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    snapshot = qa.PaymentSnapshot(
+        channels=[],
+        fixed_options=[
+            {
+                "id": 2,
+                "amount": 991,
+                "credit_quota": 1234,
+                "label": "Production 991 option",
+                "enabled": True,
+                "sort_order": 7,
+                "remark": "production option",
+            }
+        ],
+        bonus_rules=[],
+    )
+    admin = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "data": {
+                    "channels": [],
+                    "options": [
+                        {
+                            "id": 2,
+                            "amount": 991,
+                            "credit_quota": 9910,
+                            "label": prefix + "Temporary option",
+                            "enabled": True,
+                            "sort_order": 9001,
+                            "remark": prefix + "Temporary option",
+                        }
+                    ],
+                    "bonus_rules": [],
+                },
+            }
+        ]
+    )
+
+    qa.restore_payment_snapshot(admin, snapshot, prefix)
+
+    post_calls = [call for call in admin.calls if call["method"] == "POST"]
+    delete_calls = [call for call in admin.calls if call["method"] == "DELETE"]
+    assert len(post_calls) == 1
+    assert post_calls[0]["path"] == "/api/v1/admin/commercial/recharge-options"
+    assert post_calls[0]["kwargs"]["json"]["credit_quota"] == 1234
+    assert post_calls[0]["kwargs"]["json"]["label"] == "Production 991 option"
+    assert delete_calls == []
+
+
+def test_restore_payment_snapshot_rejects_non_prefixed_temporary_cleanup():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    snapshot = qa.PaymentSnapshot(channels=[], fixed_options=[], bonus_rules=[])
+    admin = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "data": {
+                    "channels": [
+                        {
+                            "channel": "other",
+                            "display_name": "E2E_UI_QA_not_valid_Temporary channel",
+                            "enabled": True,
+                        }
+                    ],
+                    "fixed_options": [],
+                    "bonus_rules": [],
+                },
+            }
+        ]
+    )
+
+    try:
+        qa.restore_payment_snapshot(admin, snapshot, prefix)
+    except qa.QASafetyError as error:
+        assert "non-prefixed temporary payment config" in str(error)
+        assert "E2E_UI_QA_not_valid_Temporary channel" not in str(error)
+    else:
+        raise AssertionError("restore allowed non-prefixed temporary cleanup")
