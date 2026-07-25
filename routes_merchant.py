@@ -793,6 +793,13 @@ async def issue_merchant_kamis(
             pricing_source=pricing["pricing_source"],
             pricing_rule_id=pricing["pricing_rule_id"],
         )
+        result.update(
+            {
+                "pricing_source": pricing["pricing_source"],
+                "pricing_rule_id": pricing["pricing_rule_id"],
+                "pricing_rule_key": pricing["pricing_rule_key"],
+            }
+        )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     session.commit()
@@ -820,6 +827,13 @@ async def preview_merchant_kamis(
             app,
             count=payload.count,
             unit_cost=pricing["unit_cost"],
+        )
+        data.update(
+            {
+                "pricing_source": pricing["pricing_source"],
+                "pricing_rule_id": pricing["pricing_rule_id"],
+                "pricing_rule_key": pricing["pricing_rule_key"],
+            }
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))

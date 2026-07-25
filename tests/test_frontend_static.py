@@ -602,6 +602,20 @@ def test_issue_pricing_admin_entry_and_api_are_visible():
     assert "authorized_spec" in issue_pricing
     assert "user_self_app" in issue_pricing
     assert "user_authorized_spec" in issue_pricing
+    assert "remote-method=\"searchMerchants\"" in issue_pricing
+    assert "remote-method=\"searchSpecs\"" in issue_pricing
+    assert "merchantLoading" in issue_pricing
+    assert "specLoading" in issue_pricing
+    assert "getKamiSpecs({ app_id: appId" in issue_pricing
+
+
+def test_merchant_issue_preview_shows_pricing_rule_source():
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+
+    assert "issuePreview.unit_cost" in merchant_batches
+    assert "issuePreview.pricing_source" in merchant_batches
+    assert "pricingLabel" in merchant_batches
+    assert "用户授权规格专属" in merchant_batches
 
 
 def test_phase2_finance_page_has_reviewed_at_income_scope_and_exports():

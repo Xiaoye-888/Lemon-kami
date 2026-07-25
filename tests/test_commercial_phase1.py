@@ -1000,7 +1000,10 @@ def test_merchant_issue_preview_returns_cost_and_balance_without_deducting():
         )
         assert preview_response.status_code == 200
         preview_data = preview_response.json()["data"]
-        assert preview_data == {
+        assert {
+            key: preview_data[key]
+            for key in ("count", "unit_cost", "total_cost", "balance_before", "balance_after", "can_issue")
+        } == {
             "count": 3,
             "unit_cost": 1,
             "total_cost": 3,
@@ -1008,6 +1011,9 @@ def test_merchant_issue_preview_returns_cost_and_balance_without_deducting():
             "balance_after": 2,
             "can_issue": True,
         }
+        assert preview_data["pricing_source"] == "default"
+        assert preview_data["pricing_rule_id"] is None
+        assert preview_data["pricing_rule_key"] is None
 
         insufficient_response = client.post(
             "/api/v1/merchant/apps/app_preview_self/kamis/preview",
@@ -1145,6 +1151,9 @@ def test_issue_pricing_rules_drive_merchant_preview_issue_and_quota_snapshots():
         assert self_preview.status_code == 200
         assert self_preview.json()["data"]["unit_cost"] == 3
         assert self_preview.json()["data"]["total_cost"] == 6
+        assert self_preview.json()["data"]["pricing_source"] == "user_self_app"
+        assert self_preview.json()["data"]["pricing_rule_id"] == self_rule.json()["data"]["id"]
+        assert self_preview.json()["data"]["pricing_rule_key"] == self_rule.json()["data"]["rule_key"]
 
         self_issue = client.post(
             "/api/v1/merchant/apps/app_priced_self/kamis/batch",
@@ -1158,6 +1167,8 @@ def test_issue_pricing_rules_drive_merchant_preview_issue_and_quota_snapshots():
         )
         assert self_issue.status_code == 200
         assert self_issue.json()["data"]["total_cost"] == 6
+        assert self_issue.json()["data"]["pricing_source"] == "user_self_app"
+        assert self_issue.json()["data"]["pricing_rule_id"] == self_rule.json()["data"]["id"]
 
         authorized_preview = client.post(
             "/api/v1/merchant/apps/app_priced_authorized/kamis/preview",
@@ -1167,6 +1178,9 @@ def test_issue_pricing_rules_drive_merchant_preview_issue_and_quota_snapshots():
         assert authorized_preview.status_code == 200
         assert authorized_preview.json()["data"]["unit_cost"] == 5
         assert authorized_preview.json()["data"]["total_cost"] == 10
+        assert authorized_preview.json()["data"]["pricing_source"] == "user_authorized_spec"
+        assert authorized_preview.json()["data"]["pricing_rule_id"] == authorized_rule.json()["data"]["id"]
+        assert authorized_preview.json()["data"]["pricing_rule_key"] == authorized_rule.json()["data"]["rule_key"]
 
         authorized_issue = client.post(
             "/api/v1/merchant/apps/app_priced_authorized/kamis/batch",
@@ -1175,6 +1189,8 @@ def test_issue_pricing_rules_drive_merchant_preview_issue_and_quota_snapshots():
         )
         assert authorized_issue.status_code == 200
         assert authorized_issue.json()["data"]["total_cost"] == 10
+        assert authorized_issue.json()["data"]["pricing_source"] == "user_authorized_spec"
+        assert authorized_issue.json()["data"]["pricing_rule_id"] == authorized_rule.json()["data"]["id"]
 
         with Session(engine) as session:
             account = session.exec(

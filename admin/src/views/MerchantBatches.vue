@@ -57,6 +57,9 @@
             <div>
               本次预计扣 {{ issuePreview.total_cost }} 发卡额度，当前余额 {{ issuePreview.balance_before }}，生成后余额 {{ issuePreview.balance_after }}
             </div>
+            <div>
+              单张消耗 {{ issuePreview.unit_cost }}，规则 {{ pricingLabel(issuePreview.pricing_source) }}
+            </div>
             <el-tag :type="issuePreview.can_issue ? 'success' : 'danger'">
               {{ issuePreview.can_issue ? '额度充足' : '额度不足' }}
             </el-tag>
@@ -137,6 +140,17 @@ function buildIssuePayload() {
     code_length: form.code_length,
     charset: form.charset
   }
+}
+
+function pricingLabel(value) {
+  return {
+    user_self_app: '用户自建专属',
+    global_self_app: '自建应用默认',
+    user_authorized_spec: '用户授权规格专属',
+    authorized_spec: '授权规格默认',
+    global_authorized_app: '授权应用默认',
+    default: '系统默认'
+  }[value] || value || '系统默认'
 }
 
 async function loadIssuePreview() {

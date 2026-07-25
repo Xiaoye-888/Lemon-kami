@@ -20,7 +20,17 @@
           </el-form-item>
 
           <el-form-item v-if="needsUser" label="发卡用户">
-            <el-select v-model="pricingForm.user_id" filterable style="width: 100%">
+            <el-select
+              v-model="pricingForm.user_id"
+              filterable
+              remote
+              reserve-keyword
+              clearable
+              placeholder="搜索发卡用户"
+              :remote-method="searchMerchants"
+              :loading="merchantLoading"
+              style="width: 100%"
+            >
               <el-option
                 v-for="merchant in merchants"
                 :key="merchant.id"
@@ -37,7 +47,16 @@
           </el-form-item>
 
           <el-form-item v-if="needsSpec" label="卡密规格">
-            <el-select v-model="pricingForm.spec_id" filterable style="width: 100%">
+            <el-select
+              v-model="pricingForm.spec_id"
+              filterable
+              remote
+              reserve-keyword
+              placeholder="搜索卡密规格"
+              :remote-method="searchSpecs"
+              :loading="specLoading"
+              style="width: 100%"
+            >
               <el-option
                 v-for="spec in specs"
                 :key="spec.id"
@@ -122,6 +141,8 @@ const CONFIRM_CHANGE_ISSUE_PRICING = '确认修改发卡额度'
 const loading = ref(false)
 const saving = ref(false)
 const rowAction = ref('')
+const merchantLoading = ref(false)
+const specLoading = ref(false)
 const rules = ref([])
 const apps = ref([])
 const merchants = ref([])
@@ -167,6 +188,25 @@ function ruleSpecLabel(row) {
   return cached ? specLabel(cached) : `#${row.spec_id}`
 }
 
+function mergeMerchantOptions(items) {
+  const merged = new Map()
+  for (const merchant of merchants.value) {
+    if (merchant.id) merged.set(merchant.id, merchant)
+  }
+  for (const merchant of items || []) {
+    if (merchant.id) merged.set(merchant.id, merchant)
+  }
+  for (const rule of rules.value) {
+    if (rule.user_id) {
+      merged.set(rule.user_id, {
+        id: rule.user_id,
+        username: rule.username || `#${rule.user_id}`
+      })
+    }
+  }
+  merchants.value = Array.from(merged.values())
+}
+
 function resetForm() {
   pricingForm.target_type = 'global_self_app'
   pricingForm.user_id = null
@@ -197,36 +237,62 @@ async function promptSensitiveConfirm(expected, title) {
   return value
 }
 
-async function loadSpecs(appId) {
+async function loadMerchants(keyword = '') {
+  merchantLoading.value = true
+  try {
+    const params = { page: 1, page_size: 100 }
+    const normalizedKeyword = keyword.trim()
+    if (normalizedKeyword) params.keyword = normalizedKeyword
+    const res = await getCommercialMerchants(params)
+    mergeMerchantOptions(res.data?.items || [])
+  } finally {
+    merchantLoading.value = false
+  }
+}
+
+async function searchMerchants(keyword) {
+  await loadMerchants(keyword || '')
+}
+
+async function loadSpecs(appId, keyword = '') {
   if (!appId) {
     specs.value = []
     return
   }
-  const res = await getKamiSpecs({ app_id: appId, page: 1, page_size: 100 })
-  specs.value = res.data?.items || res.data || []
-  specCache.value = {
-    ...specCache.value,
-    ...Object.fromEntries(specs.value.map((spec) => [spec.id, spec]))
+  specLoading.value = true
+  try {
+    const normalizedKeyword = keyword.trim()
+    const res = await getKamiSpecs({ app_id: appId, ...(normalizedKeyword ? { keyword: normalizedKeyword } : {}) })
+    specs.value = res.data?.items || res.data || []
+    specCache.value = {
+      ...specCache.value,
+      ...Object.fromEntries(specs.value.map((spec) => [spec.id, spec]))
+    }
+  } finally {
+    specLoading.value = false
   }
+}
+
+async function searchSpecs(keyword) {
+  await loadSpecs(pricingForm.app_id, keyword || '')
 }
 
 async function loadAll() {
   loading.value = true
   try {
-    const [ruleRes, appRes, merchantRes] = await Promise.all([
+    const [ruleRes, appRes] = await Promise.all([
       getIssuePricingRules(),
-      getApps(),
-      getCommercialMerchants({ page: 1, page_size: 100 })
+      getApps()
     ])
     rules.value = ruleRes.data?.items || []
     apps.value = appRes.data || []
-    merchants.value = merchantRes.data?.items || []
     if (!pricingForm.app_id) {
       pricingForm.app_id = apps.value[0]?.app_id || ''
     }
-    if (pricingForm.app_id) {
-      await loadSpecs(pricingForm.app_id)
-    }
+    await Promise.all([
+      loadMerchants(),
+      pricingForm.app_id ? loadSpecs(pricingForm.app_id) : Promise.resolve()
+    ])
   } finally {
     loading.value = false
   }
@@ -235,6 +301,10 @@ async function loadAll() {
 function validateForm() {
   if (needsUser.value && !pricingForm.user_id) {
     ElMessage.error('请选择发卡用户')
+    return false
+  }
+  if (needsSpec.value && !pricingForm.app_id) {
+    ElMessage.error('请选择应用')
     return false
   }
   if (needsSpec.value && !pricingForm.spec_id) {
@@ -261,14 +331,18 @@ async function handleSave() {
   }
 }
 
-function editRule(row) {
+async function editRule(row) {
   pricingForm.target_type = row.target_type
   pricingForm.user_id = row.user_id || null
   pricingForm.app_id = row.app_id || pricingForm.app_id || apps.value[0]?.app_id || ''
-  pricingForm.spec_id = row.spec_id || null
   pricingForm.unit_cost = row.unit_cost || 1
   pricingForm.enabled = Boolean(row.enabled)
   pricingForm.remark = row.remark || ''
+  mergeMerchantOptions(row.user_id ? [{ id: row.user_id, username: row.username || `#${row.user_id}` }] : [])
+  if (needsSpec.value && pricingForm.app_id) {
+    await loadSpecs(pricingForm.app_id)
+  }
+  pricingForm.spec_id = row.spec_id || null
 }
 
 async function handleDelete(row) {
@@ -291,8 +365,10 @@ async function handleDelete(row) {
 watch(
   () => pricingForm.app_id,
   async (appId) => {
-    pricingForm.spec_id = null
     await loadSpecs(appId)
+    if (pricingForm.spec_id && !specs.value.some((spec) => spec.id === pricingForm.spec_id)) {
+      pricingForm.spec_id = null
+    }
   }
 )
 
