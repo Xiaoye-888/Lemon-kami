@@ -1628,6 +1628,24 @@ def _report_batch_summary(batch: BatchResult, cards_summary):
     }
 
 
+def _report_spec_summary(spec: SpecDescriptor):
+    return {
+        "source": spec.source,
+        "spec_id": spec.spec_id,
+        "issue_fields": redact(dict(spec.issue_payload or {})),
+    }
+
+
+def _report_flow_summary(batch: BatchResult, spec: SpecDescriptor, cards_summary, verify_summary):
+    return {
+        "app_id": batch.app_id,
+        "spec": _report_spec_summary(spec),
+        "batch": _report_batch_summary(batch, cards_summary),
+        "cards": cards_summary,
+        "verify": verify_summary,
+    }
+
+
 def run_production_flow(config: QAConfig):
     prefix = build_run_prefix()
     run_id = prefix.rstrip("_")
@@ -1682,9 +1700,9 @@ def run_production_flow(config: QAConfig):
             app_secret=self_app.app_secret,
             rsa_public_key=self_app.rsa_public_key,
         ) if self_batch.codes else {"success": False, "card_code": None}
-        self_batch_summary = _report_batch_summary(self_batch, self_cards)
+        self_flow_summary = _report_flow_summary(self_batch, self_spec, self_cards, self_verify)
         flow_summaries["self_owned"] = {
-            "batch": self_batch_summary,
+            **self_flow_summary,
             "cards": self_cards,
             "verify": self_verify,
         }
@@ -1709,9 +1727,9 @@ def run_production_flow(config: QAConfig):
             app_secret=admin_app.app_secret,
             rsa_public_key=admin_app.rsa_public_key,
         ) if authorized_batch.codes else {"success": False, "card_code": None}
-        authorized_batch_summary = _report_batch_summary(authorized_batch, authorized_cards)
+        authorized_flow_summary = _report_flow_summary(authorized_batch, admin_spec, authorized_cards, authorized_verify)
         flow_summaries["authorized"] = {
-            "batch": authorized_batch_summary,
+            **authorized_flow_summary,
             "cards": authorized_cards,
             "verify": authorized_verify,
         }
@@ -1742,8 +1760,8 @@ def run_production_flow(config: QAConfig):
             ],
         )
         report.add_section("Recharge Flow", [recharge_summary])
-        report.add_section("Self Owned Flow", [self_batch_summary, self_verify])
-        report.add_section("Authorized Flow", [authorized_batch_summary, authorized_verify])
+        report.add_section("Self Owned Flow", [self_flow_summary])
+        report.add_section("Authorized Flow", [authorized_flow_summary])
         report.add_section("Permission Boundaries", [boundaries])
     except Exception as error:
         flow_error = error

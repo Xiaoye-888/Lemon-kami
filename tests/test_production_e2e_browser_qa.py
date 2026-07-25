@@ -1735,6 +1735,108 @@ def test_verify_one_card_is_injectable_and_reports_only_redacted_code():
     assert "fingerprint-1234567890" not in safe_line
 
 
+def test_self_owned_flow_report_summary_includes_direct_spec_fields_and_safe_cards():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    spec = qa.SpecDescriptor(
+        spec_id=None,
+        issue_payload={
+            "kami_type": "points",
+            "points_amount": 10,
+            "points_valid_days": 30,
+            "app_secret": "spec-secret",
+        },
+        source="self_owned_direct_fields",
+    )
+    batch = qa.BatchResult(
+        app_id="app_self",
+        batch_id=7,
+        batch_no=prefix + "batch_abcd",
+        count=2,
+        codes=["KAMI-ABCDEFG1234567"],
+        preview={},
+        issue={},
+    )
+    cards_summary = {"count": 2, "sample_codes": ["KAM***567"]}
+    verify_summary = {"success": True, "card_code": "KAM***567"}
+
+    summary = qa._report_flow_summary(batch, spec, cards_summary, verify_summary)
+    safe_line = qa._format_report_line(summary)
+
+    assert summary["app_id"] == "app_self"
+    assert summary["spec"] == {
+        "source": "self_owned_direct_fields",
+        "spec_id": None,
+        "issue_fields": {
+            "kami_type": "points",
+            "points_amount": 10,
+            "points_valid_days": 30,
+            "app_secret": "<redacted>",
+        },
+    }
+    assert summary["batch"]["batch_id"] == 7
+    assert summary["cards"] == cards_summary
+    assert summary["verify"] == verify_summary
+    assert "KAMI-ABCDEFG1234567" not in safe_line
+    assert "spec-secret" not in safe_line
+    assert "<redacted>" in safe_line
+
+
+def test_flow_report_sections_include_self_and_authorized_spec_summaries(tmp_path):
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    self_spec = qa.SpecDescriptor(
+        spec_id=None,
+        issue_payload={"kami_type": "points", "points_amount": 10, "points_valid_days": 30},
+        source="self_owned_direct_fields",
+    )
+    authorized_spec = qa.SpecDescriptor(
+        spec_id=77,
+        issue_payload={"spec_id": 77, "kami_type": "points"},
+        source="admin_authorized",
+    )
+    self_batch = qa.BatchResult("app_self", 7, prefix + "self_batch", 2, [], {}, {})
+    authorized_batch = qa.BatchResult("app_admin", 8, prefix + "authorized_batch", 2, [], {}, {})
+    report = qa.QAReport(run_id=prefix.rstrip("_"), artifact_dir=tmp_path)
+
+    report.add_section(
+        "Self Owned Flow",
+        [
+            qa._report_flow_summary(
+                self_batch,
+                self_spec,
+                {"count": 2, "sample_codes": ["KAM***567"]},
+                {"success": True, "card_code": "KAM***567"},
+            )
+        ],
+    )
+    report.add_section(
+        "Authorized Flow",
+        [
+            qa._report_flow_summary(
+                authorized_batch,
+                authorized_spec,
+                {"count": 2, "sample_codes": ["KAM***543"]},
+                {"success": True, "card_code": "KAM***543"},
+            )
+        ],
+    )
+
+    content = report.render()
+
+    assert "## Self Owned Flow" in content
+    assert "self_owned_direct_fields" in content
+    assert '"spec_id": null' in content
+    assert '"points_amount": 10' in content
+    assert '"points_valid_days": 30' in content
+    assert "## Authorized Flow" in content
+    assert "admin_authorized" in content
+    assert '"spec_id": 77' in content
+    assert '"kami_type": "points"' in content
+    assert "KAM***567" in content
+    assert "KAM***543" in content
+
+
 def test_admin_app_spec_authorization_and_permission_boundaries_use_expected_routes():
     qa = load_qa_module()
     prefix = "E2E_UI_QA_20260726_030000_abc123_"
