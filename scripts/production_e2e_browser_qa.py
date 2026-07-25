@@ -72,6 +72,33 @@ STRING_SECRET_PATTERNS = tuple(
         r"\b(?:auth|auth_token|token|password|cookie|session|session_id|sessionid|access_token|refresh_token)\s+[^\s&]+",
     )
 )
+SENSITIVE_TEXT_KEY_NAMES = (
+    "authorization",
+    "refresh_token",
+    "access_token",
+    "private_key",
+    "session_id",
+    "app_secret",
+    "auth_token",
+    "sessionid",
+    "password",
+    "session",
+    "ssh_key",
+    "secret",
+    "cookie",
+    "token",
+    "auth",
+)
+SENSITIVE_TEXT_KEY_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(" + "|".join(re.escape(key) for key in SENSITIVE_TEXT_KEY_NAMES) + r")(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+QUOTED_SECRET_KV_RE = re.compile(
+    r"([\"'])("
+    + "|".join(re.escape(key) for key in SENSITIVE_TEXT_KEY_NAMES)
+    + r")\1\s*:\s*([\"']).*?\3",
+    re.IGNORECASE,
+)
 
 
 class QASafetyError(RuntimeError):
@@ -1081,17 +1108,17 @@ def cleanup_run(admin: APIClient, prefix: str):
         if name and is_owned_by_run(name, prefix) and app_id:
             app_ids.append(app_id)
 
-    if merchant_ids:
-        admin.json(
-            "POST",
-            "/api/v1/admin/end-users/delete",
-            json={"user_ids": merchant_ids, "confirm_text": DELETE_USER_CONFIRM_TEXT},
-        )
     for app_id in app_ids:
         admin.json(
             "DELETE",
             f"/api/v1/admin/apps/{app_id}",
             params={"confirm_text": DELETE_APP_CONFIRM_TEXT},
+        )
+    if merchant_ids:
+        admin.json(
+            "POST",
+            "/api/v1/admin/end-users/delete",
+            json={"user_ids": merchant_ids, "confirm_text": DELETE_USER_CONFIRM_TEXT},
         )
     return {"merchant_user_ids": merchant_ids, "admin_app_ids": app_ids}
 
@@ -1218,8 +1245,10 @@ def sanitize_report_string(value):
     text = str(value)
     text = CARD_CODE_RE.sub(lambda match: mask_middle(match.group(0)), text)
     text = FINGERPRINT_RE.sub(lambda match: mask_middle(match.group(0)), text)
+    text = QUOTED_SECRET_KV_RE.sub(r'"<redacted_key>":"<redacted>"', text)
     for pattern in STRING_SECRET_PATTERNS:
         text = pattern.sub("<redacted>", text)
+    text = SENSITIVE_TEXT_KEY_RE.sub("<redacted_key>", text)
     return text
 
 
@@ -1326,12 +1355,13 @@ def run_preflight(config: QAConfig):
     public = APIClient(config.base_url)
     health = public.json("GET", "/health")
     cdp = _check_node_cdp_capability()
-    admin_auth = login(config.base_url, config.admin_username, config.admin_password)
-    admin = APIClient(config.base_url, admin_auth)
-    routes = _require_openapi_paths(admin)
+    routes = _require_openapi_paths(public)
     return {
         "health": redact(health),
-        "admin_login": {"role": admin_auth.role, "username": admin_auth.user_info.get("username")},
+        "admin_login": {
+            "skipped": True,
+            "reason": "skipped to preserve no-write preflight behavior",
+        },
         "cdp": cdp,
         "routes": routes,
     }

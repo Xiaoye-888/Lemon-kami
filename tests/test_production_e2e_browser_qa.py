@@ -82,6 +82,27 @@ def assert_text_excludes_secrets(text, secrets):
             raise AssertionError("sensitive value leaked")
 
 
+def required_openapi_paths():
+    return {
+        "/api/v1/auth/register": {"post": {}},
+        "/api/v1/merchant/me": {"get": {}},
+        "/api/v1/merchant/quotas": {"get": {}},
+        "/api/v1/merchant/apps": {"post": {}},
+        "/api/v1/merchant/apps/{app_id}/specs": {"get": {}},
+        "/api/v1/merchant/apps/{app_id}/kamis/preview": {"post": {}},
+        "/api/v1/merchant/apps/{app_id}/kamis/batch": {"post": {}},
+        "/api/v1/merchant/kamis": {"get": {}},
+        "/api/v1/merchant/recharge/orders/upload": {"post": {}},
+        "/api/v1/admin/apps": {"post": {}},
+        "/api/v1/admin/kami-specs": {"post": {}},
+        "/api/v1/admin/commercial/recharge-orders/{order_no}/approve": {"post": {}},
+        "/api/v1/admin/end-users/{user_id}/quotas/grant": {"post": {}},
+        "/api/v1/admin/end-users/{user_id}/app-authorizations": {"post": {}},
+        "/api/v1/sdk/public-key": {"get": {}},
+        "/api/v1/sdk/verify": {"post": {}},
+    }
+
+
 def test_secret_redaction_masks_sensitive_values():
     qa = load_qa_module()
     payload = {
@@ -304,6 +325,20 @@ def test_api_client_wraps_request_exception_without_leaking_payment_payload_valu
         assert "<redacted>" in message
     else:
         raise AssertionError("request exception leaked payment payload values")
+
+
+def test_api_client_json_rejects_unexpected_success_status():
+    qa = load_qa_module()
+    session = FakeSession([FakeResponse(status_code=200, payload={"success": True})])
+    client = qa.APIClient("https://qa.example.invalid")
+    client.session = session
+
+    try:
+        client.json("GET", "/api/v1/admin-only", expected=(401, 403))
+    except qa.QASafetyError as error:
+        assert "returned status 200" in str(error)
+    else:
+        raise AssertionError("APIClient.json accepted an unexpected 200 status")
 
 
 def test_login_uses_aes_key_for_encrypted_payload_and_returns_auth_session(monkeypatch):
@@ -582,6 +617,30 @@ def test_report_writer_sanitizes_free_form_sensitive_lines(tmp_path):
     assert "session_id=" not in content.lower()
     assert "sessionid=" not in content.lower()
     assert "bearer " not in content.lower()
+    report.write()
+    assert (tmp_path / "production-e2e-browser-report.md").exists()
+
+
+def test_report_writer_sanitizes_sensitive_key_names_in_diagnostic_text(tmp_path):
+    qa = load_qa_module()
+    report = qa.QAReport(run_id="E2E_UI_QA_20260726_030000_abc123", artifact_dir=tmp_path)
+    report.add_section(
+        "Failure",
+        [
+            "app_secret is required for SDK-compatible verification",
+            '{"token":"token-value","app_secret": "secret-value","password":"password-value"}',
+        ],
+    )
+
+    content = report.render()
+
+    assert "app_secret" not in content
+    assert "token" not in content.lower()
+    assert "password" not in content.lower()
+    assert "token-value" not in content
+    assert "secret-value" not in content
+    assert "password-value" not in content
+    assert "<redacted>" in content
     report.write()
     assert (tmp_path / "production-e2e-browser-report.md").exists()
 
@@ -1615,8 +1674,8 @@ def test_cleanup_prefix_only_deletes_prefixed_human_readable_resources():
                     {"app_id": "app_real", "name": "Production app"},
                 ],
             },
-            {"success": True, "data": {"deleted_users": 1}},
             {"success": True, "data": {"id": "app_admin"}},
+            {"success": True, "data": {"deleted_users": 1}},
         ]
     )
 
@@ -1627,33 +1686,16 @@ def test_cleanup_prefix_only_deletes_prefixed_human_readable_resources():
     assert [call["path"] for call in admin.calls] == [
         "/api/v1/admin/commercial/merchants",
         "/api/v1/admin/apps",
-        "/api/v1/admin/end-users/delete",
         "/api/v1/admin/apps/app_admin",
+        "/api/v1/admin/end-users/delete",
     ]
-    assert admin.calls[2]["kwargs"]["json"] == {"user_ids": [42], "confirm_text": "确认删除用户"}
-    assert admin.calls[3]["kwargs"]["params"]["confirm_text"] == "确认删除应用"
+    assert admin.calls[2]["kwargs"]["params"]["confirm_text"] == "确认删除应用"
+    assert admin.calls[3]["kwargs"]["json"] == {"user_ids": [42], "confirm_text": "确认删除用户"}
 
 
 def test_preflight_required_routes_verify_http_methods_and_sdk_routes():
     qa = load_qa_module()
-    required_paths = {
-        "/api/v1/auth/register": {"post": {}},
-        "/api/v1/merchant/me": {"get": {}},
-        "/api/v1/merchant/quotas": {"get": {}},
-        "/api/v1/merchant/apps": {"post": {}},
-        "/api/v1/merchant/apps/{app_id}/specs": {"get": {}},
-        "/api/v1/merchant/apps/{app_id}/kamis/preview": {"post": {}},
-        "/api/v1/merchant/apps/{app_id}/kamis/batch": {"post": {}},
-        "/api/v1/merchant/kamis": {"get": {}},
-        "/api/v1/merchant/recharge/orders/upload": {"post": {}},
-        "/api/v1/admin/apps": {"post": {}},
-        "/api/v1/admin/kami-specs": {"post": {}},
-        "/api/v1/admin/commercial/recharge-orders/{order_no}/approve": {"post": {}},
-        "/api/v1/admin/end-users/{user_id}/quotas/grant": {"post": {}},
-        "/api/v1/admin/end-users/{user_id}/app-authorizations": {"post": {}},
-        "/api/v1/sdk/public-key": {"get": {}},
-        "/api/v1/sdk/verify": {"post": {}},
-    }
+    required_paths = required_openapi_paths()
     admin = FakeAPIClient([{"paths": required_paths}])
 
     result = qa._require_openapi_paths(admin)
@@ -1676,6 +1718,41 @@ def test_preflight_required_routes_verify_http_methods_and_sdk_routes():
         assert "GET /api/v1/sdk/public-key" in str(error)
     else:
         raise AssertionError("preflight accepted missing SDK public-key route")
+
+
+def test_run_preflight_uses_public_routes_and_skips_mutating_login(monkeypatch):
+    qa = load_qa_module()
+    public_client = FakeAPIClient(
+        [
+            {"success": True, "status": "ok"},
+            {"paths": required_openapi_paths()},
+        ]
+    )
+    created_clients = []
+
+    def fake_client(base_url, auth=None):
+        created_clients.append({"base_url": base_url, "auth": auth})
+        return public_client
+
+    def fail_login(*_args, **_kwargs):
+        raise AssertionError("preflight must not call login")
+
+    monkeypatch.setattr(qa, "APIClient", fake_client)
+    monkeypatch.setattr(qa, "login", fail_login)
+    monkeypatch.setattr(qa, "_check_node_cdp_capability", lambda: {"node_websocket": True, "chrome": True})
+    config = qa.QAConfig(
+        base_url="https://qa.example.invalid",
+        admin_username="admin",
+        admin_password="password",
+        confirmation="",
+    )
+
+    result = qa.run_preflight(config)
+
+    assert [call["path"] for call in public_client.calls] == ["/health", "/openapi.json"]
+    assert all(client["auth"] is None for client in created_clients)
+    assert result["admin_login"]["skipped"] is True
+    assert "no-write" in result["admin_login"]["reason"]
 
 
 def test_main_supports_preflight_run_production_and_cleanup_modes(monkeypatch, tmp_path):
