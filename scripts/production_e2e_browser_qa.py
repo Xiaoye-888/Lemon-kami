@@ -20,6 +20,7 @@ SECRET_KEYS = {
     "secret",
     "app_secret",
 }
+PAYMENT_SENSITIVE_KEYS = {"qr_code_url", "account_name"}
 MASKED_VALUE_KEYS = {"kami", "kami_code", "code", "device_fingerprint", "fingerprint"}
 PRODUCTION_CONFIRMATION = "I_UNDERSTAND_THIS_CREATES_TEMP_PRODUCTION_DATA"
 PAYMENT_CONFIG_CONFIRM_TEXT = "确认修改充值配置"
@@ -363,14 +364,6 @@ def _payment_row_mentions_qa_prefix(row):
     return any("E2E_UI_QA_" in value for value in _payment_row_text_fields(row))
 
 
-def _copy_public_payment_row(row):
-    safe_row = dict(row)
-    for key in ("qr_code_url", "account_name"):
-        if safe_row.get(key):
-            safe_row[key] = "<redacted>"
-    return safe_row
-
-
 def _payment_config_data(response):
     data = response.get("data") if isinstance(response, dict) else None
     return data if isinstance(data, dict) else {}
@@ -380,7 +373,7 @@ def load_payment_snapshot(admin: APIClient) -> PaymentSnapshot:
     response = admin.json("GET", "/api/v1/admin/commercial/recharge-config")
     data = _payment_config_data(response)
     return PaymentSnapshot(
-        channels=[_copy_public_payment_row(row) for row in data.get("channels") or [] if isinstance(row, dict)],
+        channels=[dict(row) for row in data.get("channels") or [] if isinstance(row, dict)],
         fixed_options=[
             dict(row)
             for row in (data.get("fixed_options") if data.get("fixed_options") is not None else data.get("options") or [])
@@ -487,8 +480,8 @@ def _channel_payload_from_row(row, *, enabled=None):
     return {
         "channel": row["channel"],
         "display_name": row["display_name"],
-        "qr_code_url": None if row.get("qr_code_url") == "<redacted>" else row.get("qr_code_url"),
-        "account_name": None if row.get("account_name") == "<redacted>" else row.get("account_name"),
+        "qr_code_url": row.get("qr_code_url"),
+        "account_name": row.get("account_name"),
         "enabled": row.get("enabled") if enabled is None else enabled,
         "sort_order": row.get("sort_order", 0),
         "remark": row.get("remark"),
@@ -600,7 +593,7 @@ def redact(value):
         redacted = {}
         for key, item in value.items():
             normalized = str(key).lower()
-            if _is_sensitive_key(key):
+            if _is_sensitive_key(key) or normalized in PAYMENT_SENSITIVE_KEYS:
                 redacted[key] = "<redacted>"
             elif normalized in MASKED_VALUE_KEYS and isinstance(item, str):
                 redacted[key] = mask_middle(item)

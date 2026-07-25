@@ -691,8 +691,10 @@ def test_browser_result_evaluation_accepts_cdp_layout_keys():
     ]
 
 
-def test_load_payment_snapshot_reads_and_redacts_recharge_config_options_alias():
+def test_load_payment_snapshot_reads_runtime_restore_values_and_reports_redact_payment_fields():
     qa = load_qa_module()
+    dummy_qr_url = "https://example.invalid/dummy-test-qr"
+    dummy_account_name = "dummy-test-payment-account"
     admin = FakeAPIClient(
         [
             {
@@ -703,8 +705,8 @@ def test_load_payment_snapshot_reads_and_redacts_recharge_config_options_alias()
                             "id": 1,
                             "channel": "wechat",
                             "display_name": "Wechat",
-                            "qr_code_url": "https://pay.example.invalid/real-qr",
-                            "account_name": "real-payment-account",
+                            "qr_code_url": dummy_qr_url,
+                            "account_name": dummy_account_name,
                             "enabled": True,
                             "sort_order": 1,
                             "remark": "production row",
@@ -752,10 +754,13 @@ def test_load_payment_snapshot_reads_and_redacts_recharge_config_options_alias()
             "remark": "production option",
         }
     ]
-    assert snapshot.channels[0]["qr_code_url"] == "<redacted>"
-    assert snapshot.channels[0]["account_name"] == "<redacted>"
-    assert "real-qr" not in qa._format_report_line(snapshot.__dict__)
-    assert "real-payment-account" not in qa._format_report_line(snapshot.__dict__)
+    assert snapshot.channels[0]["qr_code_url"] == dummy_qr_url
+    assert snapshot.channels[0]["account_name"] == dummy_account_name
+    assert qa.redact(snapshot.channels[0])["qr_code_url"] == "<redacted>"
+    assert qa.redact(snapshot.channels[0])["account_name"] == "<redacted>"
+    assert dummy_qr_url not in qa._format_report_line(snapshot.__dict__)
+    assert dummy_account_name not in qa._format_report_line(snapshot.__dict__)
+    assert "<redacted>" in qa._format_report_line(snapshot.__dict__)
 
 
 def test_load_payment_snapshot_prefers_fixed_options_when_present():
@@ -819,6 +824,8 @@ def test_ensure_temporary_payment_config_uses_valid_channel_enum_and_prefixed_sa
 def test_ensure_temporary_payment_config_skips_channel_when_other_has_sensitive_payment_fields():
     qa = load_qa_module()
     prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    dummy_qr_url = "https://example.invalid/dummy-test-qr"
+    dummy_account_name = "dummy-test-payment-account"
     admin = FakeAPIClient(
         [
             {
@@ -828,8 +835,8 @@ def test_ensure_temporary_payment_config_skips_channel_when_other_has_sensitive_
                         {
                             "channel": "other",
                             "display_name": "Production Other",
-                            "qr_code_url": "https://pay.example.invalid/real-qr",
-                            "account_name": "real-payment-account",
+                            "qr_code_url": dummy_qr_url,
+                            "account_name": dummy_account_name,
                             "enabled": True,
                         }
                     ],
@@ -850,21 +857,23 @@ def test_ensure_temporary_payment_config_skips_channel_when_other_has_sensitive_
         "/api/v1/admin/commercial/recharge-options",
         "/api/v1/admin/commercial/recharge-bonus-rules",
     ]
-    assert "real-qr" not in qa._format_report_line(summary)
-    assert "real-payment-account" not in qa._format_report_line(summary)
+    assert dummy_qr_url not in qa._format_report_line(summary)
+    assert dummy_account_name not in qa._format_report_line(summary)
 
 
 def test_restore_payment_snapshot_restores_other_channel_deletes_temp_options_and_bonus_without_duplication():
     qa = load_qa_module()
     prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    dummy_qr_url = "https://example.invalid/dummy-original-qr"
+    dummy_account_name = "dummy-original-payment-account"
     snapshot = qa.PaymentSnapshot(
         channels=[
             {
                 "id": 1,
                 "channel": "other",
                 "display_name": "Other production channel",
-                "qr_code_url": "<redacted>",
-                "account_name": "<redacted>",
+                "qr_code_url": dummy_qr_url,
+                "account_name": dummy_account_name,
                 "enabled": True,
                 "sort_order": 1,
                 "remark": "production channel",
@@ -981,8 +990,8 @@ def test_restore_payment_snapshot_restores_other_channel_deletes_temp_options_an
     assert payloads[0] == {
         "channel": "other",
         "display_name": "Other production channel",
-        "qr_code_url": None,
-        "account_name": None,
+        "qr_code_url": dummy_qr_url,
+        "account_name": dummy_account_name,
         "enabled": True,
         "sort_order": 1,
         "remark": "production channel",
@@ -994,6 +1003,75 @@ def test_restore_payment_snapshot_restores_other_channel_deletes_temp_options_an
     assert not any(payload.get("channel") == "alipay" for payload in payloads)
     assert not any(payload.get("amount") == 992 for payload in payloads)
     assert not any(payload.get("threshold_amount") == 994 for payload in payloads)
+
+
+def test_restore_payment_snapshot_reposts_original_channel_payment_fields_not_redacted_or_none():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    dummy_qr_url = "https://example.invalid/dummy-original-qr"
+    dummy_account_name = "dummy-original-payment-account"
+    snapshot = qa.PaymentSnapshot(
+        channels=[
+            {
+                "channel": "wechat",
+                "display_name": "Wechat",
+                "qr_code_url": dummy_qr_url,
+                "account_name": dummy_account_name,
+                "enabled": True,
+                "sort_order": 1,
+                "remark": "production channel",
+            }
+        ],
+        fixed_options=[],
+        bonus_rules=[],
+    )
+    admin = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "data": {"channels": [], "options": [], "bonus_rules": []},
+            }
+        ]
+    )
+
+    qa.restore_payment_snapshot(admin, snapshot, prefix)
+
+    post_calls = [call for call in admin.calls if call["method"] == "POST"]
+    assert len(post_calls) == 1
+    payload = post_calls[0]["kwargs"]["json"]
+    assert payload["qr_code_url"] == dummy_qr_url
+    assert payload["account_name"] == dummy_account_name
+    assert payload["qr_code_url"] is not None
+    assert payload["account_name"] is not None
+    assert payload["qr_code_url"] != "<redacted>"
+    assert payload["account_name"] != "<redacted>"
+
+
+def test_report_writer_redacts_payment_snapshot_channel_fields(tmp_path):
+    qa = load_qa_module()
+    dummy_qr_url = "https://example.invalid/dummy-report-qr"
+    dummy_account_name = "dummy-report-payment-account"
+    snapshot = qa.PaymentSnapshot(
+        channels=[
+            {
+                "channel": "other",
+                "display_name": "Other",
+                "qr_code_url": dummy_qr_url,
+                "account_name": dummy_account_name,
+                "enabled": True,
+            }
+        ],
+        fixed_options=[],
+        bonus_rules=[],
+    )
+    report = qa.QAReport(run_id="E2E_UI_QA_20260726_030000_abc123", artifact_dir=tmp_path)
+
+    report.add_section("Payment Snapshot", [snapshot.__dict__, snapshot.channels[0]])
+    content = report.render()
+
+    assert dummy_qr_url not in content
+    assert dummy_account_name not in content
+    assert "<redacted>" in content
 
 
 def test_restore_payment_snapshot_replays_colliding_temp_option_amount_from_snapshot():
