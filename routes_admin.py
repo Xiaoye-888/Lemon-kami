@@ -48,6 +48,7 @@ from models import (
     UserQuotaTransactionType,
     UserQuotaType,
     UserAppAuthorization,
+    IssueQuotaPricingRule,
     AuthorizationBenefitType,
     KamiType,
     KamiStatus,
@@ -2734,6 +2735,11 @@ async def delete_kami_spec(
         raise HTTPException(status_code=400, detail="规格下仍有批次或卡密，请先删除批次和卡密后再删除规格。")
 
     try:
+        issue_pricing_rules = session.exec(
+            select(IssueQuotaPricingRule).where(IssueQuotaPricingRule.spec_id == spec.id)
+        ).all()
+        for rule in issue_pricing_rules:
+            session.delete(rule)
         session.delete(spec)
         session.commit()
     except Exception as error:

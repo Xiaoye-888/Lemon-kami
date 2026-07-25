@@ -267,7 +267,7 @@ const copyAppSecret = async () => {
 
 const goAppInterfaces = (row) => {
   router.push({
-    path: `/apps/${row.app_id}/interfaces`,
+    path: `/admin/apps/${row.app_id}/interfaces`,
     query: { app_name: row.name }
   })
 }

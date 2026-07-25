@@ -8,7 +8,7 @@
             <p>归属应用：{{ currentAppName || appId }}</p>
           </div>
           <div class="header-actions">
-            <el-button @click="router.push('/apps/info')">返回应用</el-button>
+            <el-button @click="router.push('/admin/apps/info')">返回应用</el-button>
             <el-button type="primary" :loading="loading" @click="loadAppInterfaces">刷新</el-button>
           </div>
         </div>

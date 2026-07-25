@@ -134,6 +134,7 @@ const adminMenuItems = [
   { index: '/admin/commercial/merchants', label: '发卡用户管理', icon: UserFilled },
   { index: '/admin/commercial/recharge-orders', label: '充值订单审核', icon: Tickets },
   { index: '/admin/commercial/recharge-settings', label: '充值配置', icon: CreditCard },
+  { index: '/admin/commercial/issue-pricing', label: '发卡额度配置', icon: Coin },
   { index: '/admin/commercial/finance', label: '财务运营', icon: Coin },
   { index: '/admin/commercial/audit-logs', label: '操作审计', icon: Document },
   { index: '/admin/ops', label: '运维中心', icon: Monitor },

@@ -377,6 +377,8 @@ def issue_user_kamis(
     count: int,
     spec_id: Optional[int] = None,
     unit_cost: int = 1,
+    pricing_source: Optional[str] = None,
+    pricing_rule_id: Optional[int] = None,
     batch_no: Optional[str] = None,
     code_prefix: Optional[str] = None,
     code_length: int = 16,
@@ -421,6 +423,8 @@ def issue_user_kamis(
             "spec_id": spec_id,
             "unit_cost": unit_cost,
             "total_cost": total_cost,
+            "pricing_source": pricing_source or "default",
+            "pricing_rule_id": pricing_rule_id,
         },
     )
     if quota_result.get("idempotent"):

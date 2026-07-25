@@ -144,3 +144,26 @@ export function getAdminAuditLogs(params) {
     params
   })
 }
+
+export function getIssuePricingRules() {
+  return request({
+    url: '/admin/commercial/issue-pricing/rules',
+    method: 'get'
+  })
+}
+
+export function saveIssuePricingRule(data) {
+  return request({
+    url: '/admin/commercial/issue-pricing/rules',
+    method: 'post',
+    data
+  })
+}
+
+export function deleteIssuePricingRule(ruleId, data = {}) {
+  return request({
+    url: `/admin/commercial/issue-pricing/rules/${ruleId}`,
+    method: 'delete',
+    data
+  })
+}

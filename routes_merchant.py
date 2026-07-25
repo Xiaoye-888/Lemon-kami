@@ -29,6 +29,7 @@ from kami_query_service import (
     kami_search_payload,
     merchant_kami_statement,
 )
+from issue_pricing_service import resolve_issue_pricing
 from models import (
     App,
     Device,
@@ -767,6 +768,7 @@ async def issue_merchant_kamis(
         raise HTTPException(status_code=400, detail="kami_type is required")
 
     try:
+        pricing = resolve_issue_pricing(session, user=current_user, app=app, spec=spec)
         result = issue_user_kamis(
             session,
             current_user,
@@ -787,7 +789,9 @@ async def issue_merchant_kamis(
             max_bind_devices=max_bind_devices,
             authorization_owner=authorization_owner,
             user_bind_mode=user_bind_mode,
-            unit_cost=1,
+            unit_cost=pricing["unit_cost"],
+            pricing_source=pricing["pricing_source"],
+            pricing_rule_id=pricing["pricing_rule_id"],
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
@@ -809,12 +813,13 @@ async def preview_merchant_kamis(
     if not kami_type:
         raise HTTPException(status_code=400, detail="kami_type is required")
     try:
+        pricing = resolve_issue_pricing(session, user=current_user, app=app, spec=spec)
         data = preview_user_kami_issue(
             session,
             current_user,
             app,
             count=payload.count,
-            unit_cost=1,
+            unit_cost=pricing["unit_cost"],
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))

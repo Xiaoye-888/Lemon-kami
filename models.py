@@ -324,6 +324,28 @@ class UserAppAuthorization(SQLModel, table=True):
     created_at: datetime = Field(default_factory=get_now_naive, index=True, description="Grant time")
 
 
+class IssueQuotaPricingRule(SQLModel, table=True):
+    __tablename__ = "issue_quota_pricing_rules"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    rule_key: str = Field(max_length=191, unique=True, index=True, description="Deterministic rule identity")
+    target_type: str = Field(max_length=32, index=True, description="Pricing target type")
+    user_id: Optional[int] = Field(default=None, foreign_key="end_users.id", index=True)
+    username: Optional[str] = Field(default=None, max_length=64, index=True)
+    app_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(AppIdType(), ForeignKey("apps.app_id"), nullable=True, index=True),
+        description="App ID for spec pricing snapshots",
+    )
+    spec_id: Optional[int] = Field(default=None, foreign_key="kami_specs.id", index=True)
+    unit_cost: int = Field(default=1, description="Issue quota consumed per generated kami")
+    enabled: bool = Field(default=True, index=True)
+    remark: Optional[str] = Field(default=None, description="Remark")
+    created_by: Optional[str] = Field(default=None, max_length=255)
+    created_at: datetime = Field(default_factory=get_now_naive, index=True)
+    updated_at: datetime = Field(default_factory=get_now_naive)
+
+
 class RechargePaymentChannel(SQLModel, table=True):
     __tablename__ = "recharge_payment_channels"
 

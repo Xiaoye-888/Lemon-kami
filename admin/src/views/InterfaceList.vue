@@ -4,7 +4,7 @@
       <template #header>
         <div class="card-header">
           <span>接口列表</span>
-          <el-button type="primary" @click="router.push('/interfaces/new')">添加接口</el-button>
+          <el-button type="primary" @click="router.push('/admin/interfaces/new')">添加接口</el-button>
         </div>
       </template>
 

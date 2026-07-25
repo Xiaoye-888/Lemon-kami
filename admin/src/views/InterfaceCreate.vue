@@ -4,7 +4,7 @@
       <template #header>
         <div class="card-header">
           <span>新增接口</span>
-          <el-button @click="router.push('/interfaces/list')">返回列表</el-button>
+          <el-button @click="router.push('/admin/interfaces/list')">返回列表</el-button>
         </div>
       </template>
 
@@ -196,7 +196,7 @@ const handleSubmit = async () => {
       remark: form.remark || null
     })
     ElMessage.success('接口已新增')
-    router.push('/interfaces/list')
+    router.push('/admin/interfaces/list')
   } catch (error) {
     console.error('新增接口失败:', error)
   } finally {

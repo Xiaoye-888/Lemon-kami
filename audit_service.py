@@ -24,6 +24,7 @@ CONFIRM_TEXT_BY_SCOPE = {
     "delete_kami_batch": "确认删除批次",
     "delete_payment_qrcode": "确认删除二维码",
     "change_recharge_config": "确认修改充值配置",
+    "change_issue_pricing": "确认修改发卡额度",
     "cleanup_proof_files": "确认清理凭证",
     "create_ops_backup": "确认创建备份",
     "download_ops_backup": "确认下载备份",

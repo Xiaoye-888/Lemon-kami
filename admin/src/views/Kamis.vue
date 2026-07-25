@@ -604,11 +604,11 @@ const handleFreeze = async (row) => {
 }
 
 const goCurrentBatch = () => {
-  router.push({ path: '/kamis/batches', query: { app_id: queryParams.app_id, batch_no: queryParams.batch_no } })
+  router.push({ path: '/admin/kamis/batches', query: { app_id: queryParams.app_id, batch_no: queryParams.batch_no } })
 }
 
 const goCurrentSpec = () => {
-  router.push({ path: '/kamis/batches', query: { app_id: queryParams.app_id, spec_id: queryParams.spec_id } })
+  router.push({ path: '/admin/kamis/batches', query: { app_id: queryParams.app_id, spec_id: queryParams.spec_id } })
 }
 
 const copyToClipboard = async (text) => {

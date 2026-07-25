@@ -14,6 +14,7 @@ from models import (
     App,
     EndUser,
     EventLog,
+    IssueQuotaPricingRule,
     Kami,
     KamiDeviceBinding,
     UserAppAuthorization,
@@ -472,8 +473,13 @@ async def delete_app(
     auth_rows = session.exec(
         select(UserAppAuthorization).where(UserAppAuthorization.app_id == app_id)
     ).all()
+    issue_pricing_rules = session.exec(
+        select(IssueQuotaPricingRule).where(IssueQuotaPricingRule.app_id == app_id)
+    ).all()
     for row in auth_rows:
         session.delete(row)
+    for rule in issue_pricing_rules:
+        session.delete(rule)
     session.flush()
 
     try:
@@ -511,8 +517,10 @@ async def delete_app(
     )
     if isinstance(result.get("data"), dict):
         result["data"]["deleted_user_app_authorizations"] = len(auth_rows)
+        result["data"]["deleted_issue_pricing_rules"] = len(issue_pricing_rules)
     else:
         result["deleted_user_app_authorizations"] = len(auth_rows)
+        result["deleted_issue_pricing_rules"] = len(issue_pricing_rules)
     return result
 
 
@@ -551,6 +559,7 @@ async def delete_end_users(
                 "deleted_user_owned_kamis": 0,
                 "deleted_recharge_orders": 0,
                 "deleted_recharge_proofs": 0,
+                "deleted_issue_pricing_rules": 0,
             },
         }
 
@@ -585,6 +594,15 @@ async def delete_end_users(
         )
     ).all()
 
+    issue_pricing_rules = session.exec(
+        select(IssueQuotaPricingRule).where(
+            or_(
+                IssueQuotaPricingRule.user_id.in_(found_user_ids),
+                IssueQuotaPricingRule.app_id.in_(owned_app_ids) if owned_app_ids else False,
+            )
+        )
+    ).all()
+
     user_created_kamis = session.exec(
         select(Kami).where(Kami.created_by_user_id.in_(found_user_ids))
     ).all()
@@ -595,6 +613,8 @@ async def delete_end_users(
 
     for row in user_app_authorizations:
         session.delete(row)
+    for rule in issue_pricing_rules:
+        session.delete(rule)
     for tx in user_quota_transactions:
         session.delete(tx)
     session.flush()
@@ -669,6 +689,7 @@ async def delete_end_users(
             "deleted_user_app_authorizations": len(user_app_authorizations),
             "deleted_user_owned_apps": deleted_app_count,
             "deleted_user_owned_kamis": len(user_created_kamis),
+            "deleted_issue_pricing_rules": len(issue_pricing_rules),
             **recharge_cleanup,
         }
     )

@@ -5,6 +5,7 @@ const adminChildren = [
   { path: 'commercial', name: 'AdminCommercialOverview', component: () => import('../views/AdminCommercialOverview.vue'), meta: { title: '商业版后台' } },
   { path: 'commercial/recharge-orders', name: 'AdminRechargeOrders', component: () => import('../views/AdminRechargeOrders.vue'), meta: { title: '充值订单' } },
   { path: 'commercial/recharge-settings', name: 'AdminRechargeSettings', component: () => import('../views/AdminRechargeSettings.vue'), meta: { title: '充值配置' } },
+  { path: 'commercial/issue-pricing', name: 'AdminIssuePricing', component: () => import('../views/AdminIssuePricing.vue'), meta: { title: '发卡额度配置' } },
   { path: 'commercial/merchants', name: 'AdminMerchants', component: () => import('../views/AdminMerchants.vue'), meta: { title: '发卡用户管理' } },
   { path: 'commercial/finance', name: 'AdminFinance', component: () => import('../views/AdminFinance.vue'), meta: { title: '财务运营' } },
   { path: 'commercial/audit-logs', name: 'AdminAuditLogs', component: () => import('../views/AdminAuditLogs.vue'), meta: { title: '操作审计' } },
@@ -102,6 +103,14 @@ const routes = [
     children: merchantChildren
   },
   ...legacyAdminRedirects,
+  {
+    path: '/apps/:app_id/interfaces',
+    redirect: (to) => ({
+      path: `/admin/apps/${to.params.app_id}/interfaces`,
+      query: to.query,
+      hash: to.hash
+    })
+  },
   { path: '/apps', redirect: '/admin/apps/info' },
   { path: '/kamis', redirect: '/admin/kamis/batches' },
   { path: '/:pathMatch(.*)*', redirect: '/404' }

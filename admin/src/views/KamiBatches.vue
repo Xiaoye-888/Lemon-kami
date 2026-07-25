@@ -1147,7 +1147,7 @@ const handleAppChange = async () => {
   specForm.app_id = queryParams.app_id
   await loadAppInterfaceFlags()
   await loadSpecs()
-  router.replace({ path: '/kamis/batches', query: { app_id: queryParams.app_id } })
+  router.replace({ path: '/admin/kamis/batches', query: { app_id: queryParams.app_id } })
 }
 
 const handleTypeChange = async () => {
@@ -1210,7 +1210,7 @@ const openSpecDetail = async (row, updateRoute = true) => {
   viewMode.value = 'spec'
   resetDetailState()
   if (updateRoute) {
-    router.replace({ path: '/kamis/batches', query: { app_id: queryParams.app_id, spec_id: row.id } })
+    router.replace({ path: '/admin/kamis/batches', query: { app_id: queryParams.app_id, spec_id: row.id } })
   }
   await loadSpecBatches()
   await loadDetailKamis()
@@ -1225,7 +1225,7 @@ const openBatchDetail = async (row, updateRoute = true) => {
   viewMode.value = 'batch'
   resetDetailState()
   if (updateRoute) {
-    router.replace({ path: '/kamis/batches', query: { app_id: queryParams.app_id, batch_no: row.batch_no } })
+    router.replace({ path: '/admin/kamis/batches', query: { app_id: queryParams.app_id, batch_no: row.batch_no } })
   }
   await loadDetailKamis()
 }
@@ -1239,7 +1239,7 @@ const backFromDetail = async () => {
   selectedSpec.value = null
   selectedBatch.value = null
   selectedDetailKamis.value = []
-  router.replace({ path: '/kamis/batches', query: { app_id: queryParams.app_id } })
+  router.replace({ path: '/admin/kamis/batches', query: { app_id: queryParams.app_id } })
   await loadSpecs()
 }
 
@@ -1350,7 +1350,7 @@ const resetDetailAfterSpecDelete = (deletedIds) => {
     viewMode.value = 'list'
     selectedSpec.value = null
     selectedBatch.value = null
-    router.replace({ path: '/kamis/batches', query: { app_id: queryParams.app_id } })
+    router.replace({ path: '/admin/kamis/batches', query: { app_id: queryParams.app_id } })
   }
 }
 

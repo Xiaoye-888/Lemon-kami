@@ -1,4 +1,5 @@
 import base64
+import json
 from datetime import timedelta
 from pathlib import Path
 
@@ -68,6 +69,9 @@ CONFIRM_APPROVE_RECHARGE_ORDER = "确认审核入账"
 CONFIRM_EXPIRE_RECHARGE_ORDER = "确认关闭订单"
 CONFIRM_CLEANUP_PROOF_FILES = "确认清理凭证"
 CONFIRM_DELETE_MERCHANT = "确认删除用户"
+
+
+CONFIRM_CHANGE_ISSUE_PRICING = "确认修改发卡额度"
 
 
 def seed_admin_and_merchant(session: Session) -> tuple[AdminUser, EndUser]:
@@ -1045,6 +1049,153 @@ def test_merchant_issue_preview_returns_cost_and_balance_without_deducting():
             assert account.kami_issue_balance == 5
             assert session.exec(select(UserQuotaTransaction)).all() == []
             assert session.exec(select(Kami)).all() == []
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_issue_pricing_rules_drive_merchant_preview_issue_and_quota_snapshots():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="priced-issuer", password_hash=hash_password("secret123"), status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        self_app = App(
+            app_id="app_priced_self",
+            name="Priced Self App",
+            app_secret="secret-self",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        authorized_app = App(
+            app_id="app_priced_authorized",
+            name="Priced Authorized App",
+            app_secret="secret-authorized",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by="admin",
+        )
+        session.add(self_app)
+        session.add(authorized_app)
+        session.commit()
+        spec = KamiSpec(
+            app_id=authorized_app.app_id,
+            spec_key="priced-lifetime",
+            spec_name="Priced Lifetime",
+            kami_type="lifetime",
+            status=1,
+        )
+        session.add(spec)
+        session.add(
+            UserAppAuthorization(
+                app_id=authorized_app.app_id,
+                user_id=merchant.id,
+                username=merchant.username,
+                granted_by="admin",
+            )
+        )
+        session.add(UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=20))
+        session.commit()
+        session.refresh(spec)
+        token = routes_user.create_user_access_token(merchant)
+        merchant_id = merchant.id
+        spec_id = spec.id
+
+    try:
+        self_rule = client.post(
+            "/api/v1/admin/commercial/issue-pricing/rules",
+            json={
+                "target_type": "user_self_app",
+                "user_id": merchant_id,
+                "unit_cost": 3,
+                "confirm_text": CONFIRM_CHANGE_ISSUE_PRICING,
+            },
+        )
+        assert self_rule.status_code == 200
+        assert self_rule.json()["data"]["unit_cost"] == 3
+
+        authorized_rule = client.post(
+            "/api/v1/admin/commercial/issue-pricing/rules",
+            json={
+                "target_type": "user_authorized_spec",
+                "user_id": merchant_id,
+                "spec_id": spec_id,
+                "unit_cost": 5,
+                "confirm_text": CONFIRM_CHANGE_ISSUE_PRICING,
+            },
+        )
+        assert authorized_rule.status_code == 200
+        assert authorized_rule.json()["data"]["unit_cost"] == 5
+
+        self_preview = client.post(
+            "/api/v1/merchant/apps/app_priced_self/kamis/preview",
+            headers=auth_headers(token),
+            json={"kami_type": "points", "points_amount": 10, "count": 2},
+        )
+        assert self_preview.status_code == 200
+        assert self_preview.json()["data"]["unit_cost"] == 3
+        assert self_preview.json()["data"]["total_cost"] == 6
+
+        self_issue = client.post(
+            "/api/v1/merchant/apps/app_priced_self/kamis/batch",
+            headers=auth_headers(token),
+            json={
+                "kami_type": "points",
+                "points_amount": 10,
+                "count": 2,
+                "batch_no": "PRICED-SELF-001",
+            },
+        )
+        assert self_issue.status_code == 200
+        assert self_issue.json()["data"]["total_cost"] == 6
+
+        authorized_preview = client.post(
+            "/api/v1/merchant/apps/app_priced_authorized/kamis/preview",
+            headers=auth_headers(token),
+            json={"spec_id": spec_id, "count": 2},
+        )
+        assert authorized_preview.status_code == 200
+        assert authorized_preview.json()["data"]["unit_cost"] == 5
+        assert authorized_preview.json()["data"]["total_cost"] == 10
+
+        authorized_issue = client.post(
+            "/api/v1/merchant/apps/app_priced_authorized/kamis/batch",
+            headers=auth_headers(token),
+            json={"spec_id": spec_id, "count": 2, "batch_no": "PRICED-AUTH-001"},
+        )
+        assert authorized_issue.status_code == 200
+        assert authorized_issue.json()["data"]["total_cost"] == 10
+
+        with Session(engine) as session:
+            account = session.exec(
+                select(UserQuotaAccount).where(UserQuotaAccount.user_id == merchant_id)
+            ).one()
+            assert account.kami_issue_balance == 4
+            consume_transactions = session.exec(
+                select(UserQuotaTransaction)
+                .where(
+                    UserQuotaTransaction.user_id == merchant_id,
+                    UserQuotaTransaction.transaction_type == UserQuotaTransactionType.consume,
+                )
+                .order_by(UserQuotaTransaction.id)
+            ).all()
+            assert [tx.amount for tx in consume_transactions] == [-6, -10]
+            metadata = [json.loads(tx.metadata_json) for tx in consume_transactions]
+            assert metadata[0]["unit_cost"] == 3
+            assert metadata[0]["pricing_source"] == "user_self_app"
+            assert metadata[1]["unit_cost"] == 5
+            assert metadata[1]["pricing_source"] == "user_authorized_spec"
+            assert metadata[1]["pricing_rule_id"] == authorized_rule.json()["data"]["id"]
     finally:
         fastapi_app.dependency_overrides.clear()
 

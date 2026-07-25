@@ -47,9 +47,15 @@ from finance_service import (
     quota_transactions_csv,
     recharge_orders_csv,
 )
+from issue_pricing_service import (
+    issue_pricing_rule_payload,
+    list_issue_pricing_rules,
+    upsert_issue_pricing_rule,
+)
 from models import (
     AdminAuditLog,
     EndUser,
+    IssueQuotaPricingRule,
     RechargeBonusRule,
     RechargeOrder,
     RechargeOrderStatus,
@@ -89,6 +95,16 @@ class BonusRuleRequest(BaseModel):
     bonus_quota: int = PydanticField(..., gt=0)
     enabled: bool = True
     sort_order: int = 0
+    remark: Optional[str] = None
+    confirm_text: Optional[str] = None
+
+
+class IssuePricingRuleRequest(BaseModel):
+    target_type: str = PydanticField(..., max_length=32)
+    user_id: Optional[int] = None
+    spec_id: Optional[int] = None
+    unit_cost: int = PydanticField(..., gt=0, le=100000000)
+    enabled: bool = True
     remark: Optional[str] = None
     confirm_text: Optional[str] = None
 
@@ -251,6 +267,110 @@ async def get_recharge_config(
 ):
     _require_admin(current_user)
     return {"success": True, "data": recharge_config_payload(session, enabled_only=False)}
+
+
+@router.get("/issue-pricing/rules", summary="List issue quota pricing rules")
+async def get_issue_pricing_rules(
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    rules = list_issue_pricing_rules(session)
+    data = {
+        "items": [issue_pricing_rule_payload(rule) for rule in rules],
+        "total": len(rules),
+        "confirmation_text": CONFIRM_TEXT_BY_SCOPE["change_issue_pricing"],
+    }
+    return {"success": True, "data": data, **data}
+
+
+@router.post("/issue-pricing/rules", summary="Create or update issue quota pricing rule")
+async def save_issue_pricing_rule(
+    payload: IssuePricingRuleRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="change_issue_pricing",
+        confirm_text=payload.confirm_text,
+        resource_type="issue_pricing_rule",
+        request=request,
+        metadata=payload.model_dump(exclude={"confirm_text"}),
+    )
+    try:
+        rule = upsert_issue_pricing_rule(
+            session,
+            target_type=payload.target_type,
+            user_id=payload.user_id,
+            spec_id=payload.spec_id,
+            unit_cost=payload.unit_cost,
+            enabled=payload.enabled,
+            remark=payload.remark,
+            created_by=current_user.get("sub") or current_user.get("username"),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    session.commit()
+    session.refresh(rule)
+    data = issue_pricing_rule_payload(rule)
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="change_issue_pricing",
+        resource_type="issue_pricing_rule",
+        resource_id=rule.rule_key,
+        target_user_id=rule.user_id,
+        target_username=rule.username,
+        request=request,
+        after=data,
+        summary=f"修改发卡额度规则 {rule.rule_key}",
+    )
+    return {"success": True, "data": data, **data}
+
+
+@router.delete("/issue-pricing/rules/{rule_id}", summary="Delete issue quota pricing rule")
+async def delete_issue_pricing_rule(
+    rule_id: int,
+    payload: OrderReviewRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    rule = session.get(IssueQuotaPricingRule, rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Issue pricing rule not found")
+    before = issue_pricing_rule_payload(rule)
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="change_issue_pricing",
+        confirm_text=payload.confirm_text,
+        resource_type="issue_pricing_rule",
+        resource_id=rule.rule_key,
+        target_user_id=rule.user_id,
+        target_username=rule.username,
+        request=request,
+    )
+    session.delete(rule)
+    session.commit()
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="change_issue_pricing",
+        resource_type="issue_pricing_rule",
+        resource_id=before["rule_key"],
+        target_user_id=before["user_id"],
+        target_username=before["username"],
+        request=request,
+        before=before,
+        summary=f"删除发卡额度规则 {before['rule_key']}",
+    )
+    return {"success": True, "data": {"deleted": True, "id": rule_id}}
 
 
 @router.get("/payment-channels", summary="List payment channels")

@@ -174,6 +174,20 @@ def test_app_versions_header_removes_default_title_and_copy_check_entry():
     assert "客户端判断" in summary_source
 
 
+def test_admin_view_router_navigation_uses_admin_scoped_paths():
+    admin_roots = "apps|kamis|end-users|logs|interfaces|devices|users"
+    path_pattern = re.compile(
+        rf"(?:router\.(?:push|replace)\(\s*['\"]|path:\s*[`'\"])/({admin_roots})(?:/|[`'\"]|\?)"
+    )
+    offenders = []
+    for source_path in (PROJECT_ROOT / "admin/src/views").glob("*.vue"):
+        source = source_path.read_text(encoding="utf-8")
+        for match in path_pattern.finditer(source):
+            offenders.append(f"{source_path.name}:{match.group(0)}")
+
+    assert offenders == []
+
+
 def test_app_versions_has_quick_publish_and_history_actions():
     source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
 
@@ -566,6 +580,29 @@ def test_commercial_phase1_corrections_keep_identity_and_quota_scope_clear():
     assert "recharge_balance" not in admin_merchants
     assert "app_create_balance" not in merchant_dashboard
     assert "recharge_balance" not in merchant_dashboard
+
+
+def test_issue_pricing_admin_entry_and_api_are_visible():
+    router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")
+    layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
+    commercial_api = (PROJECT_ROOT / "admin/src/api/commercial.js").read_text(encoding="utf-8")
+    issue_pricing = (PROJECT_ROOT / "admin/src/views/AdminIssuePricing.vue").read_text(encoding="utf-8")
+
+    assert "path: 'commercial/issue-pricing'" in router
+    assert "AdminIssuePricing" in router
+    assert "index: '/admin/commercial/issue-pricing'" in layout
+    assert "\u53d1\u5361\u989d\u5ea6\u914d\u7f6e" in layout
+    assert "/admin/commercial/issue-pricing/rules" in commercial_api
+    assert "getIssuePricingRules" in commercial_api
+    assert "saveIssuePricingRule" in commercial_api
+    assert "deleteIssuePricingRule" in commercial_api
+    assert "\u786e\u8ba4\u4fee\u6539\u53d1\u5361\u989d\u5ea6" in issue_pricing
+    assert "global_self_app" in issue_pricing
+    assert "global_authorized_app" in issue_pricing
+    assert "authorized_spec" in issue_pricing
+    assert "user_self_app" in issue_pricing
+    assert "user_authorized_spec" in issue_pricing
+
 
 def test_phase2_finance_page_has_reviewed_at_income_scope_and_exports():
     router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")

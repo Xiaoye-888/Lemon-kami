@@ -46,7 +46,7 @@
         <template #header>
           <div class="panel-header">
             <span>用户授权概览</span>
-            <el-button class="panel-link" link type="primary" @click="router.push('/end-users')">查看用户</el-button>
+            <el-button class="panel-link" link type="primary" @click="router.push('/admin/end-users')">查看用户</el-button>
           </div>
         </template>
         <div class="today-grid today-grid--compact">
@@ -63,7 +63,7 @@
         <template #header>
           <div class="panel-header">
             <span>接入健康概览</span>
-            <el-button class="panel-link" link type="primary" @click="router.push('/logs')">查看日志</el-button>
+            <el-button class="panel-link" link type="primary" @click="router.push('/admin/logs')">查看日志</el-button>
           </div>
         </template>
         <div class="risk-list">
@@ -82,10 +82,10 @@
           </div>
         </template>
         <div class="quick-actions">
-          <el-button :icon="Plus" @click="router.push('/apps')">创建应用</el-button>
-          <el-button :icon="Key" @click="router.push('/kamis/batches')">生成批次</el-button>
-          <el-button :icon="Key" @click="router.push({ path: '/kamis/list', query: { action: 'generate' } })">生成卡密</el-button>
-          <el-button :icon="User" @click="router.push('/end-users')">分配授权</el-button>
+          <el-button :icon="Plus" @click="router.push('/admin/apps/info')">创建应用</el-button>
+          <el-button :icon="Key" @click="router.push('/admin/kamis/batches')">生成批次</el-button>
+          <el-button :icon="Key" @click="router.push({ path: '/admin/kamis/list', query: { action: 'generate' } })">生成卡密</el-button>
+          <el-button :icon="User" @click="router.push('/admin/end-users')">分配授权</el-button>
         </div>
       </el-card>
     </section>
