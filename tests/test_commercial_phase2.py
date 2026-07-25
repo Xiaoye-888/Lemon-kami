@@ -571,6 +571,26 @@ def test_ops_health_backup_and_safe_download(tmp_path, monkeypatch):
         fastapi_app.dependency_overrides.clear()
 
 
+def test_ops_health_recovers_missing_upload_directory(tmp_path, monkeypatch):
+    import commercial_service
+    import ops_service
+
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+    upload_root = tmp_path / "uploads" / "commercial"
+    monkeypatch.setattr(commercial_service, "UPLOAD_ROOT", upload_root)
+    monkeypatch.setattr(ops_service, "UPLOAD_ROOT", upload_root)
+    monkeypatch.setattr("config.settings.BACKUP_ROOT", str(tmp_path / "backups"))
+
+    with Session(engine) as session:
+        payload = ops_service.ops_health_payload(session)
+
+    assert payload["uploads"]["ok"] is True
+    assert upload_root.is_dir()
+    assert (upload_root / "proofs").is_dir()
+    assert (upload_root / "payment-qrcodes").is_dir()
+
+
 def test_ops_upload_cleanup_marks_terminal_proofs_only(tmp_path, monkeypatch):
     import routes_ops
 

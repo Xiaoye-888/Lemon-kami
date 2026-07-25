@@ -9,7 +9,7 @@ from typing import Optional
 from sqlalchemy import inspect, text
 from sqlmodel import Session, select
 
-from commercial_service import UPLOAD_ROOT
+from commercial_service import UPLOAD_ROOT, ensure_upload_directories
 from config import settings
 from models import OpsBackupRecord, get_now_naive
 
@@ -22,12 +22,21 @@ def ops_health_payload(session: Session) -> dict:
         database = {"ok": False, "message": str(error)}
 
     uploads_path = UPLOAD_ROOT
+    uploads_error = None
+    try:
+        ensure_upload_directories()
+    except OSError as error:
+        uploads_error = str(error)
+    uploads = {"ok": uploads_path.exists() and uploads_path.is_dir(), "path": str(uploads_path)}
+    if uploads_error:
+        uploads["message"] = uploads_error
+
     backups_path = Path(settings.BACKUP_ROOT)
     logs_path = Path("logs")
     recent_errors = recent_error_logs(max_lines=settings.OPS_RECENT_LOG_LINES)
     return {
         "database": database,
-        "uploads": {"ok": uploads_path.exists(), "path": str(uploads_path)},
+        "uploads": uploads,
         "backups": {"ok": backups_path.exists(), "path": str(backups_path)},
         "logs": {"ok": logs_path.exists(), "path": str(logs_path)},
         "recent_errors": recent_errors["error_count"],

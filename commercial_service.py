@@ -395,6 +395,11 @@ def _payment_qrcode_root() -> Path:
     return UPLOAD_ROOT / "payment-qrcodes"
 
 
+def ensure_upload_directories() -> None:
+    _proof_root().mkdir(parents=True, exist_ok=True)
+    _payment_qrcode_root().mkdir(parents=True, exist_ok=True)
+
+
 def _safe_file_prefix(value: str) -> str:
     prefix = re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_")
     return prefix[:80] or "upload"

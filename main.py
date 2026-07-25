@@ -21,6 +21,7 @@ from routes_merchant import router as merchant_router
 from routes_ops import router as ops_router
 from routes_docs import router as docs_router
 from config import settings
+from commercial_service import ensure_upload_directories
 
 # 创建 logs 目录
 log_dir = "logs"
@@ -157,6 +158,11 @@ app.include_router(docs_router)
 async def startup_event():
     """应用启动时初始化数据库"""
     init_db()
+    try:
+        ensure_upload_directories()
+        app_logger.info("Upload directories initialized successfully")
+    except OSError as error:
+        app_logger.warning("Upload directories are not available: %s", error)
     app_logger.info("✅ Database initialized successfully")
     app_logger.info(f"Application started in {'DEBUG' if settings.DEBUG else 'PRODUCTION'} mode")
     app_logger.info(f"Log file: {log_file}")
