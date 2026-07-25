@@ -26,7 +26,10 @@ FORBIDDEN_REPORT_PATTERNS = tuple(
         r"\bpassword\s*[:=]",
         r"\bcookie\s*[:=]",
         r"\bauthorization\s*:",
+        r"\bauth\s*[:=]",
+        r"\bauth_token\s*[:=]",
         r"\bbearer\s+",
+        r"\bsession(?:_id|id)?\s*[:=]",
         r"\bapp_secret\b",
         r"\bserver\s+password\b",
         r"\b(?:private|ssh)[_-]?key\b",
@@ -42,9 +45,9 @@ STRING_SECRET_PATTERNS = tuple(
     for pattern in (
         r"\bauthorization\s*:\s*bearer\s+[^\s&]+",
         r"\bbearer\s+[^\s&]+",
-        r"([?&](?:token|password|access_token|refresh_token|session|cookie)=)[^&#\s]+",
-        r"\b(?:token|password|cookie|session|access_token|refresh_token)\s*[:=]\s*[^\s&]+",
-        r"\b(?:token|password|cookie|session|access_token|refresh_token)\s+[^\s&]+",
+        r"([?&](?:auth|auth_token|token|password|access_token|refresh_token|session|session_id|sessionid|cookie)=)[^&#\s]+",
+        r"\b(?:auth|auth_token|token|password|cookie|session|session_id|sessionid|access_token|refresh_token)\s*[:=]\s*[^\s&]+",
+        r"\b(?:auth|auth_token|token|password|cookie|session|session_id|sessionid|access_token|refresh_token)\s+[^\s&]+",
     )
 )
 
@@ -91,6 +94,13 @@ def _is_sensitive_key(key):
     normalized = str(key).lower()
     return (
         normalized in SECRET_KEYS
+        or normalized == "auth"
+        or normalized.startswith("auth_")
+        or normalized.endswith("_auth")
+        or normalized == "session"
+        or normalized == "session_id"
+        or normalized == "sessionid"
+        or normalized.endswith("_session")
         or normalized.endswith("_token")
         or "token" in normalized
         or "password" in normalized

@@ -21,6 +21,13 @@ def test_secret_redaction_masks_sensitive_values():
         "api_token": "api-token-value",
         "csrf_token": "csrf-token-value",
         "authToken": "auth-token-value",
+        "auth": "auth-value",
+        "auth_header": "auth-header-value",
+        "proxy_auth": "proxy-auth-value",
+        "session": "session-value",
+        "session_id": "session-id-value",
+        "sessionid": "sessionid-value",
+        "browser_session": "browser-session-value",
         "password": "dont-show",
         "server_password": "server-password-value",
         "db_password": "db-password-value",
@@ -38,6 +45,13 @@ def test_secret_redaction_masks_sensitive_values():
     assert redacted["api_token"] == "<redacted>"
     assert redacted["csrf_token"] == "<redacted>"
     assert redacted["authToken"] == "<redacted>"
+    assert redacted["auth"] == "<redacted>"
+    assert redacted["auth_header"] == "<redacted>"
+    assert redacted["proxy_auth"] == "<redacted>"
+    assert redacted["session"] == "<redacted>"
+    assert redacted["session_id"] == "<redacted>"
+    assert redacted["sessionid"] == "<redacted>"
+    assert redacted["browser_session"] == "<redacted>"
     assert redacted["password"] == "<redacted>"
     assert redacted["server_password"] == "<redacted>"
     assert redacted["db_password"] == "<redacted>"
@@ -132,6 +146,12 @@ def test_report_writer_redacts_structured_section_lines(tmp_path):
         [
             {
                 "api_token": "api-token-value",
+                "auth": "auth-value",
+                "auth_cookie": "auth-cookie-value",
+                "proxy_auth": "proxy-auth-value",
+                "session_id": "session-id-value",
+                "sessionid": "sessionid-value",
+                "browser_session": "browser-session-value",
                 "server_password": "server-password-value",
                 "kami_code": "KAMI-ABCDEFG1234567",
                 "device_fingerprint": "fingerprint-1234567890",
@@ -142,6 +162,12 @@ def test_report_writer_redacts_structured_section_lines(tmp_path):
 
     content = report.render()
     assert "api-token-value" not in content
+    assert "auth-value" not in content
+    assert "auth-cookie-value" not in content
+    assert "proxy-auth-value" not in content
+    assert "session-id-value" not in content
+    assert "sessionid-value" not in content
+    assert "browser-session-value" not in content
     assert "server-password-value" not in content
     assert "private-key-value" not in content
     assert "KAM***567" in content
@@ -158,6 +184,10 @@ def test_report_writer_sanitizes_free_form_sensitive_lines(tmp_path):
         "device fingerprint fingerprint-1234567890 observed",
         "response cookie session=temporary-session-value",
         "Authorization: Bearer bearer-like-value",
+        "auth=dummy-auth-value",
+        "url /x?auth=query-auth-value&auth_token=query-auth-token-value",
+        "session_id=dummy-session-value",
+        "url /callback?session_id=query-session-id-value&sessionid=query-sessionid-value",
         "received token temporary-token-value",
         "url /callback?token=query-token-value&password=query-password-value",
     ]
@@ -171,12 +201,21 @@ def test_report_writer_sanitizes_free_form_sensitive_lines(tmp_path):
     assert "fingerprint-1234567890" not in content
     assert "session=temporary-session-value" not in content
     assert "bearer-like-value" not in content
+    assert "dummy-auth-value" not in content
+    assert "query-auth-value" not in content
+    assert "query-auth-token-value" not in content
+    assert "dummy-session-value" not in content
+    assert "query-session-id-value" not in content
+    assert "query-sessionid-value" not in content
     assert "temporary-token-value" not in content
     assert "query-token-value" not in content
     assert "query-password-value" not in content
     assert "token=" not in content.lower()
     assert "password=" not in content.lower()
     assert "authorization:" not in content.lower()
+    assert "auth=" not in content.lower()
+    assert "session_id=" not in content.lower()
+    assert "sessionid=" not in content.lower()
     assert "bearer " not in content.lower()
     report.write()
     assert (tmp_path / "production-e2e-browser-report.md").exists()
