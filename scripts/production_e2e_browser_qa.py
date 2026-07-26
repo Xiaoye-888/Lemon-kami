@@ -513,6 +513,13 @@ def _delete_bonus_rule(admin, rule_id):
     )
 
 
+def _disable_recharge_option(admin, row):
+    payload = _option_payload_from_row(row, enabled=False)
+    if not payload:
+        raise QASafetyError("Cannot disable temporary recharge option because payload is incomplete")
+    return _post_recharge_option(admin, payload)
+
+
 def _decimal_amount(value):
     if value is None or value == "":
         return None
@@ -677,6 +684,7 @@ def restore_payment_snapshot(admin: APIClient, snapshot: PaymentSnapshot, prefix
     validate_run_prefix(prefix)
     current = load_payment_snapshot(admin)
     keys = _snapshot_keys(snapshot)
+    restore_summary = {"fallback_disabled_recharge_options": []}
 
     for group in (current.channels, current.fixed_options, current.bonus_rules):
         for row in group:
@@ -701,12 +709,17 @@ def restore_payment_snapshot(admin: APIClient, snapshot: PaymentSnapshot, prefix
         if row.get("amount") not in keys["fixed_options"] and _payment_row_owned_by_run(row, prefix):
             option_id = row.get("id")
             if option_id is not None:
-                _delete_recharge_option(admin, option_id)
+                try:
+                    _delete_recharge_option(admin, option_id)
+                except QASafetyError:
+                    _disable_recharge_option(admin, row)
+                    restore_summary["fallback_disabled_recharge_options"].append(option_id)
     for row in current.bonus_rules:
         if row.get("id") not in keys["bonus_rules"] and _payment_row_owned_by_run(row, prefix):
             rule_id = row.get("id")
             if rule_id is not None:
                 _delete_bonus_rule(admin, rule_id)
+    return {key: value for key, value in restore_summary.items() if value}
 
 
 TINY_PROOF_PNG = (
@@ -1843,8 +1856,8 @@ def run_production_flow(config: QAConfig):
         flow_summaries["flow_error"] = sanitize_report_string(str(error))
     finally:
         try:
-            restore_payment_snapshot(admin, payment_snapshot, prefix)
-            payment_restore_status = {"restored": True}
+            restore_summary = restore_payment_snapshot(admin, payment_snapshot, prefix) or {}
+            payment_restore_status = {"restored": True, **restore_summary}
         except Exception as error:
             payment_restore_status = {"restored": False, "error": sanitize_report_string(str(error))}
         try:

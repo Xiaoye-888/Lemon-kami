@@ -930,6 +930,15 @@ def test_run_browser_sweep_timeout_raises_sanitized_error(monkeypatch, tmp_path)
         raise AssertionError("browser sweep timeout did not raise QASafetyError")
 
 
+def test_browser_cdp_helper_kills_profile_processes_before_removing_profile_dir():
+    helper = (ROOT / "scripts" / "browser_cdp_sweep.mjs").read_text(encoding="utf-8")
+
+    assert "killChromeProcessesForProfile" in helper
+    assert "cleanupProfileDir" in helper
+    assert "await killChromeProcessesForProfile(profileDir);" in helper
+    assert "await cleanupProfileDir(profileDir);" in helper
+
+
 def test_browser_result_evaluation_accepts_cdp_layout_keys():
     qa = load_qa_module()
     result = {
@@ -1407,6 +1416,53 @@ def test_restore_payment_snapshot_restores_other_channel_deletes_temp_options_an
     assert not any(payload.get("channel") == "alipay" for payload in payloads)
     assert not any(payload.get("amount") == 992 for payload in payloads)
     assert not any(payload.get("threshold_amount") == 994 for payload in payloads)
+
+
+def test_restore_payment_snapshot_disables_temp_option_when_delete_fails():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_094500_def456_"
+    temp_option = {
+        "id": 20,
+        "amount": 991,
+        "credit_quota": 9910,
+        "label": prefix + "Temporary option",
+        "enabled": True,
+        "sort_order": 9001,
+        "remark": prefix + "Temporary option",
+    }
+
+    def fail_delete():
+        raise qa.QASafetyError("API DELETE /api/v1/admin/commercial/recharge-options/20 returned status 502; response=''")
+
+    admin = FakeAPIClient(
+        [
+            {
+                "success": True,
+                "data": {
+                    "channels": [],
+                    "fixed_options": [temp_option],
+                    "bonus_rules": [],
+                },
+            },
+            fail_delete,
+        ]
+    )
+
+    summary = qa.restore_payment_snapshot(admin, qa.PaymentSnapshot(channels=[], fixed_options=[], bonus_rules=[]), prefix)
+
+    assert [call["path"] for call in admin.calls] == [
+        "/api/v1/admin/commercial/recharge-config",
+        "/api/v1/admin/commercial/recharge-options/20",
+        "/api/v1/admin/commercial/recharge-options",
+    ]
+    fallback_payload = admin.calls[-1]["kwargs"]["json"]
+    assert fallback_payload["amount"] == 991
+    assert fallback_payload["credit_quota"] == 9910
+    assert fallback_payload["enabled"] is False
+    assert fallback_payload["label"].startswith(prefix)
+    assert fallback_payload["remark"].startswith(prefix)
+    assert fallback_payload["confirm_text"] == qa.PAYMENT_CONFIG_CONFIRM_TEXT
+    assert summary == {"fallback_disabled_recharge_options": [20]}
 
 
 def test_restore_payment_snapshot_reposts_original_channel_payment_fields_not_redacted_or_none():

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
@@ -104,6 +104,50 @@ async function terminateChrome(chromeProcess) {
   });
   chromeProcess.kill();
   await Promise.race([exited, sleep(3_000)]);
+}
+
+async function killChromeProcessesForProfile(profileDir) {
+  if (process.platform !== "win32") {
+    return;
+  }
+  const script = `
+$profile = [Environment]::GetEnvironmentVariable('LEMON_CDP_PROFILE_DIR', 'Process')
+if ([string]::IsNullOrWhiteSpace($profile)) { exit 0 }
+Get-CimInstance Win32_Process -Filter "name = 'chrome.exe'" |
+  Where-Object { $_.CommandLine -and $_.CommandLine.Contains($profile) } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+`;
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+    {
+      encoding: "utf8",
+      env: { ...process.env, LEMON_CDP_PROFILE_DIR: profileDir },
+      timeout: 15_000,
+      windowsHide: true,
+    },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`Failed to stop Chrome profile processes; stderr=${result.stderr || ""}`);
+  }
+  await sleep(500);
+}
+
+async function cleanupProfileDir(profileDir) {
+  let lastError;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      await fs.rm(profileDir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      await sleep(250 * (attempt + 1));
+    }
+  }
+  throw lastError;
 }
 
 async function waitForJsonVersion(port, chromeProcess) {
@@ -477,7 +521,13 @@ async function main() {
   } finally {
     cdp?.close();
     await terminateChrome(chrome);
-    await fs.rm(profileDir, { recursive: true, force: true });
+    try {
+      await killChromeProcessesForProfile(profileDir);
+      await cleanupProfileDir(profileDir);
+    } catch (error) {
+      console.error(sanitizeDiagnostics(error.message || error));
+      process.exitCode = 1;
+    }
   }
 }
 
