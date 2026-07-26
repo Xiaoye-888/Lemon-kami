@@ -1597,7 +1597,79 @@ def _check_node_cdp_capability():
 
 
 def _require_openapi_paths(admin: APIClient):
-    required = [
+    openapi = admin.json("GET", "/openapi.json")
+    return _validate_openapi_paths(openapi, _required_openapi_routes())
+
+
+def _validate_openapi_paths(openapi, required):
+    paths = (openapi.get("paths") or {}) if isinstance(openapi, dict) else {}
+    missing = [
+        f"{method} {path}"
+        for method, path in required
+        if path not in paths or method.lower() not in {str(item).lower() for item in (paths.get(path) or {}).keys()}
+    ]
+    if missing:
+        raise QASafetyError(f"Required API routes are missing: {missing}")
+    return {"required_routes": len(required)}
+
+
+def _require_status(response, method, path, allowed_statuses):
+    if response.status_code not in allowed_statuses:
+        allowed = "/".join(str(status) for status in allowed_statuses)
+        raise QASafetyError(
+            f"Preflight no-write probe {method} {path} returned status {response.status_code}; expected {allowed}"
+        )
+
+
+def _require_no_write_probe_routes(public: APIClient):
+    public_routes = [
+        ("GET", "/docs/api", (200,), {}),
+        ("GET", "/api/v1/auth/login/public-key", (200,), {}),
+    ]
+    protected_routes = [
+        ("GET", "/api/v1/admin/apps"),
+        ("GET", "/api/v1/admin/commercial/recharge-orders"),
+        ("GET", "/api/v1/merchant/me"),
+        ("GET", "/api/v1/merchant/apps"),
+        ("GET", "/api/v1/merchant/kamis"),
+    ]
+    invalid_write_probes = [
+        ("POST", "/api/v1/sdk/verify", (400, 401, 422), {"json": {}}),
+    ]
+
+    for method, path, allowed_statuses, kwargs in public_routes:
+        response = public.request(method, path, **kwargs)
+        _require_status(response, method, path, allowed_statuses)
+    for method, path in protected_routes:
+        response = public.request(method, path)
+        _require_status(response, method, path, (401, 403))
+    for method, path, allowed_statuses, kwargs in invalid_write_probes:
+        response = public.request(method, path, **kwargs)
+        _require_status(response, method, path, allowed_statuses)
+
+    return {
+        "mode": "no_write_probe",
+        "public_routes": len(public_routes),
+        "protected_routes": len(protected_routes),
+        "invalid_write_probes": len(invalid_write_probes),
+    }
+
+
+def _require_preflight_routes(public: APIClient):
+    openapi_response = public.request("GET", "/openapi.json")
+    if openapi_response.status_code == 200:
+        try:
+            openapi = openapi_response.json()
+        except ValueError as error:
+            raise QASafetyError("Preflight OpenAPI route returned invalid JSON") from error
+        return {"mode": "openapi", **_validate_openapi_paths(openapi, _required_openapi_routes())}
+    if openapi_response.status_code == 404:
+        return _require_no_write_probe_routes(public)
+    raise QASafetyError(f"Preflight OpenAPI route returned status {openapi_response.status_code}")
+
+
+def _required_openapi_routes():
+    return [
         ("POST", "/api/v1/auth/register"),
         ("GET", "/api/v1/merchant/me"),
         ("GET", "/api/v1/merchant/quotas"),
@@ -1615,23 +1687,13 @@ def _require_openapi_paths(admin: APIClient):
         ("GET", "/api/v1/sdk/public-key"),
         ("POST", "/api/v1/sdk/verify"),
     ]
-    openapi = admin.json("GET", "/openapi.json")
-    paths = (openapi.get("paths") or {}) if isinstance(openapi, dict) else {}
-    missing = [
-        f"{method} {path}"
-        for method, path in required
-        if path not in paths or method.lower() not in {str(item).lower() for item in (paths.get(path) or {}).keys()}
-    ]
-    if missing:
-        raise QASafetyError(f"Required API routes are missing: {missing}")
-    return {"required_routes": len(required)}
 
 
 def run_preflight(config: QAConfig):
     public = APIClient(config.base_url)
     health = public.json("GET", "/health")
     cdp = _check_node_cdp_capability()
-    routes = _require_openapi_paths(public)
+    routes = _require_preflight_routes(public)
     return {
         "health": redact(health),
         "admin_login": {

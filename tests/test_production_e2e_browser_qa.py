@@ -2119,12 +2119,92 @@ def test_preflight_required_routes_verify_http_methods_and_sdk_routes():
         raise AssertionError("preflight accepted missing SDK public-key route")
 
 
+def test_preflight_routes_fall_back_to_no_write_probes_when_openapi_is_hidden():
+    qa = load_qa_module()
+    public = FakeAPIClient(
+        [
+            FakeResponse(status_code=404, text="not found"),
+            FakeResponse(status_code=200, text="<html></html>"),
+            FakeResponse(status_code=200, payload={"success": True, "aes_key": "fake"}),
+            FakeResponse(status_code=401, text="unauthorized"),
+            FakeResponse(status_code=403, text="forbidden"),
+            FakeResponse(status_code=401, text="unauthorized"),
+            FakeResponse(status_code=403, text="forbidden"),
+            FakeResponse(status_code=401, text="unauthorized"),
+            FakeResponse(status_code=422, text="validation error"),
+        ]
+    )
+
+    result = qa._require_preflight_routes(public)
+
+    assert result == {
+        "mode": "no_write_probe",
+        "public_routes": 2,
+        "protected_routes": 5,
+        "invalid_write_probes": 1,
+    }
+    assert [(call["method"], call["path"]) for call in public.calls] == [
+        ("GET", "/openapi.json"),
+        ("GET", "/docs/api"),
+        ("GET", "/api/v1/auth/login/public-key"),
+        ("GET", "/api/v1/admin/apps"),
+        ("GET", "/api/v1/admin/commercial/recharge-orders"),
+        ("GET", "/api/v1/merchant/me"),
+        ("GET", "/api/v1/merchant/apps"),
+        ("GET", "/api/v1/merchant/kamis"),
+        ("POST", "/api/v1/sdk/verify"),
+    ]
+    assert public.calls[-1]["kwargs"]["json"] == {}
+    assert "/api/v1/docs/interfaces" not in [call["path"] for call in public.calls]
+
+
+def test_preflight_no_write_probe_fails_when_protected_route_is_missing_or_errors():
+    qa = load_qa_module()
+    public = FakeAPIClient(
+        [
+            FakeResponse(status_code=404, text="not found"),
+            FakeResponse(status_code=200, text="<html></html>"),
+            FakeResponse(status_code=200, payload={"success": True, "aes_key": "fake"}),
+            FakeResponse(status_code=404, text="missing route body should not be printed"),
+        ]
+    )
+
+    try:
+        qa._require_preflight_routes(public)
+    except qa.QASafetyError as error:
+        message = str(error)
+        assert "/api/v1/admin/apps" in message
+        assert "status 404" in message
+        assert "missing route body should not be printed" not in message
+    else:
+        raise AssertionError("preflight accepted missing protected route")
+
+    public = FakeAPIClient(
+        [
+            FakeResponse(status_code=404, text="not found"),
+            FakeResponse(status_code=200, text="<html></html>"),
+            FakeResponse(status_code=200, payload={"success": True, "aes_key": "fake"}),
+            FakeResponse(status_code=500, text="server error body should not be printed"),
+        ]
+    )
+
+    try:
+        qa._require_preflight_routes(public)
+    except qa.QASafetyError as error:
+        message = str(error)
+        assert "/api/v1/admin/apps" in message
+        assert "status 500" in message
+        assert "server error body should not be printed" not in message
+    else:
+        raise AssertionError("preflight accepted errored protected route")
+
+
 def test_run_preflight_uses_public_routes_and_skips_mutating_login(monkeypatch):
     qa = load_qa_module()
     public_client = FakeAPIClient(
         [
             {"success": True, "status": "ok"},
-            {"paths": required_openapi_paths()},
+            FakeResponse(status_code=200, payload={"paths": required_openapi_paths()}),
         ]
     )
     created_clients = []
@@ -2152,6 +2232,7 @@ def test_run_preflight_uses_public_routes_and_skips_mutating_login(monkeypatch):
     assert all(client["auth"] is None for client in created_clients)
     assert result["admin_login"]["skipped"] is True
     assert "no-write" in result["admin_login"]["reason"]
+    assert result["routes"]["mode"] == "openapi"
 
 
 def test_main_supports_preflight_run_production_and_cleanup_modes(monkeypatch, tmp_path):
