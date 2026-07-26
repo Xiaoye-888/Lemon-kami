@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
@@ -30,16 +31,28 @@ from kami_query_service import (
     merchant_kami_statement,
 )
 from issue_pricing_service import resolve_issue_pricing
+from kami_spec_service import build_spec_key, build_spec_name, infer_spec_group
 from models import (
+    AuthorizationOwnerMode,
     App,
+    AppNotice,
     Device,
     EndUser,
     Kami,
     KamiBatch,
     KamiDeviceBinding,
+    KamiSpecGroup,
+    KamiType,
     KamiSpec,
+    MachineBindMode,
     RechargeOrder,
+    RechargeOrderStatus,
+    UserBindMode,
     UserAppAuthorization,
+    UserQuotaTransaction,
+    UserQuotaTransactionType,
+    UserQuotaType,
+    get_now_naive,
 )
 from user_quota_service import (
     create_user_app,
@@ -74,6 +87,30 @@ class MerchantAppCreateRequest(BaseModel):
     name: str = PydanticField(..., min_length=1, max_length=255)
 
 
+class MerchantSpecCreateRequest(BaseModel):
+    kami_type: str = PydanticField(..., max_length=32)
+    spec_group: str = PydanticField(KamiSpecGroup.custom.value, max_length=32)
+    points_amount: Optional[int] = PydanticField(None, gt=0)
+    points_valid_days: Optional[int] = PydanticField(None, ge=1)
+    times_total: Optional[int] = PydanticField(None, gt=0)
+    time_value: Optional[int] = PydanticField(None, gt=0)
+    time_unit: Optional[str] = PydanticField(None, max_length=32)
+    machine_bind_mode: str = PydanticField(MachineBindMode.one_card_one_device.value, max_length=32)
+    max_bind_devices: Optional[int] = PydanticField(None, ge=0, le=1000)
+    authorization_owner: str = PydanticField(AuthorizationOwnerMode.device.value, max_length=32)
+    user_bind_mode: str = PydanticField(UserBindMode.none.value, max_length=32)
+    status: int = PydanticField(1, ge=0, le=1)
+    sort_order: int = PydanticField(0, ge=0)
+    remark: Optional[str] = None
+
+
+class MerchantSpecUpdateRequest(BaseModel):
+    spec_group: Optional[str] = PydanticField(None, max_length=32)
+    status: Optional[int] = PydanticField(None, ge=0, le=1)
+    sort_order: Optional[int] = PydanticField(None, ge=0)
+    remark: Optional[str] = None
+
+
 class MerchantKamiIssueRequest(BaseModel):
     spec_id: Optional[int] = None
     kami_type: Optional[str] = PydanticField(None, max_length=32)
@@ -89,6 +126,21 @@ class MerchantKamiIssueRequest(BaseModel):
     time_unit: Optional[str] = PydanticField(None, max_length=32)
 
 
+TIME_CARD_UNITS = {
+    KamiType.hour: (1, "hour"),
+    KamiType.day: (1, "day"),
+    KamiType.week: (1, "week"),
+    KamiType.month: (1, "month"),
+    KamiType.quarter: (1, "quarter"),
+    KamiType.year: (1, "year"),
+    KamiType.lifetime: (None, "lifetime"),
+}
+
+
+def _enum_value(value):
+    return value.value if hasattr(value, "value") else value
+
+
 def _app_is_owned_by_user(app: App, user: EndUser) -> bool:
     return app.owner_user_id == user.id or (bool(app.created_by) and app.created_by == user.username)
 
@@ -100,6 +152,33 @@ def _app_authorized_to_user(session: Session, app_id: str, user: EndUser) -> boo
             UserAppAuthorization.user_id == user.id,
         )
     ).first() is not None
+
+
+def _get_visible_app_or_404(session: Session, user: EndUser, app_id: str) -> App:
+    app = session.exec(select(App).where(App.app_id == app_id)).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="App not found")
+    if not user_can_manage_app(session, user, app_id):
+        raise HTTPException(status_code=403, detail="No permission to manage this app")
+    return app
+
+
+def _require_self_owned_app(session: Session, user: EndUser, app_id: str) -> App:
+    app = _get_visible_app_or_404(session, user, app_id)
+    if not _app_is_owned_by_user(app, user):
+        raise HTTPException(status_code=403, detail="Only self-owned apps can manage specs")
+    return app
+
+
+def _get_visible_spec_or_404(session: Session, user: EndUser, spec_id: int) -> tuple[KamiSpec, App, bool]:
+    spec = session.get(KamiSpec, spec_id)
+    if not spec:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    app = _get_visible_app_or_404(session, user, spec.app_id)
+    is_owned = _app_is_owned_by_user(app, user)
+    if not is_owned and spec.status != 1:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    return spec, app, is_owned
 
 
 def _merchant_app_payload(app: App, user: EndUser) -> dict:
@@ -147,6 +226,151 @@ def _spec_payload(spec: KamiSpec) -> dict:
     }
 
 
+def _normalize_max_bind_devices(machine_bind_mode: MachineBindMode, max_bind_devices: Optional[int]) -> int:
+    if machine_bind_mode == MachineBindMode.no_limit:
+        return 0
+    if machine_bind_mode == MachineBindMode.one_card_one_device:
+        return 1
+    if max_bind_devices is None or max_bind_devices < 2:
+        return 3
+    return max_bind_devices
+
+
+def _validate_merchant_spec_payload(
+    payload: MerchantSpecCreateRequest,
+) -> tuple[KamiType, MachineBindMode, AuthorizationOwnerMode, UserBindMode, Optional[int], Optional[str], int, KamiSpecGroup]:
+    try:
+        kami_type = KamiType(payload.kami_type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid kami_type")
+    try:
+        machine_bind_mode = MachineBindMode(payload.machine_bind_mode)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid machine_bind_mode")
+    try:
+        authorization_owner = AuthorizationOwnerMode(payload.authorization_owner)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid authorization_owner")
+    try:
+        user_bind_mode = UserBindMode(payload.user_bind_mode)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid user_bind_mode")
+    try:
+        spec_group = KamiSpecGroup(payload.spec_group)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid spec_group")
+
+    if authorization_owner == AuthorizationOwnerMode.user and user_bind_mode == UserBindMode.none:
+        raise HTTPException(status_code=400, detail="user authorization specs require a user binding mode")
+    if kami_type == KamiType.points and not payload.points_amount:
+        raise HTTPException(status_code=400, detail="points specs require points_amount")
+    if kami_type == KamiType.times and not payload.times_total:
+        raise HTTPException(status_code=400, detail="times specs require times_total")
+
+    time_value = payload.time_value
+    time_unit = payload.time_unit
+    if kami_type in TIME_CARD_UNITS:
+        default_value, default_unit = TIME_CARD_UNITS[kami_type]
+        time_value = time_value or default_value
+        time_unit = time_unit or default_unit
+    if "spec_group" not in payload.model_fields_set:
+        spec_group = KamiSpecGroup(
+            infer_spec_group(
+                kami_type,
+                payload.points_amount,
+                payload.points_valid_days,
+                payload.times_total,
+                time_value,
+                time_unit,
+            )
+        )
+
+    return (
+        kami_type,
+        machine_bind_mode,
+        authorization_owner,
+        user_bind_mode,
+        time_value,
+        time_unit,
+        _normalize_max_bind_devices(machine_bind_mode, payload.max_bind_devices),
+        spec_group,
+    )
+
+
+def _merchant_spec_stats(session: Session, spec_id: int, user_id: int) -> dict:
+    batch_count = session.exec(
+        select(KamiBatch)
+        .join(Kami, (Kami.app_id == KamiBatch.app_id) & (Kami.batch_no == KamiBatch.batch_no))
+        .where(KamiBatch.spec_id == spec_id, Kami.created_by_user_id == user_id)
+    ).all()
+    kamis = session.exec(
+        select(Kami).where(Kami.spec_id == spec_id, Kami.created_by_user_id == user_id)
+    ).all()
+    return {
+        "batch_count": len({batch.id for batch in batch_count}),
+        "total_count": len(kamis),
+        "unused_count": len([kami for kami in kamis if _enum_value(kami.status) == "unused"]),
+        "active_count": len([kami for kami in kamis if _enum_value(kami.status) == "active"]),
+        "frozen_count": len([kami for kami in kamis if _enum_value(kami.status) == "frozen"]),
+    }
+
+
+def _merchant_spec_payload(spec: KamiSpec, *, user: EndUser, is_editable: bool, stats: Optional[dict] = None) -> dict:
+    payload = _spec_payload(spec)
+    payload.update(
+        {
+            "is_editable": is_editable,
+            "source": "self_owned" if is_editable else "admin_authorized",
+            "remark": spec.remark,
+            "created_at": to_api_beijing_iso(spec.created_at, naive="civil") if spec.created_at else None,
+            "updated_at": to_api_beijing_iso(spec.updated_at, naive="civil") if spec.updated_at else None,
+            "batch_count": 0,
+            "total_count": 0,
+            "unused_count": 0,
+            "active_count": 0,
+            "frozen_count": 0,
+        }
+    )
+    if stats:
+        payload.update(stats)
+    return payload
+
+
+def _batch_cost_snapshot(session: Session, batch: KamiBatch, user: EndUser, fallback_count: int) -> dict:
+    prefix = f"kami_issue:{batch.app_id}:{batch.batch_no}:"
+    transaction = session.exec(
+        select(UserQuotaTransaction)
+        .where(
+            UserQuotaTransaction.user_id == user.id,
+            UserQuotaTransaction.quota_type == UserQuotaType.kami_issue,
+            UserQuotaTransaction.transaction_type == UserQuotaTransactionType.consume,
+            UserQuotaTransaction.biz_id.like(f"{prefix}%"),
+        )
+        .order_by(UserQuotaTransaction.id.desc())
+    ).first()
+    if not transaction:
+        return {
+            "unit_issue_cost": 1,
+            "total_issue_cost": fallback_count,
+            "pricing_source": "default",
+            "pricing_rule_id": None,
+        }
+    metadata = {}
+    if transaction.metadata_json:
+        try:
+            metadata = json.loads(transaction.metadata_json)
+        except json.JSONDecodeError:
+            metadata = {}
+    unit_cost = metadata.get("unit_cost")
+    total_cost = metadata.get("total_cost")
+    return {
+        "unit_issue_cost": unit_cost if unit_cost is not None else abs(transaction.amount) // max(fallback_count, 1),
+        "total_issue_cost": total_cost if total_cost is not None else abs(transaction.amount),
+        "pricing_source": metadata.get("pricing_source") or "default",
+        "pricing_rule_id": metadata.get("pricing_rule_id"),
+    }
+
+
 def _resolve_merchant_issue_context(
     session: Session,
     current_user: EndUser,
@@ -162,7 +386,11 @@ def _resolve_merchant_issue_context(
     is_owned = _app_is_owned_by_user(app, current_user)
     is_authorized = _app_authorized_to_user(session, app_id, current_user)
     spec = None
-    if not is_owned and is_authorized:
+    if is_owned and payload.spec_id:
+        spec = session.get(KamiSpec, payload.spec_id)
+        if not spec or spec.app_id != app_id or spec.status != 1:
+            raise HTTPException(status_code=400, detail="spec_id is not available")
+    elif not is_owned and is_authorized:
         if not payload.spec_id:
             raise HTTPException(status_code=400, detail="spec_id is required for authorized apps")
         spec = session.get(KamiSpec, payload.spec_id)
@@ -316,6 +544,110 @@ async def get_merchant_quotas(
     session.commit()
     payload = _merchant_quota_response_payload(data)
     return {"success": True, "data": payload, "issue_card": payload["issue_card"]}
+
+
+@router.get("/dashboard", summary="Get merchant dashboard workbench")
+async def get_merchant_dashboard(
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    quota_payload = _merchant_quota_response_payload(merchant_quota_summary(session, current_user))
+    apps = get_user_visible_apps(session, current_user)
+    visible_app_ids = [app.app_id for app in apps]
+    owned_app_ids = {app.app_id for app in apps if _app_is_owned_by_user(app, current_user)}
+
+    pending_review_count = session.exec(
+        select(RechargeOrder).where(
+            RechargeOrder.user_id == current_user.id,
+            RechargeOrder.status == RechargeOrderStatus.pending_review,
+        )
+    ).all()
+    recent_orders = session.exec(
+        select(RechargeOrder)
+        .where(RechargeOrder.user_id == current_user.id)
+        .order_by(RechargeOrder.id.desc())
+        .limit(5)
+    ).all()
+    card_total = session.exec(
+        select(Kami).where(Kami.created_by_user_id == current_user.id)
+    ).all()
+
+    notifications = []
+    if visible_app_ids:
+        now = get_now_naive()
+        notice_rows = session.exec(
+            select(AppNotice)
+            .where(
+                AppNotice.app_id.in_(visible_app_ids),
+                AppNotice.enabled == True,  # noqa: E712
+                or_(AppNotice.starts_at.is_(None), AppNotice.starts_at <= now),
+                or_(AppNotice.ends_at.is_(None), AppNotice.ends_at >= now),
+            )
+            .order_by(AppNotice.id.desc())
+            .limit(5)
+        ).all()
+        app_name_by_id = {app.app_id: app.name for app in apps}
+        notifications = [
+            {
+                "id": notice.id,
+                "app_id": notice.app_id,
+                "app_name": app_name_by_id.get(notice.app_id),
+                "title": notice.title,
+                "content": notice.content,
+                "level": notice.level,
+                "created_at": to_api_beijing_iso(notice.created_at, naive="civil")
+                if notice.created_at
+                else None,
+            }
+            for notice in notice_rows
+        ]
+
+    recent_batches = []
+    if visible_app_ids:
+        for batch in session.exec(
+            select(KamiBatch)
+            .where(KamiBatch.app_id.in_(visible_app_ids))
+            .order_by(KamiBatch.id.desc())
+            .limit(12)
+        ).all():
+            stats = batch_stats_payload(session, batch, created_by_user_id=current_user.id)
+            if stats["total_count"] <= 0:
+                continue
+            recent_batches.append(
+                {
+                    "id": batch.id,
+                    "app_id": batch.app_id,
+                    "batch_no": batch.batch_no,
+                    "kami_type": _enum_value(batch.kami_type),
+                    "count": stats["total_count"],
+                    "stats": stats,
+                    "created_at": to_api_beijing_iso(batch.created_at, naive="civil")
+                    if batch.created_at
+                    else None,
+                }
+            )
+            if len(recent_batches) >= 5:
+                break
+
+    data = {
+        "quota": quota_payload["issue_card"],
+        "apps": {
+            "total": len(apps),
+            "self_owned": len(owned_app_ids),
+            "authorized": len(apps) - len(owned_app_ids),
+        },
+        "orders": {
+            "pending_review": len(pending_review_count),
+            "recent": [recharge_order_payload(order) for order in recent_orders],
+        },
+        "cards": {
+            "total": len(card_total),
+        },
+        "notifications": notifications,
+        "recent_batches": recent_batches,
+        "recent_orders": [recharge_order_payload(order) for order in recent_orders],
+    }
+    return {"success": True, "data": data}
 
 
 @router.get("/quota-transactions", summary="List merchant quota transactions")
@@ -688,6 +1020,99 @@ async def list_merchant_global_kamis(
     return {"success": True, "data": payload, **payload}
 
 
+@router.get("/kami-specs/{spec_id}/batches", summary="List merchant batches for a spec")
+async def list_merchant_spec_batches(
+    spec_id: int,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    spec, _app, _is_owned = _get_visible_spec_or_404(session, current_user, spec_id)
+    batches = session.exec(
+        select(KamiBatch)
+        .where(KamiBatch.spec_id == spec.id)
+        .order_by(KamiBatch.id.desc())
+    ).all()
+    items = []
+    for batch in batches:
+        stats = batch_stats_payload(session, batch, created_by_user_id=current_user.id)
+        count = stats["total_count"]
+        if count <= 0:
+            continue
+        items.append(
+            {
+                "id": batch.id,
+                "app_id": batch.app_id,
+                "spec_id": batch.spec_id,
+                "spec_name": spec.spec_name,
+                "batch_no": batch.batch_no,
+                "kami_type": _enum_value(batch.kami_type),
+                "count": count,
+                "stats": stats,
+                **_batch_cost_snapshot(session, batch, current_user, count),
+                "created_at": to_api_beijing_iso(batch.created_at, naive="civil")
+                if batch.created_at
+                else None,
+            }
+        )
+    return {"success": True, "data": {"items": items, "total": len(items)}, "items": items}
+
+
+@router.get("/kami-specs/{spec_id}/kamis", summary="List merchant kamis for a spec")
+async def list_merchant_spec_kamis(
+    spec_id: int,
+    keyword: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    batch_no: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    spec, _app, _is_owned = _get_visible_spec_or_404(session, current_user, spec_id)
+    try:
+        statement = merchant_kami_statement(
+            session,
+            user_id=current_user.id,
+            app_id=spec.app_id,
+            keyword=keyword,
+            status=status,
+            batch_no=batch_no,
+        ).where(Kami.spec_id == spec.id)
+        payload = kami_search_payload(session, statement, page=page, page_size=page_size)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return {"success": True, "data": payload, **payload}
+
+
+@router.get("/batches/{batch_id}/kamis", summary="List merchant kamis for a batch")
+async def list_merchant_batch_kamis(
+    batch_id: int,
+    keyword: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    batch = session.get(KamiBatch, batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    _get_visible_app_or_404(session, current_user, batch.app_id)
+    try:
+        statement = merchant_kami_statement(
+            session,
+            user_id=current_user.id,
+            app_id=batch.app_id,
+            keyword=keyword,
+            status=status,
+            batch_no=batch.batch_no,
+        )
+        payload = kami_search_payload(session, statement, page=page, page_size=page_size)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return {"success": True, "data": payload, **payload}
+
+
 @router.get("/apps", summary="List merchant apps")
 async def list_merchant_apps(
     current_user: EndUser = Depends(get_current_merchant),
@@ -719,17 +1144,189 @@ async def create_merchant_app(
 @router.get("/apps/{app_id}/specs", summary="List specs for a merchant app")
 async def list_merchant_app_specs(
     app_id: str,
+    kami_type: Optional[str] = Query(None),
+    spec_group: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
-    if not user_can_manage_app(session, current_user, app_id):
-        raise HTTPException(status_code=403, detail="No permission to manage this app")
-    specs = session.exec(
-        select(KamiSpec)
-        .where(KamiSpec.app_id == app_id, KamiSpec.status == 1)
-        .order_by(KamiSpec.sort_order, KamiSpec.id)
-    ).all()
-    return {"success": True, "data": [_spec_payload(spec) for spec in specs]}
+    app = _get_visible_app_or_404(session, current_user, app_id)
+    is_owned = _app_is_owned_by_user(app, current_user)
+    statement = select(KamiSpec).where(KamiSpec.app_id == app_id)
+    if not is_owned:
+        statement = statement.where(KamiSpec.status == 1)
+    if kami_type:
+        try:
+            statement = statement.where(KamiSpec.kami_type == KamiType(kami_type))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid kami_type")
+    if spec_group:
+        try:
+            statement = statement.where(KamiSpec.spec_group == KamiSpecGroup(spec_group))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid spec_group")
+    if keyword:
+        statement = statement.where(KamiSpec.spec_name.like(f"%{keyword}%"))
+    specs = session.exec(statement.order_by(KamiSpec.sort_order, KamiSpec.id)).all()
+    items = [
+        _merchant_spec_payload(
+            spec,
+            user=current_user,
+            is_editable=is_owned,
+            stats=_merchant_spec_stats(session, spec.id, current_user.id),
+        )
+        for spec in specs
+    ]
+    return {"success": True, "data": {"items": items, "total": len(items)}, "items": items}
+
+
+@router.post("/apps/{app_id}/specs", summary="Create a self-owned merchant app spec")
+async def create_merchant_app_spec(
+    app_id: str,
+    payload: MerchantSpecCreateRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    _require_self_owned_app(session, current_user, app_id)
+    (
+        kami_type,
+        machine_bind_mode,
+        authorization_owner,
+        user_bind_mode,
+        time_value,
+        time_unit,
+        max_bind_devices,
+        spec_group,
+    ) = _validate_merchant_spec_payload(payload)
+    spec_key = build_spec_key(
+        kami_type=kami_type,
+        points_amount=payload.points_amount if kami_type == KamiType.points else None,
+        points_valid_days=payload.points_valid_days if kami_type == KamiType.points else None,
+        times_total=payload.times_total if kami_type == KamiType.times else None,
+        time_value=time_value,
+        time_unit=time_unit,
+        machine_bind_mode=machine_bind_mode,
+        max_bind_devices=max_bind_devices,
+        authorization_owner=authorization_owner,
+        user_bind_mode=user_bind_mode,
+    )
+    existing = session.exec(
+        select(KamiSpec).where(KamiSpec.app_id == app_id, KamiSpec.spec_key == spec_key)
+    ).first()
+    if existing:
+        return {
+            "success": True,
+            "message": "spec already exists",
+            "data": _merchant_spec_payload(
+                existing,
+                user=current_user,
+                is_editable=True,
+                stats=_merchant_spec_stats(session, existing.id, current_user.id),
+            ),
+        }
+
+    now = get_now_naive()
+    spec = KamiSpec(
+        app_id=app_id,
+        spec_key=spec_key,
+        spec_name=build_spec_name(
+            kami_type,
+            payload.points_amount if kami_type == KamiType.points else None,
+            payload.points_valid_days if kami_type == KamiType.points else None,
+            payload.times_total if kami_type == KamiType.times else None,
+            time_value,
+            time_unit,
+        ),
+        spec_group=spec_group,
+        kami_type=kami_type,
+        points_amount=payload.points_amount if kami_type == KamiType.points else None,
+        points_valid_days=payload.points_valid_days if kami_type == KamiType.points else None,
+        times_total=payload.times_total if kami_type == KamiType.times else None,
+        time_value=time_value if kami_type in TIME_CARD_UNITS else None,
+        time_unit=time_unit if kami_type in TIME_CARD_UNITS else None,
+        machine_bind_mode=machine_bind_mode,
+        max_bind_devices=max_bind_devices,
+        authorization_owner=authorization_owner,
+        user_bind_mode=user_bind_mode,
+        status=payload.status,
+        sort_order=payload.sort_order,
+        remark=payload.remark,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(spec)
+    session.commit()
+    session.refresh(spec)
+    return {
+        "success": True,
+        "message": "spec created",
+        "data": _merchant_spec_payload(
+            spec,
+            user=current_user,
+            is_editable=True,
+            stats=_merchant_spec_stats(session, spec.id, current_user.id),
+        ),
+    }
+
+
+@router.put("/apps/{app_id}/specs/{spec_id}", summary="Update a self-owned merchant app spec")
+async def update_merchant_app_spec(
+    app_id: str,
+    spec_id: int,
+    payload: MerchantSpecUpdateRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    _require_self_owned_app(session, current_user, app_id)
+    spec = session.get(KamiSpec, spec_id)
+    if not spec or spec.app_id != app_id:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    data = payload.model_dump(exclude_unset=True)
+    if "spec_group" in data and data["spec_group"] is not None:
+        try:
+            spec.spec_group = KamiSpecGroup(data["spec_group"])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid spec_group")
+    if "status" in data and data["status"] is not None:
+        spec.status = data["status"]
+    if "sort_order" in data and data["sort_order"] is not None:
+        spec.sort_order = data["sort_order"]
+    if "remark" in data:
+        spec.remark = data["remark"]
+    spec.updated_at = get_now_naive()
+    session.add(spec)
+    session.commit()
+    session.refresh(spec)
+    return {
+        "success": True,
+        "message": "spec updated",
+        "data": _merchant_spec_payload(
+            spec,
+            user=current_user,
+            is_editable=True,
+            stats=_merchant_spec_stats(session, spec.id, current_user.id),
+        ),
+    }
+
+
+@router.delete("/apps/{app_id}/specs/{spec_id}", summary="Delete an empty self-owned merchant app spec")
+async def delete_merchant_app_spec(
+    app_id: str,
+    spec_id: int,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    _require_self_owned_app(session, current_user, app_id)
+    spec = session.get(KamiSpec, spec_id)
+    if not spec or spec.app_id != app_id:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    existing_batch = session.exec(select(KamiBatch).where(KamiBatch.spec_id == spec_id)).first()
+    existing_kami = session.exec(select(Kami).where(Kami.spec_id == spec_id)).first()
+    if existing_batch or existing_kami:
+        raise HTTPException(status_code=400, detail="spec still has batches or kamis")
+    session.delete(spec)
+    session.commit()
+    return {"success": True, "message": "spec deleted"}
 
 
 @router.post("/apps/{app_id}/kamis/batch", summary="Issue merchant kamis")
@@ -891,17 +1488,19 @@ async def list_merchant_batches(
         count = stats["total_count"]
         if count <= 0:
             continue
+        spec = session.get(KamiSpec, batch.spec_id) if batch.spec_id else None
+        cost_snapshot = _batch_cost_snapshot(session, batch, current_user, count)
         result.append(
             {
                 "id": batch.id,
                 "app_id": batch.app_id,
                 "spec_id": batch.spec_id,
+                "spec_name": spec.spec_name if spec else None,
                 "batch_no": batch.batch_no,
                 "kami_type": batch.kami_type.value if hasattr(batch.kami_type, "value") else batch.kami_type,
                 "count": count,
                 "stats": stats,
-                "unit_issue_cost": 1,
-                "total_issue_cost": count,
+                **cost_snapshot,
                 "created_at": to_api_beijing_iso(batch.created_at, naive="civil") if batch.created_at else None,
             }
         )

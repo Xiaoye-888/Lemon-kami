@@ -6,24 +6,7 @@
     </div>
 
     <section class="recharge-grid">
-      <el-card shadow="never" class="panel">
-        <template #header>支付方式</template>
-        <el-radio-group v-model="form.channel" class="channel-list">
-          <el-radio-button
-            v-for="item in paymentChannels"
-            :key="item.channel"
-            :value="item.channel"
-          >
-            {{ item.display_name }}
-          </el-radio-button>
-        </el-radio-group>
-        <div v-if="selectedChannel" class="qr-box">
-          <img v-if="selectedChannel.qr_code_url" :src="selectedChannel.qr_code_url" alt="支付二维码" />
-          <el-empty v-else description="管理员未配置二维码" />
-        </div>
-      </el-card>
-
-      <el-card shadow="never" class="panel">
+      <el-card shadow="never" class="panel amount-panel">
         <template #header>充值金额</template>
         <div class="option-grid">
           <button
@@ -37,8 +20,11 @@
             <span>到账 {{ item.credit_quota }} 额度</span>
           </button>
         </div>
+        <el-empty v-if="!config.options?.length" description="暂无固定金额" />
+
         <el-divider />
-        <el-form label-width="96px">
+
+        <el-form label-width="96px" class="amount-form">
           <el-form-item label="自定义金额">
             <el-input-number v-model="form.amount" :min="1" :max="1000000" style="width: 100%" @change="selectCustom" />
           </el-form-item>
@@ -50,7 +36,7 @@
             </div>
           </el-form-item>
           <el-form-item label="备注">
-            <el-input v-model="form.remark" type="textarea" :rows="2" maxlength="200" />
+            <el-input v-model="form.remark" type="textarea" :rows="3" maxlength="200" />
           </el-form-item>
           <el-form-item label="支付凭证">
             <div class="file-input-row">
@@ -59,7 +45,35 @@
             </div>
           </el-form-item>
         </el-form>
-        <el-button type="primary" :loading="submitting" :disabled="!canSubmit" @click="submitOrder">提交充值订单</el-button>
+      </el-card>
+
+      <el-card shadow="never" class="panel payment-panel">
+        <template #header>支付方式</template>
+        <el-radio-group v-model="form.channel" class="channel-list">
+          <el-radio-button
+            v-for="item in paymentChannels"
+            :key="item.channel"
+            :value="item.channel"
+          >
+            {{ item.display_name }}
+          </el-radio-button>
+        </el-radio-group>
+
+        <div v-if="selectedChannel" class="qr-box">
+          <img v-if="selectedChannel.qr_code_url" :src="selectedChannel.qr_code_url" alt="支付二维码" />
+          <el-empty v-else description="管理员未配置二维码" />
+        </div>
+        <el-empty v-else description="暂无可用支付方式" />
+
+        <div class="submit-strip">
+          <div>
+            <span>提交后等待管理员审核</span>
+            <strong>{{ submitSummary }}</strong>
+          </div>
+          <el-button type="primary" :loading="submitting" :disabled="!canSubmit" @click="submitOrder">
+            提交充值订单
+          </el-button>
+        </div>
       </el-card>
     </section>
   </div>
@@ -91,6 +105,7 @@ const form = reactive({
 const paymentChannels = computed(() => config.value.channels || [])
 const selectedChannel = computed(() => paymentChannels.value.find((item) => item.channel === form.channel))
 const canSubmit = computed(() => form.channel && form.amount > 0 && form.proof_file)
+const submitSummary = computed(() => `${form.amount || 0} 元 / 到账 ${customPreview.value.credit_quota || 0} 额度`)
 
 function selectFixedOption(item) {
   form.mode = 'fixed'
@@ -199,12 +214,43 @@ onMounted(loadConfig)
 
 .recharge-grid {
   display: grid;
-  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  grid-template-columns: minmax(520px, 680px) minmax(340px, 420px);
   gap: 16px;
+  align-items: start;
 }
 
 .panel {
   border-radius: 8px;
+}
+
+.option-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 160px));
+  justify-content: start;
+  gap: 10px;
+}
+
+.amount-option {
+  min-height: 82px;
+  width: 100%;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f172a;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+
+.amount-option.active {
+  border-color: #2f80ed;
+  background: #eff6ff;
+}
+
+.amount-form {
+  max-width: 620px;
 }
 
 .channel-list {
@@ -230,30 +276,6 @@ onMounted(loadConfig)
   object-fit: contain;
 }
 
-.option-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px;
-}
-
-.amount-option {
-  min-height: 82px;
-  border: 1px solid #dbeafe;
-  border-radius: 8px;
-  background: #fff;
-  color: #0f172a;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 8px;
-}
-
-.amount-option.active {
-  border-color: #2f80ed;
-  background: #eff6ff;
-}
-
 .preview-line {
   width: 100%;
   display: flex;
@@ -276,6 +298,27 @@ onMounted(loadConfig)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.submit-strip {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.submit-strip span {
+  display: block;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.submit-strip strong {
+  display: block;
+  margin-top: 4px;
+  color: #0f172a;
 }
 
 @media (max-width: 980px) {

@@ -25,7 +25,7 @@
           />
           <div>
             <h1 class="login-brand__name">小柠檬网络验证</h1>
-            <p class="login-brand__sub">管理员 / 商户共用登录</p>
+            <p class="login-brand__sub">管理员 / 发卡用户共用登录</p>
           </div>
         </header>
         <p class="login-intro">
@@ -51,7 +51,7 @@
           <img :src="`${publicBase}static/brand-logo.png`" alt="" width="56" height="56" />
         </div>
         <h2 class="login-glass__title">欢迎回来</h2>
-        <p class="login-glass__desc">使用管理员或商户账号登录</p>
+        <p class="login-glass__desc">使用管理员或发卡用户账号登录</p>
 
         <el-form
           ref="loginFormRef"
