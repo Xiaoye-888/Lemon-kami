@@ -3,6 +3,7 @@ import base64
 import hashlib
 import subprocess
 import requests
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -339,6 +340,20 @@ def test_api_client_json_rejects_unexpected_success_status():
         assert "returned status 200" in str(error)
     else:
         raise AssertionError("APIClient.json accepted an unexpected 200 status")
+
+
+def test_script_import_adds_project_root_for_direct_execution(monkeypatch):
+    narrowed_path = [
+        item
+        for item in sys.path
+        if item not in {"", str(ROOT)}
+    ]
+    monkeypatch.setattr(sys, "path", [str(SCRIPT.parent), *narrowed_path])
+
+    load_qa_module()
+
+    assert str(ROOT) in sys.path
+    __import__("crypto")
 
 
 def test_login_uses_aes_key_for_encrypted_payload_and_returns_auth_session(monkeypatch):
