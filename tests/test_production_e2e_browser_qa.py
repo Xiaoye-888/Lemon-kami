@@ -2146,6 +2146,7 @@ def test_cleanup_prefix_only_deletes_prefixed_human_readable_resources():
             },
             {"success": True, "data": {"id": "app_admin"}},
             {"success": True, "data": {"deleted_users": 1}},
+            {"success": True, "data": {"channels": [], "fixed_options": [], "bonus_rules": []}},
         ]
     )
 
@@ -2158,9 +2159,90 @@ def test_cleanup_prefix_only_deletes_prefixed_human_readable_resources():
         "/api/v1/admin/apps",
         "/api/v1/admin/apps/app_admin",
         "/api/v1/admin/end-users/delete",
+        "/api/v1/admin/commercial/recharge-config",
     ]
     assert admin.calls[2]["kwargs"]["params"]["confirm_text"] == "确认删除应用"
     assert admin.calls[3]["kwargs"]["json"] == {"user_ids": [42], "confirm_text": "确认删除用户"}
+
+
+def test_cleanup_prefix_cleans_prefixed_payment_config_residue():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_094500_def456_"
+
+    def fail_delete_option():
+        raise qa.QASafetyError("API DELETE /api/v1/admin/commercial/recharge-options/20 returned status 502; response=''")
+
+    admin = FakeAPIClient(
+        [
+            {"success": True, "data": {"items": []}},
+            {"success": True, "data": []},
+            {
+                "success": True,
+                "data": {
+                    "channels": [
+                        {
+                            "channel": "other",
+                            "display_name": prefix + "Temporary channel",
+                            "enabled": True,
+                            "sort_order": 9000,
+                            "remark": prefix + "Temporary channel",
+                        },
+                        {
+                            "channel": "wechat",
+                            "display_name": "Production WeChat",
+                            "enabled": True,
+                            "sort_order": 1,
+                            "remark": "production",
+                        },
+                    ],
+                    "fixed_options": [
+                        {
+                            "id": 20,
+                            "amount": 991,
+                            "credit_quota": 9910,
+                            "label": prefix + "Temporary option",
+                            "enabled": True,
+                            "sort_order": 9001,
+                            "remark": prefix + "Temporary option",
+                        }
+                    ],
+                    "bonus_rules": [
+                        {
+                            "id": 21,
+                            "threshold_amount": 993,
+                            "bonus_quota": 99,
+                            "enabled": True,
+                            "sort_order": 9002,
+                            "remark": prefix + "Temporary bonus",
+                        }
+                    ],
+                },
+            },
+            {"success": True, "data": {"channel": "other"}},
+            fail_delete_option,
+            {"success": True, "data": {"id": 20}},
+            {"success": True, "data": {"id": 21}},
+        ]
+    )
+
+    summary = qa.cleanup_run(admin, prefix)
+
+    assert [call["path"] for call in admin.calls] == [
+        "/api/v1/admin/commercial/merchants",
+        "/api/v1/admin/apps",
+        "/api/v1/admin/commercial/recharge-config",
+        "/api/v1/admin/commercial/payment-channels",
+        "/api/v1/admin/commercial/recharge-options/20",
+        "/api/v1/admin/commercial/recharge-options",
+        "/api/v1/admin/commercial/recharge-bonus-rules/21",
+    ]
+    assert summary["payment_config"] == {
+        "disabled_channels": ["other"],
+        "fallback_disabled_recharge_options": [20],
+        "deleted_bonus_rules": [21],
+    }
+    assert admin.calls[3]["kwargs"]["json"]["enabled"] is False
+    assert admin.calls[5]["kwargs"]["json"]["enabled"] is False
 
 
 def test_preflight_required_routes_verify_http_methods_and_sdk_routes():

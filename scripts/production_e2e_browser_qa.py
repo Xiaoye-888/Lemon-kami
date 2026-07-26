@@ -722,6 +722,44 @@ def restore_payment_snapshot(admin: APIClient, snapshot: PaymentSnapshot, prefix
     return {key: value for key, value in restore_summary.items() if value}
 
 
+def cleanup_payment_config_by_prefix(admin: APIClient, prefix: str):
+    validate_run_prefix(prefix)
+    current = load_payment_snapshot(admin)
+    cleanup_summary = {
+        "disabled_channels": [],
+        "deleted_recharge_options": [],
+        "fallback_disabled_recharge_options": [],
+        "deleted_bonus_rules": [],
+    }
+
+    for row in current.channels:
+        if _payment_row_owned_by_run(row, prefix):
+            payload = _channel_payload_from_row(row, enabled=False)
+            if payload:
+                _post_payment_channel(admin, payload)
+                cleanup_summary["disabled_channels"].append(row.get("channel"))
+
+    for row in current.fixed_options:
+        if _payment_row_owned_by_run(row, prefix):
+            option_id = row.get("id")
+            if option_id is not None:
+                try:
+                    _delete_recharge_option(admin, option_id)
+                    cleanup_summary["deleted_recharge_options"].append(option_id)
+                except QASafetyError:
+                    _disable_recharge_option(admin, row)
+                    cleanup_summary["fallback_disabled_recharge_options"].append(option_id)
+
+    for row in current.bonus_rules:
+        if _payment_row_owned_by_run(row, prefix):
+            rule_id = row.get("id")
+            if rule_id is not None:
+                _delete_bonus_rule(admin, rule_id)
+                cleanup_summary["deleted_bonus_rules"].append(rule_id)
+
+    return {key: value for key, value in cleanup_summary.items() if value}
+
+
 TINY_PROOF_PNG = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
     b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xff"
@@ -1166,7 +1204,8 @@ def cleanup_run(admin: APIClient, prefix: str):
             "/api/v1/admin/end-users/delete",
             json={"user_ids": merchant_ids, "confirm_text": DELETE_USER_CONFIRM_TEXT},
         )
-    return {"merchant_user_ids": merchant_ids, "admin_app_ids": app_ids}
+    payment_config_summary = cleanup_payment_config_by_prefix(admin, prefix)
+    return {"merchant_user_ids": merchant_ids, "admin_app_ids": app_ids, "payment_config": payment_config_summary}
 
 
 def mask_middle(value, keep=3):
