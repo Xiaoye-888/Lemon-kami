@@ -941,11 +941,24 @@ def issue_batch(merchant: MerchantContext, app_id: str, spec: SpecDescriptor, pr
         f"/api/v1/merchant/apps/{app_id}/kamis/preview",
         json=payload,
     )
-    issue = merchant.client.json(
-        "POST",
-        f"/api/v1/merchant/apps/{app_id}/kamis/batch",
-        json=payload,
-    )
+    try:
+        issue = merchant.client.json(
+            "POST",
+            f"/api/v1/merchant/apps/{app_id}/kamis/batch",
+            json=payload,
+        )
+    except QASafetyError as error:
+        context = {
+            "app_id": app_id,
+            "spec_id": spec.spec_id,
+            "source": spec.source,
+            "batch_no": payload.get("batch_no"),
+            "count": payload.get("count"),
+            "preview": _payload_data(preview),
+        }
+        safe_context = _format_report_line(redact(context))
+        safe_error = sanitize_report_string(str(error))
+        raise QASafetyError(f"Merchant issue batch failed; context={safe_context}; error={safe_error!r}") from error
     issue_data = _payload_data(issue)
     codes = list(issue_data.get("codes") or [])
     return BatchResult(

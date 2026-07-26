@@ -1756,6 +1756,48 @@ def test_self_owned_app_spec_and_issue_flow_never_calls_merchant_spec_create():
     assert issue_payload["points_amount"] == 10
 
 
+def test_issue_batch_failure_reports_safe_preview_context():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+
+    def fail_issue():
+        raise qa.QASafetyError("API POST failed Authorization: Bearer hidden-token")
+
+    merchant = qa.MerchantContext(
+        prefix=prefix,
+        base_url="https://qa.example.invalid",
+        username="merchant",
+        user_id=42,
+        auth=qa.AuthSession("merchant-token", "merchant", {"id": 42}),
+        client=FakeAPIClient(
+            [
+                {"success": True, "data": {"total_cost": 2, "balance_before": 100, "balance_after": 98}},
+                fail_issue,
+            ]
+        ),
+    )
+    spec = qa.SpecDescriptor(
+        spec_id=9,
+        issue_payload={"app_secret": "must-not-leak"},
+        source="admin_authorized",
+    )
+
+    try:
+        qa.issue_batch(merchant, "app_auth", spec, prefix)
+    except qa.QASafetyError as error:
+        message = str(error)
+        assert "Merchant issue batch failed" in message
+        assert "app_auth" in message
+        assert "admin_authorized" in message
+        assert '"spec_id": 9' in message
+        assert "total_cost" in message
+        assert "hidden-token" not in message
+        assert "must-not-leak" not in message
+        assert "merchant-token" not in message
+    else:
+        raise AssertionError("issue_batch accepted failed batch response")
+
+
 def test_fetch_batch_cards_returns_count_and_redacted_samples_only():
     qa = load_qa_module()
     prefix = "E2E_UI_QA_20260726_030000_abc123_"
