@@ -561,8 +561,9 @@ def test_commercial_ops_stability_controls_are_exposed():
     assert "cleanupRechargeProofs" in admin_orders
     assert "detailVisible" in admin_orders
     assert "selectedOrder" in admin_orders
-    assert "payment_snapshot" in admin_orders
-    assert "preview_snapshot" in admin_orders
+    assert "payment_snapshot" not in admin_orders
+    assert "preview_snapshot" not in admin_orders
+    assert "formatSnapshot" not in admin_orders
     assert "reviewer" in admin_orders
     assert "canceled" in admin_orders
     assert "expired" in admin_orders
@@ -576,6 +577,18 @@ def test_commercial_ops_stability_controls_are_exposed():
     assert "previewMerchantKamis" in merchant_batches
     assert "issuePreview" in merchant_batches
     assert "can_issue" in merchant_batches
+
+
+def test_admin_merchants_formats_visible_time_columns():
+    admin_merchants = (PROJECT_ROOT / "admin/src/views/AdminMerchants.vue").read_text(encoding="utf-8")
+
+    assert "formatBeijingTime" in admin_merchants
+    assert "formatOptionalTime" in admin_merchants
+    assert "{{ formatBeijingTime(row.created_at) }}" in admin_merchants
+    assert "{{ formatOptionalTime(row.last_login) }}" in admin_merchants
+    assert "{{ formatBeijingTime(row.created_at) }}" in admin_merchants.split('label="授权时间"', 1)[1]
+    assert 'prop="created_at" label="注册时间" width="180" />' not in admin_merchants
+    assert 'prop="last_login" label="最近登录" width="180" />' not in admin_merchants
 
 
 def test_phase2_sensitive_actions_use_fixed_confirmation_texts():

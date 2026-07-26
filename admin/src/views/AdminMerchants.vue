@@ -38,8 +38,12 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="注册时间" width="180" />
-        <el-table-column prop="last_login" label="最近登录" width="180" />
+        <el-table-column prop="created_at" label="注册时间" width="180">
+          <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column prop="last_login" label="最近登录" width="180">
+          <template #default="{ row }">{{ formatOptionalTime(row.last_login) }}</template>
+        </el-table-column>
         <el-table-column label="操作" width="190" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" plain @click="openQuotaDialog(row)">发放额度</el-button>
@@ -97,7 +101,9 @@
             </template>
           </el-table-column>
           <el-table-column prop="granted_by" label="授权人" width="120" />
-          <el-table-column prop="created_at" label="授权时间" width="180" />
+          <el-table-column prop="created_at" label="授权时间" width="180">
+            <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
+          </el-table-column>
         </el-table>
         <el-divider />
         <el-form :model="appAuthForm" label-width="100px">
@@ -130,6 +136,7 @@ import {
   grantEndUserQuota,
   revokeEndUserAppAuthorization
 } from '../api/points'
+import { formatBeijingTime } from '../utils/datetime'
 
 const loading = ref(false)
 const quotaSaving = ref(false)
@@ -161,6 +168,8 @@ const CONFIRM_GRANT_ISSUE_QUOTA = '确认调整额度'
 const CONFIRM_GRANT_APP_AUTHORIZATION = '确认授权应用'
 
 const CONFIRM_REVOKE_APP_AUTHORIZATION = '确认取消授权'
+
+const formatOptionalTime = (value) => (value ? formatBeijingTime(value) : '-')
 
 const normalizedQuery = () => {
   const params = { ...query }

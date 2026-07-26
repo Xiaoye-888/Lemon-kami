@@ -37,7 +37,9 @@
             <el-tag :type="statusType(row.status)">{{ statusText(row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="提交时间" width="180" />
+        <el-table-column prop="created_at" label="提交时间" width="180">
+          <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
+        </el-table-column>
         <el-table-column label="支付凭证" width="110">
           <template #default="{ row }">
             <el-button link type="primary" :disabled="!row.has_proof" @click="openProof(row)">查看</el-button>
@@ -118,16 +120,8 @@
           <el-descriptions-item label="审核备注">{{ selectedOrder.admin_remark || '-' }}</el-descriptions-item>
           <el-descriptions-item label="拒绝原因">{{ selectedOrder.reject_reason || '-' }}</el-descriptions-item>
           <el-descriptions-item label="审核人">{{ selectedOrder.reviewer || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="审核时间">{{ selectedOrder.reviewed_at || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="审核时间">{{ formatOptionalTime(selectedOrder.reviewed_at) }}</el-descriptions-item>
         </el-descriptions>
-        <div class="snapshot-block">
-          <div class="snapshot-title">payment_snapshot</div>
-          <pre>{{ formatSnapshot(selectedOrder.payment_snapshot) }}</pre>
-        </div>
-        <div class="snapshot-block">
-          <div class="snapshot-title">preview_snapshot</div>
-          <pre>{{ formatSnapshot(selectedOrder.preview_snapshot) }}</pre>
-        </div>
         <div class="drawer-actions">
           <el-button type="primary" plain :disabled="!selectedOrder.has_proof" @click="openProof(selectedOrder)">查看凭证</el-button>
           <el-button
@@ -188,6 +182,7 @@ import {
   markRechargeOrderAbnormal,
   rejectRechargeOrder
 } from '../api/commercial'
+import { formatBeijingTime } from '../utils/datetime'
 
 const loading = ref(false)
 const cleanupLoading = ref(false)
@@ -241,6 +236,8 @@ const channelText = (channel) => ({
   other: '其他'
 }[channel] || channel)
 
+const formatOptionalTime = (value) => (value ? formatBeijingTime(value) : '-')
+
 async function loadOrders() {
   loading.value = true
   try {
@@ -268,11 +265,6 @@ function openProof(row) {
 function openDetail(row) {
   selectedOrder.value = row
   detailVisible.value = true
-}
-
-function formatSnapshot(snapshot) {
-  if (!snapshot || Object.keys(snapshot).length === 0) return '-'
-  return JSON.stringify(snapshot, null, 2)
 }
 
 async function promptSensitiveConfirm(expected, title) {
@@ -456,26 +448,4 @@ onMounted(loadOrders)
   gap: 14px;
 }
 
-.snapshot-block {
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  overflow: hidden;
-}
-
-.snapshot-title {
-  padding: 8px 10px;
-  color: #475569;
-  font-size: 13px;
-  border-bottom: 1px solid #e2e8f0;
-}
-
-.snapshot-block pre {
-  margin: 0;
-  padding: 10px;
-  max-height: 180px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
 </style>
