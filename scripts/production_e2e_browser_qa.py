@@ -1318,11 +1318,14 @@ def add_analysis_sections(
     report: "QAReport",
     product_findings: list[dict[str, Any]],
     engineering_findings: list[dict[str, Any]],
+    product_assessed: bool = True,
 ) -> None:
     if product_findings:
         product_lines = [format_finding(finding) for finding in product_findings]
-    else:
+    elif product_assessed:
         product_lines = ["产品体验未发现阻塞项。"]
+    else:
+        product_lines = ["浏览器用户体验未完成评估，数据不足以判断是否存在阻塞项。"]
 
     if engineering_findings:
         engineering_lines = [format_finding(finding) for finding in engineering_findings]
@@ -1682,7 +1685,9 @@ def run_production_flow(config: QAConfig):
     flow_error = None
     browser_results = []
     browser_findings = []
-    flow_summaries = {}
+    flow_summaries = {
+        "deployment_health": {"base_url": config.base_url, "health": "checked"},
+    }
     try:
         temp_payment = ensure_temporary_payment_config(admin, prefix) or {}
         merchant = register_merchant(config.base_url, prefix)
@@ -1723,11 +1728,7 @@ def run_production_flow(config: QAConfig):
             rsa_public_key=self_app.rsa_public_key,
         ) if self_batch.codes else {"success": False, "card_code": None}
         self_flow_summary = _report_flow_summary(self_batch, self_spec, self_cards, self_verify)
-        flow_summaries["self_owned"] = {
-            **self_flow_summary,
-            "cards": self_cards,
-            "verify": self_verify,
-        }
+        flow_summaries["self_owned"] = self_flow_summary
 
         admin_app, admin_spec = create_admin_app_and_spec(admin, prefix)
         authorize_app_to_merchant(admin, merchant.user_id, admin_app.app_id)
@@ -1750,11 +1751,7 @@ def run_production_flow(config: QAConfig):
             rsa_public_key=admin_app.rsa_public_key,
         ) if authorized_batch.codes else {"success": False, "card_code": None}
         authorized_flow_summary = _report_flow_summary(authorized_batch, admin_spec, authorized_cards, authorized_verify)
-        flow_summaries["authorized"] = {
-            **authorized_flow_summary,
-            "cards": authorized_cards,
-            "verify": authorized_verify,
-        }
+        flow_summaries["authorized"] = authorized_flow_summary
 
         boundaries = verify_permission_boundaries(admin, merchant, prefix)
         flow_summaries["permission_boundaries"] = boundaries
@@ -1769,26 +1766,14 @@ def run_production_flow(config: QAConfig):
                 if result.get("role"):
                     finding["role"] = result.get("role")
                 browser_findings.append(finding)
-
-        report.add_section("Deployment And Health", [{"base_url": config.base_url, "health": "checked"}])
-        report.add_section(
-            "Browser Sweep",
-            [
-                {
-                    "results": len(browser_results),
-                    "summary": summarize_browser_sweep(browser_results, browser_findings),
-                    "findings": browser_findings,
-                }
-            ],
-        )
-        report.add_section("Recharge Flow", [recharge_summary])
-        report.add_section("Self Owned Flow", [self_flow_summary])
-        report.add_section("Authorized Flow", [authorized_flow_summary])
-        report.add_section("Permission Boundaries", [boundaries])
+        flow_summaries["browser_sweep"] = {
+            "results": len(browser_results),
+            "summary": summarize_browser_sweep(browser_results, browser_findings),
+            "findings": browser_findings,
+        }
     except Exception as error:
         flow_error = error
         flow_summaries["flow_error"] = sanitize_report_string(str(error))
-        report.add_section("Flow Error", [sanitize_report_string(str(error))])
     finally:
         try:
             restore_payment_snapshot(admin, payment_snapshot, prefix)
@@ -1799,15 +1784,30 @@ def run_production_flow(config: QAConfig):
             cleanup_status = cleanup_run(admin, prefix)
         except Exception as error:
             cleanup_status = {"error": sanitize_report_string(str(error))}
-        report.add_section("Cleanup And Restore", [payment_restore_status, cleanup_status])
         flow_summaries["cleanup"] = {
             "payment_restore": payment_restore_status,
             "resources": cleanup_status,
         }
+        if flow_summaries.get("deployment_health"):
+            report.add_section("Deployment And Health", [flow_summaries["deployment_health"]])
+        if flow_summaries.get("browser_sweep"):
+            report.add_section("Browser Sweep", [flow_summaries["browser_sweep"]])
+        if flow_summaries.get("recharge"):
+            report.add_section("Recharge Flow", [flow_summaries["recharge"]])
+        if flow_summaries.get("self_owned"):
+            report.add_section("Self Owned Flow", [flow_summaries["self_owned"]])
+        if flow_summaries.get("authorized"):
+            report.add_section("Authorized Flow", [flow_summaries["authorized"]])
+        if flow_summaries.get("permission_boundaries"):
+            report.add_section("Permission Boundaries", [flow_summaries["permission_boundaries"]])
+        if flow_summaries.get("flow_error"):
+            report.add_section("Flow Error", [flow_summaries["flow_error"]])
+        report.add_section("Cleanup And Restore", [payment_restore_status, cleanup_status])
         add_analysis_sections(
             report,
             derive_product_findings(browser_findings, flow_summaries),
             derive_engineering_findings(browser_findings, flow_summaries),
+            product_assessed=bool(browser_results),
         )
         report_path = report.write()
     if flow_error is not None:

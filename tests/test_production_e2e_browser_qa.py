@@ -708,6 +708,30 @@ def test_add_analysis_sections_renders_findings_and_chinese_fallbacks(tmp_path):
     assert "hidden" not in content
 
 
+def test_add_analysis_sections_reports_insufficient_product_data_when_browser_not_assessed(tmp_path):
+    qa = load_qa_module()
+    report = qa.QAReport(run_id="E2E_UI_QA_20260726_030000_abc123", artifact_dir=tmp_path)
+
+    qa.add_analysis_sections(report, [], [], product_assessed=False)
+
+    content = report.render()
+    assert "产品经理视角" in content
+    assert "浏览器用户体验未完成评估" in content
+    assert "产品体验未发现阻塞项" not in content
+    assert "工程实现未发现阻塞项" in content
+
+
+def test_add_analysis_sections_allows_product_no_blocker_after_clean_browser_assessment(tmp_path):
+    qa = load_qa_module()
+    report = qa.QAReport(run_id="E2E_UI_QA_20260726_030000_abc123", artifact_dir=tmp_path)
+
+    qa.add_analysis_sections(report, [], [], product_assessed=True)
+
+    content = report.render()
+    assert "产品体验未发现阻塞项" in content
+    assert "浏览器用户体验未完成评估" not in content
+
+
 def test_analysis_findings_are_derived_from_browser_and_flow_data():
     qa = load_qa_module()
     browser_findings = [
@@ -1844,6 +1868,128 @@ def test_flow_report_sections_include_self_and_authorized_spec_summaries(tmp_pat
     assert '"spec_group": "custom"' in content
     assert "KAM***567" in content
     assert "KAM***543" in content
+
+
+def test_run_production_flow_preserves_completed_sections_when_browser_sweep_fails(monkeypatch, tmp_path):
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    merchant = qa.MerchantContext(
+        prefix=prefix,
+        base_url="https://qa.example.invalid",
+        username=prefix + "merchant",
+        user_id=42,
+        auth=qa.AuthSession("merchant-token", "merchant", {"id": 42}),
+        client=FakeAPIClient(),
+    )
+    self_app = qa.AppResource("app_self", app_secret="self-secret", rsa_public_key="self-public")
+    admin_app = qa.AppResource("app_admin", app_secret="admin-secret", rsa_public_key="admin-public")
+    self_spec = qa.SpecDescriptor(
+        spec_id=None,
+        issue_payload={"kami_type": "points", "points_amount": 10, "points_valid_days": 30},
+        source="self_owned_direct_fields",
+    )
+    admin_spec = qa.SpecDescriptor(
+        spec_id=77,
+        issue_payload={
+            "spec_id": 77,
+            "kami_type": "points",
+            "points_amount": 10,
+            "points_valid_days": 30,
+            "spec_group": "custom",
+        },
+        source="admin_authorized",
+    )
+    self_batch = qa.BatchResult(
+        "app_self",
+        7,
+        prefix + "self_batch",
+        2,
+        ["KAMI-ABCDEFG1234567"],
+        {"total_cost": 2},
+        {},
+    )
+    authorized_batch = qa.BatchResult(
+        "app_admin",
+        8,
+        prefix + "authorized_batch",
+        2,
+        ["KAMI-HIJKLMN9876543"],
+        {"total_cost": 2},
+        {},
+    )
+    balances = iter([100, 10010, 10010, 10008, 10008, 10006])
+    issued = []
+
+    def fake_issue_batch(_merchant, app_id, spec, _prefix):
+        issued.append((app_id, spec.source))
+        return self_batch if app_id == "app_self" else authorized_batch
+
+    monkeypatch.setattr(qa, "build_run_prefix", lambda: prefix)
+    monkeypatch.setattr(qa, "_artifact_dir_for_run", lambda _run_id: tmp_path)
+    monkeypatch.setattr(qa, "login", lambda *_args: qa.AuthSession("admin-token", "admin", {"id": 1}))
+    monkeypatch.setattr(qa, "APIClient", lambda *_args, **_kwargs: FakeAPIClient())
+    monkeypatch.setattr(qa, "load_payment_snapshot", lambda _admin: qa.PaymentSnapshot([], [], []))
+    monkeypatch.setattr(qa, "ensure_temporary_payment_config", lambda *_args: {"channel": "other", "option_id": 20})
+    monkeypatch.setattr(qa, "register_merchant", lambda *_args, **_kwargs: merchant)
+    monkeypatch.setattr(qa, "get_issue_quota_balance", lambda _merchant: next(balances))
+    monkeypatch.setattr(qa, "submit_recharge_order", lambda *_args: {"order_no": "RC123"})
+    monkeypatch.setattr(qa, "approve_recharge_order", lambda *_args: {"credit_quota": 9910})
+    monkeypatch.setattr(qa, "create_self_app", lambda *_args: self_app)
+    monkeypatch.setattr(qa, "create_self_spec", lambda *_args: self_spec)
+    monkeypatch.setattr(qa, "issue_batch", fake_issue_batch)
+    monkeypatch.setattr(
+        qa,
+        "fetch_batch_cards",
+        lambda _merchant, batch: {"count": batch.count, "sample_codes": qa.redact_card_codes(batch.codes)},
+    )
+    monkeypatch.setattr(
+        qa,
+        "verify_one_card",
+        lambda _base_url, app_id, code, **_kwargs: {
+            "app_id": app_id,
+            "card_code": qa.redact_card_codes([code])[0],
+            "success": True,
+        },
+    )
+    monkeypatch.setattr(qa, "create_admin_app_and_spec", lambda *_args: (admin_app, admin_spec))
+    monkeypatch.setattr(qa, "authorize_app_to_merchant", lambda *_args: {"id": 88})
+    monkeypatch.setattr(qa, "verify_permission_boundaries", lambda *_args: {"checked": 2, "results": []})
+    monkeypatch.setattr(qa, "run_browser_sweep", lambda *_args: (_ for _ in ()).throw(qa.QASafetyError("Browser failed token=hidden")))
+    monkeypatch.setattr(qa, "restore_payment_snapshot", lambda *_args: None)
+    monkeypatch.setattr(qa, "cleanup_run", lambda *_args: {"merchant_user_ids": [42], "admin_app_ids": ["app_admin"]})
+
+    config = qa.QAConfig(
+        base_url="https://qa.example.invalid",
+        admin_username="admin",
+        admin_password="password",
+        confirmation=qa.PRODUCTION_CONFIRMATION,
+    )
+
+    try:
+        qa.run_production_flow(config)
+    except qa.QASafetyError as error:
+        assert "sanitized report written" in str(error)
+    else:
+        raise AssertionError("browser sweep failure did not fail production flow")
+
+    content = (tmp_path / "production-e2e-browser-report.md").read_text(encoding="utf-8")
+    assert issued == [("app_self", "self_owned_direct_fields"), ("app_admin", "admin_authorized")]
+    assert "## Deployment And Health" in content
+    assert "## Browser Sweep" not in content
+    assert "## Recharge Flow" in content
+    assert "RC123" in content
+    assert "## Self Owned Flow" in content
+    assert "self_owned_direct_fields" in content
+    assert "KAM***567" in content
+    assert "## Authorized Flow" in content
+    assert "admin_authorized" in content
+    assert "KAM***543" in content
+    assert "## Permission Boundaries" in content
+    assert "## Cleanup And Restore" in content
+    assert "Browser failed <redacted>" in content
+    assert "hidden" not in content
+    assert "产品体验未发现阻塞项" not in content
+    assert "浏览器用户体验未完成评估" in content
 
 
 def test_admin_app_spec_authorization_and_permission_boundaries_use_expected_routes():
