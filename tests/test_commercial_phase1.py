@@ -339,10 +339,15 @@ def test_manual_recharge_order_review_credits_issue_quota_and_transactions(tmp_p
         assert order_data["status"] == "pending_review"
         assert order_data["credit_quota"] == 400
         assert order_data["order_no"].startswith("RC")
+        assert "payment_snapshot" not in order_data
+        assert "preview_snapshot" not in order_data
 
         orders_response = client.get("/api/v1/admin/commercial/recharge-orders")
         assert orders_response.status_code == 200
-        assert orders_response.json()["data"]["items"][0]["order_no"] == order_data["order_no"]
+        order_item = orders_response.json()["data"]["items"][0]
+        assert order_item["order_no"] == order_data["order_no"]
+        assert "payment_snapshot" not in order_item
+        assert "preview_snapshot" not in order_item
 
         approve_response = client.post(
             f"/api/v1/admin/commercial/recharge-orders/{order_data['order_no']}/approve",
@@ -1071,6 +1076,155 @@ def test_merchant_self_owned_specs_are_manageable_and_authorized_specs_are_read_
             json=spec_payload,
         )
         assert forbidden_other.status_code == 403
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_app_detail_and_interface_management_follow_ownership_boundaries():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="app-workbench-merchant", password_hash=hash_password("secret123"), status=1)
+        other = EndUser(username="app-workbench-other", password_hash=hash_password("secret123"), status=1)
+        session.add_all([merchant, other])
+        session.commit()
+        session.refresh(merchant)
+        session.refresh(other)
+        self_app = App(
+            app_id="app_workbench_self",
+            name="Workbench Self App",
+            app_secret="secret-self",
+            rsa_public_key="public-self",
+            rsa_private_key="private-self",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        authorized_app = App(
+            app_id="app_workbench_authorized",
+            name="Workbench Authorized App",
+            app_secret="secret-authorized",
+            rsa_public_key="public-authorized",
+            rsa_private_key="private-authorized",
+            created_by="admin",
+        )
+        session.add_all([self_app, authorized_app])
+        session.add(
+            UserAppAuthorization(
+                app_id=authorized_app.app_id,
+                user_id=merchant.id,
+                username=merchant.username,
+                granted_by="admin",
+            )
+        )
+        session.commit()
+        token = routes_user.create_user_access_token(merchant)
+
+    try:
+        self_detail = client.get(
+            "/api/v1/merchant/apps/app_workbench_self",
+            headers=auth_headers(token),
+        )
+        assert self_detail.status_code == 200
+        self_data = self_detail.json()["data"]
+        assert self_data["is_owned"] is True
+        assert self_data["app_secret"] == "secret-self"
+        assert self_data["rsa_public_key"] == "public-self"
+
+        authorized_detail = client.get(
+            "/api/v1/merchant/apps/app_workbench_authorized",
+            headers=auth_headers(token),
+        )
+        assert authorized_detail.status_code == 200
+        authorized_data = authorized_detail.json()["data"]
+        assert authorized_data["is_owned"] is False
+        assert authorized_data["source"] == "admin_authorized"
+        assert "app_secret" not in authorized_data
+        assert "rsa_public_key" not in authorized_data
+
+        authorized_rename = client.put(
+            "/api/v1/merchant/apps/app_workbench_authorized",
+            headers=auth_headers(token),
+            json={"name": "Not Allowed"},
+        )
+        assert authorized_rename.status_code == 403
+
+        authorized_delete = client.delete(
+            "/api/v1/merchant/apps/app_workbench_authorized",
+            headers=auth_headers(token),
+        )
+        assert authorized_delete.status_code == 403
+
+        self_interfaces = client.get(
+            "/api/v1/merchant/apps/app_workbench_self/interfaces",
+            headers=auth_headers(token),
+        )
+        assert self_interfaces.status_code == 200
+        self_interface_items = self_interfaces.json()["data"]
+        assert self_interface_items
+        first_interface_id = self_interface_items[0]["interface_id"]
+
+        self_interface_update = client.put(
+            f"/api/v1/merchant/apps/app_workbench_self/interfaces/{first_interface_id}",
+            headers=auth_headers(token),
+            json={
+                "enabled": True,
+                "quota_limit": 12,
+                "expires_at": "2026-08-01T00:00:00",
+                "remark": "merchant config",
+                "config": {"release_on_logout": True},
+            },
+        )
+        assert self_interface_update.status_code == 200
+        assert self_interface_update.json()["data"]["configured"] is True
+
+        authorized_interfaces = client.get(
+            "/api/v1/merchant/apps/app_workbench_authorized/interfaces",
+            headers=auth_headers(token),
+        )
+        assert authorized_interfaces.status_code == 200
+        authorized_interface_items = authorized_interfaces.json()["data"]
+        assert authorized_interface_items
+        authorized_first_interface_id = authorized_interface_items[0]["interface_id"]
+
+        forbidden_interface_update = client.put(
+            f"/api/v1/merchant/apps/app_workbench_authorized/interfaces/{authorized_first_interface_id}",
+            headers=auth_headers(token),
+            json={
+                "enabled": True,
+                "quota_limit": 12,
+                "expires_at": "2026-08-01T00:00:00",
+                "remark": "should not save",
+                "config": {"release_on_logout": True},
+            },
+        )
+        assert forbidden_interface_update.status_code == 403
+
+        self_rename = client.put(
+            "/api/v1/merchant/apps/app_workbench_self",
+            headers=auth_headers(token),
+            json={"name": "Workbench Self App Renamed"},
+        )
+        assert self_rename.status_code == 200
+        assert self_rename.json()["data"]["name"] == "Workbench Self App Renamed"
+
+        self_delete = client.delete(
+            "/api/v1/merchant/apps/app_workbench_self",
+            headers=auth_headers(token),
+        )
+        assert self_delete.status_code == 200
+        assert self_delete.json()["data"]["interface_config_count"] == 1
+        assert self_delete.json()["data"]["spec_count"] == 0
+
+        missing_self = client.get(
+            "/api/v1/merchant/apps/app_workbench_self",
+            headers=auth_headers(token),
+        )
+        assert missing_self.status_code == 404
     finally:
         fastapi_app.dependency_overrides.clear()
 

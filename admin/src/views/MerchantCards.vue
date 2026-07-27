@@ -44,8 +44,12 @@
         <el-table-column prop="kami_type" label="类型" width="100" />
         <el-table-column prop="status" label="状态" width="100" />
         <el-table-column prop="bound_device_count" label="绑定设备" width="100" />
-        <el-table-column prop="activate_time" label="激活时间" width="170" />
-        <el-table-column prop="created_at" label="创建时间" width="170" />
+        <el-table-column prop="activate_time" label="激活时间" width="170">
+          <template #default="{ row }">{{ formatOptionalTime(row.activate_time) }}</template>
+        </el-table-column>
+        <el-table-column prop="created_at" label="创建时间" width="170">
+          <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
+        </el-table-column>
       </el-table>
       <el-pagination
         v-model:current-page="query.page"

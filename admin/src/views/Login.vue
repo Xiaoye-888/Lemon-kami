@@ -357,6 +357,32 @@ watch(rememberMe, (v) => {
   }
 })
 
+function extractErrorDetail(error) {
+  const detail = error?.response?.data?.detail
+  if (typeof detail === 'string') {
+    return detail
+  }
+  if (detail && typeof detail === 'object') {
+    return detail.message || detail.detail || detail.error || ''
+  }
+  return ''
+}
+
+function getLoginErrorMessage(error) {
+  const detail = extractErrorDetail(error)
+  const status = error?.response?.status
+  if (status === 401) {
+    return '账号或密码错误，请重新输入'
+  }
+  if (status === 403) {
+    return detail || '账号已被禁用，请联系管理员'
+  }
+  if (status === 400) {
+    return detail || '登录信息有误，请检查后重试'
+  }
+  return detail || error?.message || '登录失败，请检查用户名和密码'
+}
+
 const handleLogin = async () => {
   if (!loginFormRef.value) {
     return
@@ -409,7 +435,7 @@ const handleLogin = async () => {
       ElMessage.success('登录成功')
       router.push(loginResult.redirect || userStore.homePath)
     } catch (e) {
-      ElMessage.error(e.message || '登录失败，请检查用户名和密码')
+      ElMessage.error(getLoginErrorMessage(e))
     } finally {
       loading.value = false
     }
@@ -438,7 +464,7 @@ const handleRegister = async () => {
     ElMessage.success('注册成功')
     router.push(result.redirect || userStore.homePath)
   } catch (e) {
-    ElMessage.error(e.message || '注册失败，请检查账号信息')
+    ElMessage.error(extractErrorDetail(e) || e.message || '注册失败，请检查账号信息')
   } finally {
     registering.value = false
   }

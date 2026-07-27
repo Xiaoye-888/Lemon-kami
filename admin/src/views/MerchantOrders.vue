@@ -15,8 +15,12 @@
         <el-table-column label="状态" width="110">
           <template #default="{ row }">{{ statusText(row.status) }}</template>
         </el-table-column>
-        <el-table-column prop="created_at" label="提交时间" width="180" />
-        <el-table-column prop="reviewed_at" label="审核时间" width="180" />
+        <el-table-column prop="created_at" label="提交时间" width="180">
+          <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column prop="reviewed_at" label="审核时间" width="180">
+          <template #default="{ row }">{{ formatOptionalTime(row.reviewed_at) }}</template>
+        </el-table-column>
         <el-table-column prop="reject_reason" label="拒绝原因" min-width="160" show-overflow-tooltip />
         <el-table-column label="操作" width="110" fixed="right">
           <template #default="{ row }">
@@ -40,10 +44,12 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { cancelMerchantRechargeOrder, getMerchantRechargeOrders } from '../api/merchant'
+import { formatBeijingTime } from '../utils/datetime'
 
 const loading = ref(false)
 const rowAction = ref('')
 const orders = ref([])
+const formatOptionalTime = (value) => (value ? formatBeijingTime(value) : '-')
 
 const statusText = (status) => ({
   pending_review: '待审核',

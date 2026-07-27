@@ -701,19 +701,6 @@ async def create_recharge_order_from_upload(
 
 
 def recharge_order_payload(order: RechargeOrder, include_user: bool = False) -> dict:
-    payment_snapshot = {}
-    preview_snapshot = {}
-    if order.payment_snapshot_json:
-        try:
-            payment_snapshot = json.loads(order.payment_snapshot_json)
-        except json.JSONDecodeError:
-            payment_snapshot = {}
-    if order.preview_snapshot_json:
-        try:
-            preview_snapshot = json.loads(order.preview_snapshot_json)
-        except json.JSONDecodeError:
-            preview_snapshot = {}
-
     payload = {
         "id": order.id,
         "order_no": order.order_no,
@@ -729,8 +716,6 @@ def recharge_order_payload(order: RechargeOrder, include_user: bool = False) -> 
         "option_id": order.option_id,
         "bonus_rule_id": order.bonus_rule_id,
         "status": _enum_value(order.status),
-        "payment_snapshot": payment_snapshot,
-        "preview_snapshot": preview_snapshot,
         "has_proof": bool(order.proof_file_path),
         "proof_file_name": order.proof_file_name,
         "proof_content_type": order.proof_content_type,
