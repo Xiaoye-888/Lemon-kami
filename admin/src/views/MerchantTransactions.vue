@@ -12,7 +12,9 @@
         <el-table-column prop="amount" label="变动" width="100" />
         <el-table-column prop="balance_after" label="变动后" width="110" />
         <el-table-column prop="biz_id" label="业务单号" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="created_at" label="时间" width="180" />
+        <el-table-column prop="created_at" label="时间" width="180">
+          <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
+        </el-table-column>
       </el-table>
     </el-card>
   </div>
@@ -21,6 +23,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { getMerchantQuotaTransactions } from '../api/merchant'
+import { formatBeijingTime } from '../utils/datetime'
 
 const loading = ref(false)
 const items = ref([])

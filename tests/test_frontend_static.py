@@ -375,6 +375,20 @@ def test_commercial_shared_login_and_role_routes_are_present():
     assert "AdminRechargeOrders" in router
 
 
+def test_login_view_reports_friendly_password_error_and_bypasses_global_401_handling():
+    request_source = (PROJECT_ROOT / "admin/src/utils/request.js").read_text(encoding="utf-8")
+    login_source = (PROJECT_ROOT / "admin/src/views/Login.vue").read_text(encoding="utf-8")
+
+    assert "authEndpoints" in request_source
+    assert "isAuthRequest" in request_source
+    assert "/auth/login" in request_source
+    assert "/auth/register" in request_source
+    assert "账号或密码错误，请重新输入" in login_source
+    assert "getLoginErrorMessage" in login_source
+    assert "extractErrorDetail" in login_source
+    assert "Request failed with status code 401" not in login_source
+
+
 def test_commercial_admin_and_merchant_navigation_entries_are_visible():
     layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
 
@@ -403,6 +417,48 @@ def test_merchant_console_uses_card_issuer_language_in_visible_shell():
     assert "\u53d1\u5361\u5de5\u4f5c\u53f0" in dashboard
     assert "\u5546\u6237\u63a7\u5236\u53f0" not in combined
     assert "\u5546\u6237\u8d26\u53f7" not in combined
+
+
+def test_merchant_apps_interface_management_is_read_only_for_authorized_apps():
+    source = (PROJECT_ROOT / "admin/src/views/MerchantApps.vue").read_text(encoding="utf-8")
+
+    assert "canEditCurrentAppInterfaces" in source
+    assert ":title=\"currentApp?.is_owned ? '接口配置' : '接口查看'\"" in source
+    assert ":disabled=\"!canEditCurrentAppInterfaces\"" in source
+    assert "v-if=\"canEditCurrentAppInterfaces\"" in source
+    assert "授权应用只读" in source
+    assert "授权应用不公开密钥" in source
+
+
+def test_merchant_batches_exposes_grouped_specs_and_beijing_time_rendering():
+    source = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+
+    for token in (
+        "specGroupTab",
+        "commonSpecs.length",
+        "customSpecs.length",
+        "SPEC_GROUP_OPTIONS",
+        "TYPE_OPTIONS",
+        "AUTHORIZATION_OWNER_OPTIONS",
+        "USER_BIND_MODE_OPTIONS",
+        "TIME_UNIT_OPTIONS",
+        "getSpecGroupText",
+        "getTypeText",
+        "getMachineBindModeText",
+        "getAuthorizationOwnerText",
+        "getUserBindModeText",
+        "getValidityText",
+        "formatBeijingTime(selectedSpec.created_at)",
+        "formatBeijingTime(selectedSpec.updated_at)",
+        "formatBeijingTime(row.created_at)",
+    ):
+        assert token in source
+
+    assert "常用规格" in source
+    assert "自定义规格" in source
+    assert "规格分组" in source
+    assert "授权归属" in source
+    assert "编辑模式仅允许调整规格分组、状态、排序和备注" in source
 
 
 def test_main_layout_imports_every_menu_icon_it_uses():
@@ -493,6 +549,25 @@ def test_merchant_recharge_layout_places_amount_left_and_payment_right():
     assert "justify-content: start" in merchant_recharge
     assert "minmax(0, 1fr)" not in merchant_recharge.split(".recharge-grid", 1)[1].split("}", 1)[0]
 
+def test_merchant_views_format_all_visible_time_columns():
+    merchant_account = (PROJECT_ROOT / "admin/src/views/MerchantAccount.vue").read_text(encoding="utf-8")
+    merchant_dashboard = (PROJECT_ROOT / "admin/src/views/MerchantDashboard.vue").read_text(encoding="utf-8")
+    merchant_orders = (PROJECT_ROOT / "admin/src/views/MerchantOrders.vue").read_text(encoding="utf-8")
+    merchant_transactions = (PROJECT_ROOT / "admin/src/views/MerchantTransactions.vue").read_text(encoding="utf-8")
+    merchant_cards = (PROJECT_ROOT / "admin/src/views/MerchantCards.vue").read_text(encoding="utf-8")
+
+    assert "formatBeijingTime" in merchant_account
+    assert "formatOptionalTime" in merchant_account
+    assert "{{ formatBeijingTime(profile.created_at) }}" in merchant_account
+    assert "{{ formatOptionalTime(profile.last_login) }}" in merchant_account
+
+    for source in (merchant_dashboard, merchant_orders, merchant_transactions, merchant_cards):
+        assert "formatBeijingTime" in source
+
+    assert "formatOptionalTime" in merchant_orders
+    assert "formatOptionalTime" in merchant_cards
+    assert "profile.created_at || '-'" not in merchant_account
+    assert "profile.last_login || '-'" not in merchant_account
 
 def test_merchant_apps_create_flow_uses_dialog_instead_of_inline_input():
     merchant_apps = (PROJECT_ROOT / "admin/src/views/MerchantApps.vue").read_text(encoding="utf-8")
@@ -507,6 +582,38 @@ def test_merchant_apps_create_flow_uses_dialog_instead_of_inline_input():
     assert 'placeholder="\u5e94\u7528\u540d\u79f0"' not in toolbar_source
     assert "newAppName" not in merchant_apps
 
+def test_merchant_apps_expose_self_owned_actions_and_interface_management():
+    merchant_apps = (PROJECT_ROOT / "admin/src/views/MerchantApps.vue").read_text(encoding="utf-8")
+    merchant_api = (PROJECT_ROOT / "admin/src/api/merchant.js").read_text(encoding="utf-8")
+
+    for token in (
+        "getMerchantAppDetail",
+        "updateMerchantApp",
+        "deleteMerchantApp",
+        "getMerchantAppInterfaces",
+        "updateMerchantAppInterface",
+    ):
+        assert token in merchant_api
+
+    for token in (
+        "detailDialogVisible",
+        "editDialogVisible",
+        "deleteDialogVisible",
+        "interfacesDialogVisible",
+        "interfaceConfigDialogVisible",
+        "showEditDialog",
+        "handleUpdateApp",
+        "handleDeleteApp",
+        "openInterfacesDialog",
+        "saveInterfaceConfig",
+    ):
+        assert token in merchant_apps
+
+    assert 'v-if="row.is_owned"' in merchant_apps
+    assert "接口列表" in merchant_apps
+    assert "改名" in merchant_apps
+    assert "删除" in merchant_apps
+    assert "规格批次" in merchant_apps
 
 def test_merchant_batches_exposes_spec_first_workbench_and_scoped_apis():
     merchant_api = (PROJECT_ROOT / "admin/src/api/merchant.js").read_text(encoding="utf-8")
@@ -540,6 +647,33 @@ def test_merchant_batches_exposes_spec_first_workbench_and_scoped_apis():
     assert "\u81ea\u5efa\u5e94\u7528" in merchant_batches
     assert "\u6388\u6743\u5e94\u7528" in merchant_batches
     assert "\u89c4\u683c\u4fe1\u606f" in merchant_batches
+
+
+def test_merchant_batches_align_with_admin_type_and_group_vocab():
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+
+    for token in (
+        "TYPE_OPTIONS",
+        "commonSpecs",
+        "customSpecs",
+        "getSpecGroupText",
+        "getTypeText",
+        "getMachineBindModeText",
+        "getAuthorizationOwnerText",
+        "getUserBindModeText",
+        "getValidityText",
+        "formatBeijingTime",
+    ):
+        assert token in merchant_batches
+
+    assert "day" in merchant_batches
+    assert "week" in merchant_batches
+    assert "month" in merchant_batches
+    assert "quarter" in merchant_batches
+    assert "year" in merchant_batches
+    assert "lifetime" in merchant_batches
+    assert "common" in merchant_batches
+    assert "custom" in merchant_batches
 
 
 def test_commercial_ops_stability_controls_are_exposed():

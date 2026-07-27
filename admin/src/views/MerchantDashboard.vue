@@ -72,7 +72,9 @@
           <el-table-column prop="batch_no" label="批次号" min-width="160" show-overflow-tooltip />
           <el-table-column prop="count" label="数量" width="90" />
           <el-table-column prop="kami_type" label="类型" width="100" />
-          <el-table-column prop="created_at" label="创建时间" width="170" />
+          <el-table-column prop="created_at" label="创建时间" width="170">
+            <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
+          </el-table-column>
         </el-table>
       </el-card>
 
@@ -82,7 +84,9 @@
           <el-table-column prop="order_no" label="订单号" min-width="170" show-overflow-tooltip />
           <el-table-column prop="amount" label="金额" width="100" />
           <el-table-column prop="status" label="状态" width="120" />
-          <el-table-column prop="created_at" label="创建时间" width="170" />
+          <el-table-column prop="created_at" label="创建时间" width="170">
+            <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
+          </el-table-column>
         </el-table>
       </el-card>
     </section>

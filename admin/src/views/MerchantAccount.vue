@@ -24,8 +24,8 @@
           <el-descriptions-item label="用户名">{{ profile.username || '-' }}</el-descriptions-item>
           <el-descriptions-item label="邮箱">{{ profile.email || '-' }}</el-descriptions-item>
           <el-descriptions-item label="手机号">{{ profile.phone || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="创建时间">{{ profile.created_at || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="最近登录">{{ profile.last_login || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="创建时间">{{ formatBeijingTime(profile.created_at) }}</el-descriptions-item>
+          <el-descriptions-item label="最近登录">{{ formatOptionalTime(profile.last_login) }}</el-descriptions-item>
         </el-descriptions>
       </el-card>
 
@@ -54,6 +54,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { getMerchantMe } from '../api/merchant'
 import { useUserStore } from '../stores/user'
+import { formatBeijingTime } from '../utils/datetime'
 
 const userStore = useUserStore()
 const loading = ref(false)
@@ -61,6 +62,7 @@ const profile = ref({ ...(userStore.userInfo || {}) })
 
 const avatarText = computed(() => String(profile.value.username || 'U').slice(0, 1).toUpperCase())
 const statusType = computed(() => (Number(profile.value.status) === 0 ? 'danger' : 'success'))
+const formatOptionalTime = (value) => (value ? formatBeijingTime(value) : '-')
 
 function statusText(status) {
   return Number(status) === 0 ? '停用' : '正常'

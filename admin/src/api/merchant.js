@@ -91,6 +91,43 @@ export function createMerchantApp(data) {
   })
 }
 
+export function getMerchantAppDetail(appId) {
+  return request({
+    url: `/merchant/apps/${appId}`,
+    method: 'get'
+  })
+}
+
+export function updateMerchantApp(appId, data) {
+  return request({
+    url: `/merchant/apps/${appId}`,
+    method: 'put',
+    data
+  })
+}
+
+export function deleteMerchantApp(appId) {
+  return request({
+    url: `/merchant/apps/${appId}`,
+    method: 'delete'
+  })
+}
+
+export function getMerchantAppInterfaces(appId) {
+  return request({
+    url: `/merchant/apps/${appId}/interfaces`,
+    method: 'get'
+  })
+}
+
+export function updateMerchantAppInterface(appId, interfaceId, data) {
+  return request({
+    url: `/merchant/apps/${appId}/interfaces/${interfaceId}`,
+    method: 'put',
+    data
+  })
+}
+
 export function getMerchantAppSpecs(appId) {
   return request({
     url: `/merchant/apps/${appId}/specs`,

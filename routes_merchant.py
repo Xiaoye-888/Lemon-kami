@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from datetime import datetime
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -24,6 +25,12 @@ from commercial_service import (
 from config import settings
 from database import get_session
 from datetime_utils import to_api_beijing_iso
+from interface_docs_service import (
+    dump_json as _dump_json,
+    ensure_builtin_interfaces as _ensure_builtin_interfaces,
+    interface_payload as _interface_payload,
+    load_json as _load_json,
+)
 from kami_query_service import (
     batch_stats_payload,
     kami_csv,
@@ -34,10 +41,18 @@ from issue_pricing_service import resolve_issue_pricing
 from kami_spec_service import build_spec_key, build_spec_name, infer_spec_group
 from models import (
     AuthorizationOwnerMode,
+    AuthorizationAccount,
+    AuthorizationLot,
+    AuthorizationTransaction,
+    AppAuthorization,
     App,
+    AppInterfaceConfig,
     AppNotice,
+    AppVersion,
+    ApiInterface,
     Device,
     EndUser,
+    EventLog,
     Kami,
     KamiBatch,
     KamiDeviceBinding,
@@ -45,6 +60,7 @@ from models import (
     KamiType,
     KamiSpec,
     MachineBindMode,
+    PointTransaction,
     RechargeOrder,
     RechargeOrderStatus,
     UserBindMode,
@@ -52,6 +68,7 @@ from models import (
     UserQuotaTransaction,
     UserQuotaTransactionType,
     UserQuotaType,
+    UserPointLot,
     get_now_naive,
 )
 from user_quota_service import (
@@ -85,6 +102,18 @@ class MerchantOrderActionRequest(BaseModel):
 
 class MerchantAppCreateRequest(BaseModel):
     name: str = PydanticField(..., min_length=1, max_length=255)
+
+
+class MerchantAppUpdateRequest(BaseModel):
+    name: str = PydanticField(..., min_length=1, max_length=255)
+
+
+class MerchantAppInterfaceConfigRequest(BaseModel):
+    enabled: bool = True
+    quota_limit: Optional[int] = PydanticField(None, ge=0)
+    expires_at: Optional[datetime] = None
+    config: Optional[dict[str, Any]] = None
+    remark: Optional[str] = None
 
 
 class MerchantSpecCreateRequest(BaseModel):
@@ -202,6 +231,190 @@ def _merchant_app_payload(app: App, user: EndUser) -> dict:
             }
         )
     return payload
+
+
+def _merchant_app_interface_payload(interface: ApiInterface, config: Optional[AppInterfaceConfig], app_id: str) -> dict:
+    payload = _interface_payload(interface)
+    default_enabled = interface.is_builtin
+    default_config = (
+        {"release_on_logout": True, "heartbeat_timeout_seconds": 180}
+        if interface.interface_key == "sdk.device_limit"
+        else None
+    )
+    payload.update(
+        {
+            "app_id": app_id,
+            "interface_id": interface.id,
+            "config_id": config.id if config else None,
+            "configured": config is not None,
+            "enabled": config.enabled if config else default_enabled,
+            "config": _load_json(config.config_json) if config else default_config,
+            "remark": config.remark if config else None,
+            "config_created_at": to_api_beijing_iso(config.created_at, naive="civil") if config else None,
+            "config_updated_at": to_api_beijing_iso(config.updated_at, naive="civil") if config else None,
+        }
+    )
+    return payload
+
+
+def _bool_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _int_value(value: Any, default: int = 0) -> int:
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _apply_app_interface_config_to_app(app: App, interface_key: str, config: Optional[dict]) -> None:
+    if not config:
+        return
+
+    field_groups = {
+        "sdk.verify": {
+            "signature_required",
+            "nonce_required",
+            "timestamp_tolerance_seconds",
+            "ip_lock_enabled",
+        },
+        "sdk.unbind": {
+            "allow_unbind",
+            "max_unbind_count",
+            "unbind_cooldown_hours",
+            "unbind_deduct_hours",
+            "unbind_deduct_times",
+            "ip_lock_enabled",
+        },
+    }
+    bool_fields = {
+        "signature_required",
+        "nonce_required",
+        "ip_lock_enabled",
+        "allow_unbind",
+    }
+    int_defaults = {
+        "timestamp_tolerance_seconds": app.timestamp_tolerance_seconds,
+        "max_unbind_count": app.max_unbind_count,
+        "unbind_cooldown_hours": app.unbind_cooldown_hours,
+        "unbind_deduct_hours": app.unbind_deduct_hours,
+        "unbind_deduct_times": app.unbind_deduct_times,
+    }
+
+    for field in field_groups.get(interface_key, set()):
+        if field not in config:
+            continue
+        value = config[field]
+        if field in bool_fields:
+            value = _bool_value(value)
+        elif field in int_defaults:
+            value = _int_value(value, int_defaults[field])
+        setattr(app, field, value)
+
+
+def _delete_merchant_app_related_rows(session: Session, app_id: str) -> dict:
+    kamis = session.exec(select(Kami).where(Kami.app_id == app_id)).all()
+    kami_codes = [kami.kami_code for kami in kamis if kami.kami_code]
+    devices = session.exec(select(Device).where(Device.app_id == app_id)).all()
+    notices = session.exec(select(AppNotice).where(AppNotice.app_id == app_id)).all()
+    versions = session.exec(select(AppVersion).where(AppVersion.app_id == app_id)).all()
+    bindings = session.exec(select(KamiDeviceBinding).where(KamiDeviceBinding.app_id == app_id)).all()
+    legacy_access_rows = session.exec(select(AppAuthorization).where(AppAuthorization.app_id == app_id)).all()
+    user_authorizations = session.exec(
+        select(UserAppAuthorization).where(UserAppAuthorization.app_id == app_id)
+    ).all()
+    interface_configs = session.exec(
+        select(AppInterfaceConfig).where(AppInterfaceConfig.app_id == app_id)
+    ).all()
+    batches = session.exec(select(KamiBatch).where(KamiBatch.app_id == app_id)).all()
+    specs = session.exec(select(KamiSpec).where(KamiSpec.app_id == app_id)).all()
+    authorization_accounts = session.exec(
+        select(AuthorizationAccount).where(AuthorizationAccount.app_id == app_id)
+    ).all()
+    account_ids = [account.id for account in authorization_accounts if account.id is not None]
+    authorization_lots = []
+    authorization_transactions = []
+    if account_ids:
+        authorization_lots = session.exec(
+            select(AuthorizationLot).where(AuthorizationLot.account_id.in_(account_ids))
+        ).all()
+        authorization_transactions = session.exec(
+            select(AuthorizationTransaction).where(AuthorizationTransaction.account_id.in_(account_ids))
+        ).all()
+    point_lots = session.exec(select(UserPointLot).where(UserPointLot.app_id == app_id)).all()
+    point_transactions = session.exec(select(PointTransaction).where(PointTransaction.app_id == app_id)).all()
+    log_conditions = [EventLog.app_id == app_id]
+    if kami_codes:
+        log_conditions.append(EventLog.kami_code.in_(kami_codes))
+    event_logs = session.exec(select(EventLog).where(or_(*log_conditions))).all()
+
+    counts = {
+        "kami_count": len(kamis),
+        "device_count": len(devices),
+        "binding_count": len(bindings),
+        "legacy_access_count": len(legacy_access_rows),
+        "user_authorization_count": len(user_authorizations),
+        "event_log_count": len(event_logs),
+        "notice_count": len(notices),
+        "version_count": len(versions),
+        "interface_config_count": len(interface_configs),
+        "batch_count": len(batches),
+        "spec_count": len(specs),
+        "authorization_account_count": len(authorization_accounts),
+        "authorization_lot_count": len(authorization_lots),
+        "authorization_transaction_count": len(authorization_transactions),
+        "point_lot_count": len(point_lots),
+        "point_transaction_count": len(point_transactions),
+    }
+
+    for row in event_logs:
+        session.delete(row)
+    for row in notices:
+        session.delete(row)
+    for row in versions:
+        session.delete(row)
+    for row in legacy_access_rows:
+        session.delete(row)
+    for row in user_authorizations:
+        session.delete(row)
+    for row in interface_configs:
+        session.delete(row)
+    for row in bindings:
+        session.delete(row)
+    for row in authorization_transactions:
+        session.delete(row)
+    for row in authorization_lots:
+        session.delete(row)
+    for row in point_lots:
+        session.delete(row)
+    for row in point_transactions:
+        session.delete(row)
+
+    session.flush()
+
+    for row in authorization_accounts:
+        session.delete(row)
+    for row in kamis:
+        session.delete(row)
+
+    session.flush()
+
+    for row in batches:
+        session.delete(row)
+    for row in specs:
+        session.delete(row)
+    for row in devices:
+        session.delete(row)
+
+    session.flush()
+    return counts
 
 
 def _spec_payload(spec: KamiSpec) -> dict:
@@ -1138,6 +1351,112 @@ async def create_merchant_app(
         "success": True,
         "message": "app created",
         "data": {**_merchant_app_payload(app, current_user), "quota": quota},
+    }
+
+
+@router.get("/apps/{app_id}", summary="Get merchant app detail")
+async def get_merchant_app_detail(
+    app_id: str,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    app = _get_visible_app_or_404(session, current_user, app_id)
+    return {"success": True, "data": _merchant_app_payload(app, current_user)}
+
+
+@router.put("/apps/{app_id}", summary="Rename a self-owned merchant app")
+async def update_merchant_app(
+    app_id: str,
+    payload: MerchantAppUpdateRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    app = _require_self_owned_app(session, current_user, app_id)
+    app.name = payload.name.strip()
+    session.add(app)
+    session.commit()
+    session.refresh(app)
+    return {"success": True, "message": "app updated", "data": _merchant_app_payload(app, current_user)}
+
+
+@router.delete("/apps/{app_id}", summary="Delete a self-owned merchant app")
+async def delete_merchant_app(
+    app_id: str,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    app = _require_self_owned_app(session, current_user, app_id)
+    counts = _delete_merchant_app_related_rows(session, app_id)
+    session.delete(app)
+    session.commit()
+    return {"success": True, "message": "app deleted", "data": counts}
+
+
+@router.get("/apps/{app_id}/interfaces", summary="List merchant app interfaces")
+async def list_merchant_app_interfaces(
+    app_id: str,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    _get_visible_app_or_404(session, current_user, app_id)
+    _ensure_builtin_interfaces(session)
+    interfaces = session.exec(select(ApiInterface).order_by(ApiInterface.sort_order, ApiInterface.id.desc())).all()
+    configs = session.exec(select(AppInterfaceConfig).where(AppInterfaceConfig.app_id == app_id)).all()
+    config_by_interface_id = {config.interface_id: config for config in configs}
+    return {
+        "success": True,
+        "data": [
+            _merchant_app_interface_payload(item, config_by_interface_id.get(item.id), app_id)
+            for item in interfaces
+        ],
+    }
+
+
+@router.put("/apps/{app_id}/interfaces/{interface_id}", summary="Configure a merchant app interface")
+async def update_merchant_app_interface(
+    app_id: str,
+    interface_id: int,
+    payload: MerchantAppInterfaceConfigRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    app = _require_self_owned_app(session, current_user, app_id)
+    _ensure_builtin_interfaces(session)
+    interface = session.get(ApiInterface, interface_id)
+    if not interface:
+        raise HTTPException(status_code=404, detail="Interface not found")
+
+    config = session.exec(
+        select(AppInterfaceConfig).where(
+            AppInterfaceConfig.app_id == app_id,
+            AppInterfaceConfig.interface_id == interface_id,
+        )
+    ).first()
+    now = get_now_naive()
+    if not config:
+        config = AppInterfaceConfig(
+            app_id=app_id,
+            interface_id=interface_id,
+            created_at=now,
+        )
+
+    config.enabled = payload.enabled
+    config.quota_limit = payload.quota_limit
+    config.expires_at = payload.expires_at.replace(tzinfo=None) if payload.expires_at and payload.expires_at.tzinfo else payload.expires_at
+    config.config_json = _dump_json(payload.config)
+    config.remark = payload.remark
+    config.updated_at = now
+    _apply_app_interface_config_to_app(app, interface.interface_key, payload.config)
+
+    session.add(config)
+    session.add(app)
+    session.commit()
+    session.refresh(config)
+
+    return {
+        "success": True,
+        "message": "interface updated",
+        "data": _merchant_app_interface_payload(interface, config, app_id),
     }
 
 

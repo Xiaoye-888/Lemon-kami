@@ -9,8 +9,14 @@ const REQUEST_RETRIES = parseInt(import.meta.env.VITE_REQUEST_RETRIES) || 1
 const REQUEST_RETRY_DELAY = parseInt(import.meta.env.VITE_REQUEST_RETRY_DELAY) || 350
 const retryableMethods = new Set(['get', 'head', 'options'])
 const retryableStatusCodes = new Set([502, 503, 504])
+const authEndpoints = new Set(['/auth/login', '/auth/register'])
 
 const waitForRetry = () => new Promise(resolve => setTimeout(resolve, REQUEST_RETRY_DELAY))
+
+function isAuthRequest(config) {
+  const url = String(config?.url || '').split('?')[0]
+  return authEndpoints.has(url)
+}
 
 function isRetryableRequestError(error) {
   if (!error.config) {
@@ -57,7 +63,9 @@ request.interceptors.response.use(
     const res = response.data
     
     if (!res.success) {
-      ElMessage.error(res.message || '请求失败')
+      if (!isAuthRequest(response.config)) {
+        ElMessage.error(res.message || '请求失败')
+      }
       return Promise.reject(new Error(res.message || '请求失败'))
     }
     
@@ -73,6 +81,10 @@ request.interceptors.response.use(
         await waitForRetry()
         return request(config)
       }
+    }
+
+    if (isAuthRequest(config)) {
+      return Promise.reject(error)
     }
 
     if (error.response) {
