@@ -610,10 +610,14 @@ def test_merchant_apps_expose_self_owned_actions_and_interface_management():
         assert token in merchant_apps
 
     assert 'v-if="row.is_owned"' in merchant_apps
+    assert 'label="操作" width="300" fixed="right" align="left"' in merchant_apps
     assert "接口列表" in merchant_apps
     assert "改名" in merchant_apps
     assert "删除" in merchant_apps
     assert "规格批次" in merchant_apps
+    assert "display: inline-flex" in merchant_apps
+    assert "justify-content: flex-start" in merchant_apps
+    assert "white-space: nowrap" in merchant_apps
 
 def test_merchant_batches_exposes_spec_first_workbench_and_scoped_apis():
     merchant_api = (PROJECT_ROOT / "admin/src/api/merchant.js").read_text(encoding="utf-8")

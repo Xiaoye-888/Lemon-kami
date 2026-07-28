@@ -11,6 +11,7 @@ import subprocess
 import sys
 from typing import Any
 import uuid
+from PIL import Image, ImageChops, ImageStat
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +45,19 @@ VIEWPORTS = [
     {"name": "desktop", "width": 1440, "height": 900},
     {"name": "wide", "width": 1920, "height": 1080},
     {"name": "mobile", "width": 390, "height": 844},
+]
+VISUAL_BASELINE_DIR = PROJECT_ROOT / "tests" / "visual_baselines"
+VISUAL_REGRESSION_TARGETS = [
+    {
+        "role": "merchant",
+        "route": "/merchant/apps",
+        "viewport": "desktop",
+        "label": "merchant-apps-row-actions",
+        "baseline": "merchant-apps-row-actions.desktop.png",
+        "crop_padding": 12,
+        "max_mean_diff": 5.0,
+        "max_changed_ratio": 0.01,
+    }
 ]
 RUN_PREFIX_RE = re.compile(r"^E2E_UI_QA_\d{8}_\d{6}_[A-Za-z0-9]{6,16}_$")
 FORBIDDEN_REPORT_PATTERNS = tuple(
@@ -1306,6 +1320,9 @@ def evaluate_browser_result(result):
     overwide_cards = layout.get("overwide_cards")
     if overwide_cards is None:
         overwide_cards = layout.get("overwideCards")
+    action_groups = layout.get("action_groups")
+    if action_groups is None:
+        action_groups = layout.get("actionGroups")
 
     if horizontal_overflow:
         findings.append(_finding("P2", route, viewport, "Horizontal overflow detected"))
@@ -1313,8 +1330,182 @@ def evaluate_browser_result(result):
         findings.append(_finding("P2", route, viewport, "Large blank page area detected"))
     if overwide_cards:
         findings.append(_finding("P2", route, viewport, "Overwide cards detected"))
+    for group in action_groups or []:
+        if not isinstance(group, dict):
+            continue
+        button_count = int(group.get("button_count") or 0)
+        max_gap = int(group.get("max_gap") or 0)
+        spread_ratio = float(group.get("spread_ratio") or 0)
+        if button_count >= 2 and (max_gap >= 40 or (button_count <= 4 and spread_ratio >= 1.4)):
+            findings.append(
+                _finding(
+                    "P2",
+                    route,
+                    viewport,
+                    "Action button group is overly dispersed",
+                )
+            )
+            break
 
     return findings
+
+
+def _safe_int(value, default=0):
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _layout_action_groups(layout):
+    groups = layout.get("action_groups")
+    if groups is None:
+        groups = layout.get("actionGroups")
+    return [group for group in groups or [] if isinstance(group, dict)]
+
+
+def _select_visual_action_group(layout):
+    groups = _layout_action_groups(layout)
+    candidates = [group for group in groups if _safe_int(group.get("button_count")) >= 2]
+    if not candidates:
+        return None
+    return sorted(
+        candidates,
+        key=lambda group: (
+            _safe_int(group.get("button_count")),
+            -_safe_int(group.get("max_gap")),
+            _safe_int(group.get("left")),
+        ),
+    )[0]
+
+
+def _crop_visual_target(screenshot_path, group, padding):
+    with Image.open(screenshot_path) as image:
+        image = image.convert("RGBA")
+        width, height = image.size
+        left = max(0, _safe_int(group.get("left")) - padding)
+        top = max(0, _safe_int(group.get("top")) - padding)
+        right = min(width, _safe_int(group.get("left")) + _safe_int(group.get("width")) + padding)
+        bottom = min(height, _safe_int(group.get("top")) + _safe_int(group.get("height")) + padding)
+        if right <= left or bottom <= top:
+            raise QASafetyError("Visual regression crop is invalid")
+        return image.crop((left, top, right, bottom)), {
+            "left": left,
+            "top": top,
+            "right": right,
+            "bottom": bottom,
+        }
+
+
+def _compare_visual_images(expected, actual, pixel_threshold=16):
+    if expected.size != actual.size:
+        diff = Image.new("RGBA", actual.size, (255, 0, 0, 255))
+        return {
+            "mean_diff": float("inf"),
+            "changed_ratio": 1.0,
+            "diff_image": diff,
+            "size_mismatch": True,
+        }
+    diff = ImageChops.difference(expected, actual).convert("RGBA")
+    stat = ImageStat.Stat(diff)
+    mean_diff = sum(stat.mean[:3]) / 3.0
+    changed_pixels = 0
+    total_pixels = diff.width * diff.height
+    pixels = diff.get_flattened_data() if hasattr(diff, "get_flattened_data") else diff.getdata()
+    for red, green, blue, _alpha in pixels:
+        if red > pixel_threshold or green > pixel_threshold or blue > pixel_threshold:
+            changed_pixels += 1
+    return {
+        "mean_diff": mean_diff,
+        "changed_ratio": changed_pixels / total_pixels if total_pixels else 0.0,
+        "diff_image": diff,
+        "size_mismatch": False,
+    }
+
+
+def _visual_finding(target, message, detail=None):
+    finding = _finding("P2", target["route"], target["viewport"], message)
+    finding["role"] = target["role"]
+    if detail:
+        finding["detail"] = sanitize_report_string(detail)
+    return finding
+
+
+def run_visual_regression(browser_results, artifact_dir):
+    results_by_key = {
+        (result.get("role"), result.get("route"), result.get("viewport")): result
+        for result in browser_results
+    }
+    output_dir = Path(artifact_dir) / "visual-regression"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    comparisons = []
+    findings = []
+
+    for target in VISUAL_REGRESSION_TARGETS:
+        key = (target["role"], target["route"], target["viewport"])
+        result = results_by_key.get(key)
+        if not result:
+            continue
+        layout = result.get("layout") or {}
+        group = _select_visual_action_group(layout)
+        comparison = {
+            "role": target["role"],
+            "route": target["route"],
+            "viewport": target["viewport"],
+            "label": target["label"],
+            "baseline": str(VISUAL_BASELINE_DIR / target["baseline"]),
+        }
+        comparisons.append(comparison)
+        if not group:
+            findings.append(_visual_finding(target, "Visual regression target action group is missing"))
+            continue
+
+        screenshot_path = result.get("screenshot")
+        if not screenshot_path or not Path(screenshot_path).exists():
+            findings.append(_visual_finding(target, "Visual regression screenshot is missing"))
+            continue
+
+        try:
+            actual_crop, crop_box = _crop_visual_target(screenshot_path, group, target["crop_padding"])
+        except Exception as error:
+            findings.append(_visual_finding(target, "Visual regression check failed", str(error)))
+            continue
+
+        comparison["crop_box"] = crop_box
+        actual_path = output_dir / f'{target["label"]}.{target["viewport"]}.actual.png'
+        actual_crop.save(actual_path)
+        comparison["actual"] = str(actual_path)
+
+        baseline_path = VISUAL_BASELINE_DIR / target["baseline"]
+        comparison["baseline_exists"] = baseline_path.exists()
+        if not baseline_path.exists():
+            findings.append(_visual_finding(target, "Visual regression baseline is missing"))
+            continue
+
+        try:
+            with Image.open(baseline_path) as expected_image:
+                expected = expected_image.convert("RGBA")
+                metrics = _compare_visual_images(expected, actual_crop)
+        except Exception as error:
+            findings.append(_visual_finding(target, "Visual regression check failed", str(error)))
+            continue
+
+        comparison["mean_diff"] = round(metrics["mean_diff"], 3) if metrics["mean_diff"] != float("inf") else "inf"
+        comparison["changed_ratio"] = round(metrics["changed_ratio"], 4)
+        if metrics["size_mismatch"] or metrics["mean_diff"] > target["max_mean_diff"] or metrics["changed_ratio"] > target["max_changed_ratio"]:
+            diff_path = output_dir / f'{target["label"]}.{target["viewport"]}.diff.png'
+            metrics["diff_image"].save(diff_path)
+            comparison["diff"] = str(diff_path)
+            findings.append(_visual_finding(target, "Visual regression diff exceeded threshold"))
+
+    return {"checks": len(comparisons), "comparisons": comparisons, "findings": findings}
 
 
 def _finding_identity(finding):
@@ -1428,6 +1619,12 @@ PRODUCT_BROWSER_MESSAGES = {
     "Horizontal overflow detected",
     "Large blank page area detected",
     "Overwide cards detected",
+    "Action button group is overly dispersed",
+    "Visual regression baseline is missing",
+    "Visual regression check failed",
+    "Visual regression screenshot is missing",
+    "Visual regression target action group is missing",
+    "Visual regression diff exceeded threshold",
 }
 
 ENGINEERING_BROWSER_MESSAGES = {
@@ -1436,6 +1633,12 @@ ENGINEERING_BROWSER_MESSAGES = {
     "Network failures detected",
     "HTTP errors detected",
     "Route document returned bad status",
+    "Action button group is overly dispersed",
+    "Visual regression baseline is missing",
+    "Visual regression check failed",
+    "Visual regression screenshot is missing",
+    "Visual regression target action group is missing",
+    "Visual regression diff exceeded threshold",
 }
 
 
@@ -1898,11 +2101,14 @@ def run_production_flow(config: QAConfig):
                 if result.get("role"):
                     finding["role"] = result.get("role")
                 browser_findings.append(finding)
+        visual_regression = run_visual_regression(browser_results, artifact_dir)
+        browser_findings.extend(visual_regression["findings"])
         flow_summaries["browser_sweep"] = {
             "results": len(browser_results),
             "summary": summarize_browser_sweep(browser_results, browser_findings),
             "findings": browser_findings,
         }
+        flow_summaries["visual_regression"] = visual_regression
     except Exception as error:
         flow_error = error
         flow_summaries["flow_error"] = sanitize_report_string(str(error))
@@ -1924,6 +2130,8 @@ def run_production_flow(config: QAConfig):
             report.add_section("Deployment And Health", [flow_summaries["deployment_health"]])
         if flow_summaries.get("browser_sweep"):
             report.add_section("Browser Sweep", [flow_summaries["browser_sweep"]])
+        if flow_summaries.get("visual_regression"):
+            report.add_section("Visual Regression", [flow_summaries["visual_regression"]])
         if flow_summaries.get("recharge"):
             report.add_section("Recharge Flow", [flow_summaries["recharge"]])
         if flow_summaries.get("self_owned"):

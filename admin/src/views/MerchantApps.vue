@@ -28,7 +28,7 @@
         <el-table-column prop="created_at" label="创建时间" width="180">
           <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" min-width="320" fixed="right">
+        <el-table-column label="操作" width="300" fixed="right" align="left">
           <template #default="{ row }">
             <div class="row-actions">
               <el-button link type="primary" @click="openDetailDialog(row)">详情</el-button>
@@ -459,13 +459,25 @@ onMounted(loadApps)
 
 .page-toolbar,
 .actions,
-.row-actions,
 .interfaces-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.row-actions :deep(.el-button) {
+  margin-left: 0;
 }
 
 .page-toolbar h2 {
