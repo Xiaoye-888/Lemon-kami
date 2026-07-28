@@ -2236,6 +2236,39 @@ def test_report_writer_redacts_payment_snapshot_channel_fields(tmp_path):
     assert "<redacted>" in content
 
 
+def test_get_issue_quota_balance_retries_once_on_gateway_error(monkeypatch):
+    qa = load_qa_module()
+    sleep_calls = []
+
+    def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    def fail_once():
+        raise qa.QASafetyError("API GET /api/v1/merchant/quotas returned status 502; response=''")
+
+    merchant = type(
+        "Merchant",
+        (),
+        {
+            "client": FakeAPIClient(
+                [
+                    fail_once,
+                    {"success": True, "data": {"issue_card": {"balance": 17}}},
+                ]
+            )
+        },
+    )()
+
+    monkeypatch.setattr(qa.time, "sleep", fake_sleep)
+
+    assert qa.get_issue_quota_balance(merchant) == 17
+    assert sleep_calls == [1]
+    assert [call["path"] for call in merchant.client.calls] == [
+        "/api/v1/merchant/quotas",
+        "/api/v1/merchant/quotas",
+    ]
+
+
 def test_restore_payment_snapshot_deletes_colliding_temp_option_before_replay():
     qa = load_qa_module()
     prefix = "E2E_UI_QA_20260726_030000_abc123_"

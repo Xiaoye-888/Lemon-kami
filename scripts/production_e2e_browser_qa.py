@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 import argparse
 import json
 import os
+import time
 from pathlib import Path
 import re
 import requests
@@ -902,7 +903,14 @@ def _extract_issue_balance(response):
 
 
 def get_issue_quota_balance(merchant: MerchantContext):
-    return _extract_issue_balance(merchant.client.json("GET", "/api/v1/merchant/quotas"))
+    for attempt in range(2):
+        try:
+            response = merchant.client.json("GET", "/api/v1/merchant/quotas")
+            return _extract_issue_balance(response)
+        except QASafetyError as error:
+            if attempt >= 1 or "status 502" not in str(error):
+                raise
+            time.sleep(1)
 
 
 def assert_quota_delta(before, after, expected_delta, label):
