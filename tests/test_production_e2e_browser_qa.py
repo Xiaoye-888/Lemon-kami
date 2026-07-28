@@ -2236,7 +2236,7 @@ def test_report_writer_redacts_payment_snapshot_channel_fields(tmp_path):
     assert "<redacted>" in content
 
 
-def test_restore_payment_snapshot_replays_colliding_temp_option_amount_from_snapshot():
+def test_restore_payment_snapshot_deletes_colliding_temp_option_before_replay():
     qa = load_qa_module()
     prefix = "E2E_UI_QA_20260726_030000_abc123_"
     snapshot = qa.PaymentSnapshot(
@@ -2285,7 +2285,7 @@ def test_restore_payment_snapshot_replays_colliding_temp_option_amount_from_snap
     assert post_calls[0]["path"] == "/api/v1/admin/commercial/recharge-options"
     assert post_calls[0]["kwargs"]["json"]["credit_quota"] == 1234
     assert post_calls[0]["kwargs"]["json"]["label"] == "Production 991 option"
-    assert delete_calls == []
+    assert [call["path"] for call in delete_calls] == ["/api/v1/admin/commercial/recharge-options/2"]
 
 
 def test_restore_payment_snapshot_cleans_foreign_temporary_cleanup():
