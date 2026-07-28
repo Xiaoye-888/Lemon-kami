@@ -382,6 +382,18 @@
             <strong class="metric-value is-amber">{{ usedCount(selectedSpec) }}</strong>
             <span>已使用</span>
           </div>
+          <div class="metric-item">
+            <strong class="metric-value is-time">
+              {{ selectedSpec?.created_at ? formatBeijingTime(selectedSpec.created_at) : '-' }}
+            </strong>
+            <span>创建时间</span>
+          </div>
+          <div class="metric-item">
+            <strong class="metric-value is-time">
+              {{ selectedSpec?.updated_at ? formatBeijingTime(selectedSpec.updated_at) : '-' }}
+            </strong>
+            <span>更新时间</span>
+          </div>
         </section>
       </div>
 
@@ -1893,7 +1905,7 @@ onMounted(loadAll)
 .summary-metric-card {
   padding: 14px 16px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
 }
 
@@ -1927,6 +1939,11 @@ onMounted(loadAll)
 
 .metric-value.is-amber {
   color: #d97706;
+}
+
+.metric-value.is-time {
+  font-size: 16px;
+  line-height: 1.25;
 }
 
 .spec-section {
