@@ -193,41 +193,37 @@
         <el-form-item label="启用">
           <el-switch v-model="interfaceForm.enabled" :disabled="!canEditCurrentAppInterfaces" />
         </el-form-item>
-        <el-form-item label="额度限制">
-          <el-input-number
-            v-model="interfaceForm.quota_limit"
-            :min="0"
-            :max="999999999"
-            :disabled="!canEditCurrentAppInterfaces"
-            style="width: 100%"
-          />
-        </el-form-item>
-        <el-form-item label="过期时间">
-          <el-date-picker
-            v-model="interfaceForm.expires_at"
-            type="datetime"
-            value-format="YYYY-MM-DDTHH:mm:ss"
-            format="YYYY-MM-DD HH:mm:ss"
-            placeholder="可选"
-            :disabled="!canEditCurrentAppInterfaces"
-            style="width: 100%"
-          />
-        </el-form-item>
+        <template v-if="currentInterfaceSchema.length">
+          <el-form-item v-for="field in currentInterfaceSchema" :key="field.key" :label="field.label">
+            <el-switch
+              v-if="field.type === 'switch'"
+              v-model="interfaceForm.data[field.key]"
+              :disabled="!canEditCurrentAppInterfaces"
+            />
+            <el-input-number
+              v-else-if="field.type === 'number'"
+              v-model="interfaceForm.data[field.key]"
+              :min="field.min ?? 0"
+              :max="field.max ?? 999999999"
+              :disabled="!canEditCurrentAppInterfaces"
+              style="width: 100%"
+            />
+            <el-input
+              v-else
+              v-model="interfaceForm.data[field.key]"
+              :disabled="!canEditCurrentAppInterfaces"
+              style="width: 100%"
+            />
+            <div v-if="field.help" class="form-help">{{ field.help }}</div>
+          </el-form-item>
+        </template>
+        <el-empty v-else description="该接口暂无可视化配置项" :image-size="80" />
         <el-form-item label="备注">
           <el-input
             v-model="interfaceForm.remark"
             type="textarea"
             :rows="2"
             maxlength="200"
-            :disabled="!canEditCurrentAppInterfaces"
-          />
-        </el-form-item>
-        <el-form-item label="配置 JSON">
-          <el-input
-            v-model="interfaceForm.configText"
-            type="textarea"
-            :rows="8"
-            placeholder="请输入 JSON 配置"
             :disabled="!canEditCurrentAppInterfaces"
           />
         </el-form-item>
@@ -287,11 +283,84 @@ const createForm = reactive({ name: '' })
 const editForm = reactive({ name: '' })
 const interfaceForm = reactive({
   enabled: true,
-  quota_limit: null,
-  expires_at: '',
   remark: '',
-  configText: '{}'
+  data: {}
 })
+
+const interfaceConfigSchemas = {
+  'user.register': [
+    { key: 'allow_register', label: '允许注册', type: 'switch', default: true },
+    { key: 'password_min_length', label: '密码最小长度', type: 'number', min: 6, max: 64, default: 6 }
+  ],
+  'user.login': [
+    { key: 'allow_login', label: '允许登录', type: 'switch', default: true },
+    { key: 'token_expire_minutes', label: 'Token 有效分钟', type: 'number', min: 5, max: 43200, default: 1440 }
+  ],
+  'points.balance': [
+    { key: 'include_ledger_balance', label: '返回账本余额', type: 'switch', default: true }
+  ],
+  'points.redeem': [
+    { key: 'allow_redeem', label: '允许卡密充值', type: 'switch', default: true },
+    { key: 'bind_user_on_redeem', label: '充值后绑定用户', type: 'switch', default: true }
+  ],
+  'points.consume': [
+    { key: 'min_amount', label: '单次最小扣减', type: 'number', min: 1, max: 100000000, default: 1 },
+    { key: 'max_amount', label: '单次最大扣减', type: 'number', min: 1, max: 100000000, default: 1000 },
+    { key: 'require_biz_id', label: '必须传 biz_id', type: 'switch', default: true }
+  ],
+  'points.transactions': [
+    { key: 'max_page_size', label: '最大分页条数', type: 'number', min: 10, max: 500, default: 100 }
+  ],
+  'sdk.public_key': [
+    { key: 'allow_public_key', label: '允许获取公钥', type: 'switch', default: true }
+  ],
+  'sdk.verify': [
+    {
+      key: 'enable_user_authorization',
+      label: '启用用户授权能力',
+      type: 'switch',
+      default: false,
+      help: '开启后可在批次管理中为每个批次设置授权归属和用户绑定策略。'
+    },
+    { key: 'signature_required', label: '签名校验', type: 'switch', default: true },
+    { key: 'nonce_required', label: 'Nonce 防重放', type: 'switch', default: true },
+    { key: 'timestamp_tolerance_seconds', label: '时间戳容差秒', type: 'number', min: 30, max: 86400, default: 300 },
+    { key: 'ip_lock_enabled', label: 'IP 绑定验证', type: 'switch', default: false }
+  ],
+  'sdk.unbind': [
+    { key: 'allow_unbind', label: '允许解绑', type: 'switch', default: false },
+    { key: 'max_unbind_count', label: '最大解绑次数', type: 'number', min: 0, max: 100, default: 0 },
+    { key: 'unbind_cooldown_hours', label: '解绑冷却小时', type: 'number', min: 0, max: 8760, default: 24 },
+    { key: 'unbind_deduct_hours', label: '时间卡扣减小时', type: 'number', min: 0, max: 8760, default: 0 },
+    { key: 'unbind_deduct_times', label: '次数卡扣减次数', type: 'number', min: 0, max: 1000000, default: 0 },
+    { key: 'ip_lock_enabled', label: '解绑校验 IP', type: 'switch', default: false }
+  ],
+  'sdk.device_limit': [
+    { key: 'release_on_logout', label: '退出自动释放', type: 'switch', default: true },
+    { key: 'heartbeat_timeout_seconds', label: '心跳超时秒数', type: 'number', min: 30, max: 86400, default: 180 }
+  ],
+  'sdk.report': [
+    { key: 'allow_report', label: '允许事件上报', type: 'switch', default: true },
+    { key: 'max_payload_kb', label: '最大载荷 KB', type: 'number', min: 1, max: 1024, default: 64 }
+  ]
+}
+
+const currentInterfaceSchema = computed(() => {
+  if (!currentInterface.value) return []
+  return currentInterface.value.config_schema || interfaceConfigSchemas[currentInterface.value.interface_key] || []
+})
+
+function schemaDefaults(schema) {
+  const data = {}
+  schema.forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(field, 'default')) {
+      data[field.key] = field.default
+    } else {
+      data[field.key] = field.type === 'switch' ? false : ''
+    }
+  })
+  return data
+}
 
 function openCreateDialog() {
   createForm.name = ''
@@ -402,11 +471,12 @@ async function openInterfacesDialog(row) {
 function openInterfaceConfigDialog(row) {
   currentInterface.value = row
   interfaceForm.enabled = row.enabled !== undefined ? row.enabled : true
-  interfaceForm.quota_limit = row.quota_limit ?? null
-  interfaceForm.expires_at = row.expires_at || ''
   interfaceForm.remark = row.remark || ''
   const config = row.config && typeof row.config === 'object' ? row.config : {}
-  interfaceForm.configText = JSON.stringify(config, null, 2)
+  interfaceForm.data = {
+    ...schemaDefaults(currentInterfaceSchema.value),
+    ...config
+  }
   interfaceConfigDialogVisible.value = true
 }
 
@@ -420,24 +490,12 @@ function goBatches(row) {
 async function saveInterfaceConfig() {
   if (!canEditCurrentAppInterfaces.value) return
   if (!currentApp.value?.app_id || !currentInterface.value?.interface_id) return
-  let config = null
-  const configText = interfaceForm.configText?.trim()
-  if (configText) {
-    try {
-      config = JSON.parse(configText)
-    } catch {
-      ElMessage.error('接口配置 JSON 格式不正确')
-      return
-    }
-  }
   savingInterfaceConfig.value = true
   try {
     await updateMerchantAppInterface(currentApp.value.app_id, currentInterface.value.interface_id, {
       enabled: interfaceForm.enabled,
-      quota_limit: interfaceForm.quota_limit,
-      expires_at: interfaceForm.expires_at || null,
       remark: interfaceForm.remark || null,
-      config
+      config: { ...interfaceForm.data }
     })
     ElMessage.success('接口配置已保存')
     interfaceConfigDialogVisible.value = false
@@ -539,6 +597,13 @@ onMounted(loadApps)
 
 .interface-form {
   margin-top: 12px;
+}
+
+.form-help {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 @media (max-width: 720px) {

@@ -1,9 +1,10 @@
 <template>
-  <div class="batch-page">
-    <div class="page-toolbar">
+  <div class="kami-batches-page batch-page" data-contract="同构管理员批次页，按权限隐藏/禁用">
+    <section class="yz-admin-panel">
+      <div class="page-toolbar yz-panel-header">
       <div>
         <h2>批次管理</h2>
-        <p>按应用规格生成、查看和导出自己的卡密</p>
+        <p>同构管理员批次页，按权限隐藏/禁用</p>
       </div>
       <div class="toolbar-actions">
         <el-select v-model="queryParams.app_id" placeholder="选择应用" style="width: 260px" @change="handleAppChange">
@@ -19,7 +20,23 @@
         </el-tag>
         <el-button :loading="loading" @click="loadAll">刷新</el-button>
       </div>
-    </div>
+      </div>
+
+      <div class="yz-filter-strip">
+        <el-select v-model="queryParams.app_id" placeholder="选择应用" class="filter-control" @change="handleAppChange">
+          <el-option
+            v-for="app in apps"
+            :key="app.app_id"
+            :label="`${app.name} / ${app.is_owned ? '自建应用' : '授权应用'}`"
+            :value="app.app_id"
+          />
+        </el-select>
+        <el-tag v-if="selectedApp" :type="selectedApp.is_owned ? 'success' : 'info'" effect="plain">
+          {{ selectedApp.is_owned ? '自建应用可管理' : '授权应用只读' }}
+        </el-tag>
+        <el-button type="primary" :loading="loading" @click="loadAll">查询</el-button>
+      </div>
+    </section>
 
     <el-alert
       v-if="lowBalanceWarning"
@@ -31,8 +48,27 @@
       :description="`当前发卡额度 ${issueCardQuota.balance}，低于预警值 ${issueCardQuota.warning_threshold}`"
     />
 
-    <section class="spec-workbench">
-      <el-card shadow="never" class="panel spec-panel">
+    <div class="overview-strip">
+      <div class="overview-item summary-metric-card">
+        <span>规格数</span>
+        <strong>{{ specOverview.specs }}</strong>
+      </div>
+      <div class="overview-item summary-metric-card">
+        <span>批次数</span>
+        <strong>{{ specOverview.batches }}</strong>
+      </div>
+      <div class="overview-item summary-metric-card">
+        <span>总卡密</span>
+        <strong>{{ specOverview.total }}</strong>
+      </div>
+      <div class="overview-item summary-metric-card">
+        <span>可发放</span>
+        <strong>{{ specOverview.unused }}</strong>
+      </div>
+    </div>
+
+    <section class="spec-workbench batch-detail-shell">
+      <el-card shadow="never" class="panel spec-panel yz-admin-panel spec-section">
         <template #header>
           <div class="panel-header">
             <div class="panel-header__title">
@@ -40,7 +76,7 @@
               <el-tag effect="plain">常用 {{ commonSpecs.length }}</el-tag>
               <el-tag type="info" effect="plain">自定义 {{ customSpecs.length }}</el-tag>
             </div>
-            <el-button v-if="selectedApp?.is_owned" type="primary" @click="openSpecDialog()">新建规格</el-button>
+            <el-button v-if="merchantBatchPermissions.createSpec" type="primary" @click="openSpecDialog()">新建规格</el-button>
           </div>
         </template>
 
@@ -91,9 +127,12 @@
               </el-table-column>
               <el-table-column label="操作" width="230" fixed="right">
                 <template #default="{ row }">
-                  <el-button link type="primary" @click.stop="openGenerateDialog(row)">生成批次</el-button>
-                  <el-button v-if="row.is_editable" link type="primary" @click.stop="openSpecDialog(row)">编辑</el-button>
-                  <el-button v-if="row.is_editable" link type="danger" @click.stop="deleteSpec(row)">删除</el-button>
+                  <div class="row-actions">
+                    <el-button size="small" type="primary" plain @click.stop="openGenerateDialog(row)">生成</el-button>
+                    <el-button size="small" type="info" plain @click.stop="selectSpec(row)">查看</el-button>
+                    <el-button v-if="row.is_editable" size="small" plain @click.stop="openSpecDialog(row)">编辑</el-button>
+                    <el-button v-if="row.is_editable" size="small" type="danger" plain @click.stop="deleteSpec(row)">删除</el-button>
+                  </div>
                 </template>
               </el-table-column>
             </el-table>
@@ -144,9 +183,12 @@
               </el-table-column>
               <el-table-column label="操作" width="230" fixed="right">
                 <template #default="{ row }">
-                  <el-button link type="primary" @click.stop="openGenerateDialog(row)">生成批次</el-button>
-                  <el-button v-if="row.is_editable" link type="primary" @click.stop="openSpecDialog(row)">编辑</el-button>
-                  <el-button v-if="row.is_editable" link type="danger" @click.stop="deleteSpec(row)">删除</el-button>
+                  <div class="row-actions">
+                    <el-button size="small" type="primary" plain @click.stop="openGenerateDialog(row)">生成</el-button>
+                    <el-button size="small" type="info" plain @click.stop="selectSpec(row)">查看</el-button>
+                    <el-button v-if="row.is_editable" size="small" plain @click.stop="openSpecDialog(row)">编辑</el-button>
+                    <el-button v-if="row.is_editable" size="small" type="danger" plain @click.stop="deleteSpec(row)">删除</el-button>
+                  </div>
                 </template>
               </el-table-column>
             </el-table>
@@ -154,7 +196,7 @@
         </el-tabs>
       </el-card>
 
-      <el-card shadow="never" class="panel detail-panel" v-loading="previewLoading">
+      <el-card shadow="never" class="panel detail-panel yz-admin-panel cards-panel" v-loading="previewLoading">
         <template #header>
           <div class="panel-header">
             <div class="panel-header__title">
@@ -172,11 +214,11 @@
               {{ selectedSpec.is_editable ? '自建规格可编辑' : '授权规格只读' }}
             </el-tag>
             <el-tag effect="plain">来源 {{ selectedSpec.source === 'self_owned' ? '自建应用' : '授权应用' }}</el-tag>
-            <el-tag effect="plain">当前额度 {{ issueCardQuota.balance }}</el-tag>
+            <el-tag effect="plain">当前发卡额度 {{ issueCardQuota.balance }}</el-tag>
             <el-tag effect="plain">单卡规则 {{ pricingLabel(issuePreview?.pricing_source) }}</el-tag>
           </div>
 
-          <div class="spec-summary">
+          <div class="spec-summary variant-panel">
             <div>
               <span>卡密类型</span>
               <strong>{{ getTypeText(selectedSpec.kami_type) }}</strong>
@@ -214,23 +256,61 @@
 
         <el-tabs v-if="selectedSpec" v-model="activeTab" class="detail-tabs">
           <el-tab-pane label="批次列表" name="batches">
-            <el-table :data="specBatches" border stripe>
-              <el-table-column prop="batch_no" label="批次号" min-width="160" show-overflow-tooltip />
-              <el-table-column prop="count" label="数量" width="80" />
-              <el-table-column prop="stats.unused_count" label="未用" width="72" />
-              <el-table-column prop="stats.active_count" label="激活" width="72" />
-              <el-table-column prop="stats.frozen_count" label="冻结" width="72" />
-              <el-table-column prop="stats.device_bound_count" label="绑定设备" width="96" />
-              <el-table-column prop="total_issue_cost" label="消耗额度" width="96" />
-              <el-table-column prop="created_at" label="创建时间" width="170">
-                <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
-              </el-table-column>
-              <el-table-column label="操作" width="110">
-                <template #default="{ row }">
-                  <el-button link type="primary" @click="openBatchDrawer(row)">卡密</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
+            <section class="batches-panel">
+              <el-table :data="specBatches" border stripe>
+                <el-table-column prop="batch_no" label="批次号" min-width="160" show-overflow-tooltip />
+                <el-table-column prop="spec_name" label="规格" min-width="150" show-overflow-tooltip />
+                <el-table-column label="权益" min-width="160">
+                  <template #default="{ row }">
+                    <div>{{ getValidityText(row) }}</div>
+                    <div class="subtext">{{ batchValidityModeText(row) }}</div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="生成策略" min-width="170">
+                  <template #default="{ row }">
+                    <div>{{ row.code_prefix || '无前缀' }} / {{ row.code_length }} 位</div>
+                    <div class="subtext">{{ row.charset || 'upper_numeric' }} · {{ row.code_valid_days ? `${row.code_valid_days} 天` : '不限期' }}</div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="绑定策略" min-width="170">
+                  <template #default="{ row }">
+                    <div>{{ getMachineBindModeText(row.machine_bind_mode, row.max_bind_devices) }}</div>
+                    <div class="subtext">{{ getAuthorizationOwnerText(row.authorization_owner) }} / {{ getUserBindModeText(row.user_bind_mode) }}</div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="统计" min-width="220">
+                  <template #default="{ row }">
+                    <div class="count-pills">
+                      <span class="count-pill is-total">总 {{ row.stats.total_count || 0 }}</span>
+                      <span class="count-pill">未 {{ row.stats.unused_count || 0 }}</span>
+                      <span class="count-pill">激活 {{ row.stats.active_count || 0 }}</span>
+                      <span class="count-pill">冻 {{ row.stats.frozen_count || 0 }}</span>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="total_issue_cost" label="消耗额度" width="96" />
+                <el-table-column label="来源" width="96">
+                  <template #default="{ row }">
+                    <el-tag :type="row.can_manage ? 'success' : 'info'" effect="plain">
+                      {{ row.source === 'self_owned' ? '自建' : '授权' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="created_at" label="创建时间" width="170">
+                  <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="240">
+                  <template #default="{ row }">
+                    <div class="icon-actions">
+                      <el-button link type="primary" @click="openBatchDrawer(row)">查看</el-button>
+                      <el-button link type="primary" :disabled="!row.can_manage" @click="showAppendDialog(row)">追加</el-button>
+                      <el-button link type="primary" :disabled="!row.can_manage" @click="showBatchDialog(row)">编辑</el-button>
+                      <el-button link type="danger" :disabled="!row.can_manage || (row.count || 0) > 0" @click="deleteBatch(row)">删除</el-button>
+                    </div>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </section>
           </el-tab-pane>
           <el-tab-pane label="卡密列表" name="kamis">
             <el-table :data="specKamis.items" border stripe>
@@ -389,30 +469,245 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="generateDialogVisible" title="生成批次" width="520px">
+    <el-dialog v-model="generateDialogVisible" title="按规格生成卡密" width="680px">
       <div v-if="selectedSpec" class="issue-preview">
-        <div>
-          本次预计消耗 {{ issuePreview?.total_cost || 0 }} 发卡额度，生成后余额 {{ issuePreview?.balance_after ?? '-' }}
+        <div class="issue-preview__meta">
+          <div>本次预计消耗 {{ issuePreview?.total_cost || 0 }} 发卡额度，生成后余额 {{ issuePreview?.balance_after ?? '-' }}</div>
+          <div>单张消耗 {{ issuePreview?.unit_cost || '-' }}，规则 {{ pricingLabel(issuePreview?.pricing_source) }}</div>
+          <div>单张卡密格式 {{ generateCodePreview }}</div>
         </div>
-        <div>单张消耗 {{ issuePreview?.unit_cost || '-' }}，规则 {{ pricingLabel(issuePreview?.pricing_source) }}</div>
         <el-tag :type="issuePreview?.can_issue ? 'success' : 'danger'">
           {{ issuePreview?.can_issue ? '额度充足' : '额度不足' }}
         </el-tag>
       </div>
-      <el-form :model="generateForm" label-width="92px">
+      <el-form :model="generateForm" label-width="96px" class="batch-form">
+        <el-form-item label="规格">
+          <el-input :model-value="selectedSpec ? `${selectedSpec.spec_name} · ${getValidityText(selectedSpec)}` : '-'" disabled />
+        </el-form-item>
         <el-form-item label="批次号">
           <el-input v-model="generateForm.batch_no" placeholder="可留空自动生成" />
         </el-form-item>
-        <el-form-item label="数量">
-          <el-input-number v-model="generateForm.count" :min="1" :max="1000" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="前缀">
-          <el-input v-model="generateForm.code_prefix" maxlength="32" />
+        <el-row :gutter="12">
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="生成数量">
+              <el-input-number v-model="generateForm.count" :min="1" :max="1000" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="卡密前缀">
+              <el-input v-model="generateForm.code_prefix" maxlength="32" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="随机长度">
+              <el-input-number v-model="generateForm.code_length" :min="4" :max="64" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="字符集">
+              <el-select v-model="generateForm.charset" style="width: 100%">
+                <el-option v-for="option in charsetOptions" :key="option.value" :label="option.label" :value="option.value" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="卡密有效期">
+              <el-select v-model="generateForm.code_validity_mode" style="width: 100%">
+                <el-option label="不限期" value="unlimited" />
+                <el-option label="自定义天数" value="custom" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col v-if="generateForm.code_validity_mode === 'custom'" :xs="24" :sm="12">
+            <el-form-item label="有效天数">
+              <el-input-number v-model="generateForm.code_valid_days" :min="1" :max="36500" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="格式预览">
+          <el-input :model-value="generateCodePreview" disabled />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="generateDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="issuing" :disabled="!canIssue" @click="handleIssue">生成卡密</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="batchDialogVisible" :title="editingBatch ? `编辑批次 - ${editingBatch.batch_no}` : '编辑批次'" width="760px">
+      <el-alert
+        v-if="editingBatchHasCards"
+        type="info"
+        :closable="false"
+        show-icon
+        title="该批次已存在卡密，建议只调整批次编号、状态和备注；权益、生成策略和绑定策略会影响后续追加。"
+      />
+      <el-form :model="batchForm" label-width="96px" class="batch-form">
+        <el-row :gutter="12">
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="批次号">
+              <el-input v-model="batchForm.batch_no" maxlength="64" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="卡密类型">
+              <el-select v-model="batchForm.kami_type" :disabled="editingBatchHasCards" style="width: 100%">
+                <el-option v-for="option in TYPE_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col v-if="batchForm.kami_type === 'points'" :xs="24" :sm="12">
+            <el-form-item label="积分面额">
+              <el-input-number v-model="batchForm.points_amount" :min="1" :max="100000000" :disabled="editingBatchHasCards" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col v-if="batchForm.kami_type === 'points'" :xs="24" :sm="12">
+            <el-form-item label="有效天数">
+              <el-input-number v-model="batchForm.points_valid_days" :min="1" :max="36500" :disabled="editingBatchHasCards" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col v-if="batchForm.kami_type === 'times'" :xs="24" :sm="12">
+            <el-form-item label="次数">
+              <el-input-number v-model="batchForm.times_total" :min="1" :max="100000000" :disabled="editingBatchHasCards" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col v-if="batchForm.kami_type !== 'points' && batchForm.kami_type !== 'times'" :xs="24" :sm="12">
+            <el-form-item label="时长数值">
+              <el-input-number v-model="batchForm.time_value" :min="1" :max="100000000" :disabled="editingBatchHasCards" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col v-if="batchForm.kami_type !== 'points' && batchForm.kami_type !== 'times'" :xs="24" :sm="12">
+            <el-form-item label="时长单位">
+              <el-select v-model="batchForm.time_unit" :disabled="editingBatchHasCards" style="width: 100%">
+                <el-option v-for="option in TIME_UNIT_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="卡密前缀">
+              <el-input v-model="batchForm.code_prefix" maxlength="32" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="随机长度">
+              <el-input-number v-model="batchForm.code_length" :min="4" :max="64" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="字符集">
+              <el-select v-model="batchForm.charset" style="width: 100%">
+                <el-option v-for="option in charsetOptions" :key="option.value" :label="option.label" :value="option.value" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="卡密有效期">
+              <el-input-number v-model="batchForm.code_valid_days" :min="1" :max="36500" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="绑定策略">
+              <el-select v-model="batchForm.machine_bind_mode" :disabled="editingBatchHasCards" style="width: 100%">
+                <el-option v-for="option in MACHINE_BIND_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col v-if="batchForm.machine_bind_mode === 'one_card_multi_device'" :xs="24" :sm="12">
+            <el-form-item label="设备数量">
+              <el-input-number v-model="batchForm.max_bind_devices" :min="2" :max="1000" :disabled="editingBatchHasCards" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="授权归属">
+              <el-select v-model="batchForm.authorization_owner" :disabled="editingBatchHasCards" style="width: 100%">
+                <el-option v-for="option in AUTHORIZATION_OWNER_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="用户绑定">
+              <el-select v-model="batchForm.user_bind_mode" :disabled="editingBatchHasCards" style="width: 100%">
+                <el-option v-for="option in USER_BIND_MODE_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="状态">
+          <el-switch v-model="batchForm.status" :active-value="1" :inactive-value="0" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="batchForm.remark" type="textarea" :rows="2" maxlength="200" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="batchDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingBatch" @click="handleSaveBatch">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="appendDialogVisible" :title="selectedBatch ? `追加卡密 - ${selectedBatch.batch_no}` : '追加卡密'" width="560px">
+      <div v-if="selectedBatch" class="issue-preview">
+        <div class="issue-preview__meta">
+          <div>批次 {{ selectedBatch.batch_no }} · {{ selectedBatch.spec_name || '未绑定规格' }}</div>
+          <div>单张消耗发卡额度 {{ issuePreview?.unit_cost || '-' }}，当前批次余额 {{ issueCardQuota.balance }}</div>
+          <div>追加后格式预览 {{ appendCodePreview }}</div>
+        </div>
+      </div>
+      <el-form :model="appendForm" label-width="96px" class="batch-form">
+        <el-form-item label="追加数量">
+          <el-input-number v-model="appendForm.count" :min="1" :max="1000" style="width: 100%" />
+        </el-form-item>
+        <el-row :gutter="12">
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="卡密前缀">
+              <el-input v-model="appendForm.code_prefix" maxlength="32" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="随机长度">
+              <el-input-number v-model="appendForm.code_length" :min="4" :max="64" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="字符集">
+              <el-select v-model="appendForm.charset" style="width: 100%">
+                <el-option v-for="option in charsetOptions" :key="option.value" :label="option.label" :value="option.value" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="卡密有效期">
+              <el-select v-model="appendForm.code_validity_mode" style="width: 100%">
+                <el-option label="不限期" value="unlimited" />
+                <el-option label="自定义天数" value="custom" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item v-if="appendForm.code_validity_mode === 'custom'" label="有效天数">
+          <el-input-number v-model="appendForm.code_valid_days" :min="1" :max="36500" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="格式预览">
+          <el-input :model-value="appendCodePreview" disabled />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="appendDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="appending" @click="handleAppendKamis">追加卡密</el-button>
       </template>
     </el-dialog>
 
@@ -459,6 +754,9 @@ import {
   getMerchantSpecKamis,
   issueMerchantKamis,
   previewMerchantKamis,
+  appendMerchantBatchKamis,
+  deleteMerchantBatch,
+  updateMerchantBatch,
   updateMerchantAppSpec
 } from '../api/merchant'
 
@@ -479,8 +777,13 @@ const activeTab = ref('batches')
 const specGroupTab = ref('common')
 const specDialogVisible = ref(false)
 const generateDialogVisible = ref(false)
+const batchDialogVisible = ref(false)
+const appendDialogVisible = ref(false)
 const batchDrawerVisible = ref(false)
 const editingSpec = ref(null)
+const editingBatch = ref(null)
+const savingBatch = ref(false)
+const appending = ref(false)
 const issuePreview = ref(null)
 const issueCardQuota = ref({
   balance: 0,
@@ -541,15 +844,72 @@ const generateForm = reactive({
   count: 10,
   code_prefix: '',
   code_length: 16,
-  charset: 'upper_numeric'
+  charset: 'upper_numeric',
+  code_validity_mode: 'unlimited',
+  code_valid_days: 30
+})
+
+const batchForm = reactive({
+  id: null,
+  batch_no: '',
+  kami_type: 'points',
+  points_amount: null,
+  points_valid_days: null,
+  times_total: null,
+  time_value: null,
+  time_unit: 'day',
+  code_prefix: '',
+  code_length: 16,
+  charset: 'upper_numeric',
+  code_valid_days: null,
+  machine_bind_mode: 'one_card_one_device',
+  max_bind_devices: 1,
+  authorization_owner: 'device',
+  user_bind_mode: 'none',
+  status: 1,
+  remark: ''
+})
+
+const appendForm = reactive({
+  count: 10,
+  code_prefix: '',
+  code_length: 16,
+  charset: 'upper_numeric',
+  code_validity_mode: 'unlimited',
+  code_valid_days: 30
 })
 
 const selectedApp = computed(() => apps.value.find((item) => item.app_id === queryParams.app_id))
+const canManageSelectedApp = computed(() => selectedApp.value?.is_owned === true)
 const lowBalanceWarning = computed(() => issueCardQuota.value.low_balance_warning)
 const canIssueInputs = computed(() => Boolean(selectedApp.value?.app_id && selectedSpec.value?.id && generateForm.count > 0))
 const canIssue = computed(() => canIssueInputs.value && issuePreview.value?.can_issue !== false)
 const commonSpecs = computed(() => specRows.value.filter((row) => row.spec_group === 'common'))
 const customSpecs = computed(() => specRows.value.filter((row) => row.spec_group !== 'common'))
+const specOverview = computed(() => ({
+  specs: specRows.value.length,
+  batches: specRows.value.reduce((sum, row) => sum + (row.batch_count || 0), 0),
+  total: specRows.value.reduce((sum, row) => sum + (row.total_count || 0), 0),
+  unused: specRows.value.reduce((sum, row) => sum + (row.unused_count || 0), 0)
+}))
+const merchantBatchPermissions = computed(() => ({
+  createSpec: canManageSelectedApp.value,
+  editSpec: canManageSelectedApp.value,
+  deleteSpec: canManageSelectedApp.value,
+  editBatch: canManageSelectedApp.value,
+  appendBatch: canManageSelectedApp.value,
+  deleteBatch: canManageSelectedApp.value,
+  generateBatch: Boolean(selectedApp.value?.app_id && selectedSpec.value?.id)
+}))
+const editingBatchHasCards = computed(() => (editingBatch.value?.count || 0) > 0)
+const charsetOptions = [
+  { label: '大写字母 + 数字', value: 'upper_numeric', sample: 'A1' },
+  { label: '纯数字', value: 'numeric', sample: '1' },
+  { label: '大写字母', value: 'upper', sample: 'A' },
+  { label: '字母 + 数字', value: 'lower_mixed', sample: 'a1' }
+]
+const generateCodePreview = computed(() => buildCodePreview(generateForm))
+const appendCodePreview = computed(() => buildCodePreview(appendForm))
 
 function isTimeCardType(type) {
   return Object.prototype.hasOwnProperty.call(TIME_CARD_DEFAULTS, type)
@@ -585,6 +945,83 @@ function pricingLabel(value) {
     global_authorized_app: '授权应用默认',
     default: '系统默认'
   }[value] || value || '系统默认'
+}
+
+function buildCodePreview(form) {
+  const charset = charsetOptions.find((item) => item.value === form.charset) || charsetOptions[0]
+  const length = Number(form.code_length || 0)
+  const prefix = form.code_prefix || ''
+  const body = charset.sample.repeat(Math.max(Math.ceil(length / charset.sample.length), 1)).slice(0, length)
+  return `${prefix}${body || 'A1B2'}`.trim()
+}
+
+function batchValidityModeText(row) {
+  if (!row) return '-'
+  if (row.code_valid_days) return `有效 ${row.code_valid_days} 天`
+  return '不限期'
+}
+
+function resetBatchForm(row = null) {
+  editingBatch.value = row
+  batchForm.id = row?.id ?? null
+  batchForm.batch_no = row?.batch_no || ''
+  batchForm.kami_type = row?.kami_type || selectedSpec.value?.kami_type || 'points'
+  batchForm.points_amount = row?.points_amount ?? selectedSpec.value?.points_amount ?? null
+  batchForm.points_valid_days = row?.points_valid_days ?? selectedSpec.value?.points_valid_days ?? null
+  batchForm.times_total = row?.times_total ?? selectedSpec.value?.times_total ?? null
+  batchForm.time_value = row?.time_value ?? selectedSpec.value?.time_value ?? null
+  batchForm.time_unit = row?.time_unit || selectedSpec.value?.time_unit || 'day'
+  batchForm.code_prefix = row?.code_prefix || ''
+  batchForm.code_length = row?.code_length || 16
+  batchForm.charset = row?.charset || 'upper_numeric'
+  batchForm.code_valid_days = row?.code_valid_days ?? null
+  batchForm.machine_bind_mode = row?.machine_bind_mode || selectedSpec.value?.machine_bind_mode || 'one_card_one_device'
+  batchForm.max_bind_devices = row?.max_bind_devices ?? selectedSpec.value?.max_bind_devices ?? 1
+  batchForm.authorization_owner = row?.authorization_owner || selectedSpec.value?.authorization_owner || 'device'
+  batchForm.user_bind_mode = row?.user_bind_mode || selectedSpec.value?.user_bind_mode || 'none'
+  batchForm.status = row?.status ?? 1
+  batchForm.remark = row?.remark || ''
+}
+
+function resetAppendForm(row = null) {
+  appendForm.count = 10
+  appendForm.code_prefix = row?.code_prefix || ''
+  appendForm.code_length = row?.code_length || 16
+  appendForm.charset = row?.charset || 'upper_numeric'
+  appendForm.code_validity_mode = row?.code_valid_days ? 'custom' : 'unlimited'
+  appendForm.code_valid_days = row?.code_valid_days || 30
+}
+
+function batchPayloadFromForm() {
+  return {
+    batch_no: batchForm.batch_no || null,
+    kami_type: batchForm.kami_type,
+    points_amount: batchForm.kami_type === 'points' ? batchForm.points_amount : null,
+    points_valid_days: batchForm.kami_type === 'points' ? batchForm.points_valid_days || null : null,
+    times_total: batchForm.kami_type === 'times' ? batchForm.times_total : null,
+    time_value: isTimeCardType(batchForm.kami_type) ? batchForm.time_value : null,
+    time_unit: isTimeCardType(batchForm.kami_type) ? batchForm.time_unit : null,
+    code_prefix: batchForm.code_prefix || null,
+    code_length: batchForm.code_length,
+    charset: batchForm.charset,
+    code_valid_days: batchForm.code_valid_days || null,
+    machine_bind_mode: batchForm.machine_bind_mode,
+    max_bind_devices: batchForm.max_bind_devices,
+    authorization_owner: batchForm.authorization_owner,
+    user_bind_mode: batchForm.user_bind_mode,
+    status: batchForm.status,
+    remark: batchForm.remark || null
+  }
+}
+
+function appendPayloadFromForm() {
+  return {
+    count: appendForm.count,
+    code_prefix: appendForm.code_prefix || null,
+    code_length: appendForm.code_length,
+    charset: appendForm.charset,
+    code_valid_days: appendForm.code_validity_mode === 'custom' ? appendForm.code_valid_days : null
+  }
 }
 
 function resetSpecForm(row = null) {
@@ -641,7 +1078,8 @@ function buildIssuePayload() {
     batch_no: generateForm.batch_no || null,
     code_prefix: generateForm.code_prefix || null,
     code_length: generateForm.code_length,
-    charset: generateForm.charset
+    charset: generateForm.charset,
+    code_valid_days: generateForm.code_validity_mode === 'custom' ? generateForm.code_valid_days : null
   }
 }
 
@@ -773,6 +1211,10 @@ async function openGenerateDialog(row) {
   generateForm.batch_no = ''
   generateForm.count = 10
   generateForm.code_prefix = ''
+  generateForm.code_length = 16
+  generateForm.charset = 'upper_numeric'
+  generateForm.code_validity_mode = 'unlimited'
+  generateForm.code_valid_days = 30
   generateDialogVisible.value = true
   await loadIssuePreview()
 }
@@ -800,6 +1242,73 @@ async function openBatchDrawer(row) {
   batchDrawerVisible.value = true
 }
 
+function showBatchDialog(row) {
+  if (!row?.can_manage) return
+  selectedBatch.value = row
+  resetBatchForm(row)
+  batchDialogVisible.value = true
+}
+
+async function handleSaveBatch() {
+  if (!selectedBatch.value?.id) return
+  const specId = selectedSpec.value?.id
+  savingBatch.value = true
+  try {
+    await updateMerchantBatch(selectedBatch.value.id, batchPayloadFromForm())
+    ElMessage.success('批次已保存')
+    batchDialogVisible.value = false
+    await loadSpecs()
+    const nextSpec = specId ? specRows.value.find((item) => item.id === specId) : null
+    if (nextSpec) {
+      await selectSpec(nextSpec)
+    }
+  } finally {
+    savingBatch.value = false
+  }
+}
+
+function showAppendDialog(row) {
+  if (!row?.can_manage) return
+  selectedBatch.value = row
+  resetAppendForm(row)
+  appendDialogVisible.value = true
+}
+
+async function handleAppendKamis() {
+  if (!selectedBatch.value?.id) return
+  const specId = selectedSpec.value?.id
+  appending.value = true
+  try {
+    await appendMerchantBatchKamis(selectedBatch.value.id, appendPayloadFromForm())
+    ElMessage.success('卡密已追加')
+    appendDialogVisible.value = false
+    await Promise.all([loadQuota(), loadSpecs()])
+    const nextSpec = specId ? specRows.value.find((item) => item.id === specId) : null
+    if (nextSpec) {
+      await selectSpec(nextSpec)
+    }
+  } finally {
+    appending.value = false
+  }
+}
+
+async function deleteBatch(row) {
+  if (!row?.can_manage) return
+  if ((row.count || 0) > 0) {
+    ElMessage.warning('请先清空批次中的卡密后再删除')
+    return
+  }
+  const specId = selectedSpec.value?.id
+  await ElMessageBox.confirm('确认删除该批次？', '删除批次', { type: 'warning' })
+  await deleteMerchantBatch(row.id)
+  ElMessage.success('批次已删除')
+  await loadSpecs()
+  const nextSpec = specId ? specRows.value.find((item) => item.id === specId) : null
+  if (nextSpec) {
+    await selectSpec(nextSpec)
+  }
+}
+
 watch(
   () => specForm.kami_type,
   (value) => {
@@ -808,7 +1317,15 @@ watch(
 )
 
 watch(
-  () => [generateForm.count, selectedSpec.value?.id],
+  () => [
+    generateForm.count,
+    generateForm.code_prefix,
+    generateForm.code_length,
+    generateForm.charset,
+    generateForm.code_validity_mode,
+    generateForm.code_valid_days,
+    selectedSpec.value?.id
+  ],
   loadIssuePreview
 )
 
@@ -842,6 +1359,33 @@ onMounted(loadAll)
   color: #64748b;
 }
 
+.overview-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.summary-metric-card {
+  min-height: 96px;
+  padding: 14px 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.summary-metric-card span {
+  display: block;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.summary-metric-card strong {
+  display: block;
+  margin-top: 10px;
+  font-size: 28px;
+  color: #0f172a;
+}
+
 .panel-header__title,
 .spec-meta {
   display: flex;
@@ -865,8 +1409,49 @@ onMounted(loadAll)
   border-radius: 8px;
 }
 
+.variant-panel {
+  padding: 10px 0;
+}
+
 .stat-inline {
   margin-left: 10px;
+}
+
+.subtext {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.count-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.count-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #334155;
+  font-size: 12px;
+}
+
+.count-pill.is-total {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.row-actions,
+.icon-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .spec-tabs {
@@ -874,6 +1459,10 @@ onMounted(loadAll)
 }
 
 .spec-form {
+  margin-top: 12px;
+}
+
+.batch-form {
   margin-top: 12px;
 }
 
@@ -921,7 +1510,16 @@ onMounted(loadAll)
   font-size: 13px;
 }
 
+.issue-preview__meta {
+  display: grid;
+  gap: 4px;
+}
+
 @media (max-width: 1180px) {
+  .overview-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .spec-workbench {
     grid-template-columns: 1fr;
   }
@@ -934,6 +1532,10 @@ onMounted(loadAll)
 }
 
 @media (max-width: 720px) {
+  .overview-strip {
+    grid-template-columns: 1fr;
+  }
+
   .spec-summary {
     grid-template-columns: 1fr;
   }

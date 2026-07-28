@@ -1,4 +1,5 @@
 import json
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from datetime import datetime
@@ -148,11 +149,40 @@ class MerchantKamiIssueRequest(BaseModel):
     code_prefix: Optional[str] = PydanticField(None, max_length=32)
     code_length: int = PydanticField(16, ge=4, le=64)
     charset: str = PydanticField("upper_numeric", max_length=32)
+    code_valid_days: Optional[int] = PydanticField(None, ge=1, le=36500)
     points_amount: Optional[int] = PydanticField(None, gt=0)
     points_valid_days: Optional[int] = PydanticField(None, ge=1)
     times_total: Optional[int] = PydanticField(None, gt=0)
     time_value: Optional[int] = PydanticField(None, gt=0)
     time_unit: Optional[str] = PydanticField(None, max_length=32)
+
+
+class MerchantBatchUpdateRequest(BaseModel):
+    batch_no: Optional[str] = PydanticField(None, min_length=1, max_length=64)
+    kami_type: Optional[str] = PydanticField(None, max_length=32)
+    points_amount: Optional[int] = PydanticField(None, gt=0)
+    points_valid_days: Optional[int] = PydanticField(None, ge=1)
+    times_total: Optional[int] = PydanticField(None, gt=0)
+    time_value: Optional[int] = PydanticField(None, gt=0)
+    time_unit: Optional[str] = PydanticField(None, max_length=32)
+    code_prefix: Optional[str] = PydanticField(None, max_length=32)
+    code_length: Optional[int] = PydanticField(None, ge=4, le=64)
+    charset: Optional[str] = PydanticField(None, max_length=32)
+    code_valid_days: Optional[int] = PydanticField(None, ge=1, le=36500)
+    machine_bind_mode: Optional[str] = PydanticField(None, max_length=32)
+    max_bind_devices: Optional[int] = PydanticField(None, ge=0, le=1000)
+    authorization_owner: Optional[str] = PydanticField(None, max_length=32)
+    user_bind_mode: Optional[str] = PydanticField(None, max_length=32)
+    status: Optional[int] = PydanticField(None, ge=0, le=1)
+    remark: Optional[str] = None
+
+
+class MerchantBatchAppendRequest(BaseModel):
+    count: int = PydanticField(..., gt=0, le=1000)
+    code_prefix: Optional[str] = PydanticField(None, max_length=32)
+    code_length: Optional[int] = PydanticField(None, ge=4, le=64)
+    charset: Optional[str] = PydanticField(None, max_length=32)
+    code_valid_days: Optional[int] = PydanticField(None, ge=1, le=36500)
 
 
 TIME_CARD_UNITS = {
@@ -163,6 +193,59 @@ TIME_CARD_UNITS = {
     KamiType.quarter: (1, "quarter"),
     KamiType.year: (1, "year"),
     KamiType.lifetime: (None, "lifetime"),
+}
+
+
+MERCHANT_INTERFACE_CONFIG_SCHEMAS: dict[str, list[dict[str, Any]]] = {
+    "user.register": [
+        {"key": "allow_register", "label": "允许注册", "type": "switch", "default": True},
+        {"key": "password_min_length", "label": "密码最小长度", "type": "number", "min": 6, "max": 64, "default": 6},
+    ],
+    "user.login": [
+        {"key": "allow_login", "label": "允许登录", "type": "switch", "default": True},
+        {"key": "token_expire_minutes", "label": "Token 有效分钟", "type": "number", "min": 5, "max": 43200, "default": 1440},
+    ],
+    "points.balance": [
+        {"key": "include_ledger_balance", "label": "返回账本余额", "type": "switch", "default": True},
+    ],
+    "points.redeem": [
+        {"key": "allow_redeem", "label": "允许卡密充值", "type": "switch", "default": True},
+        {"key": "bind_user_on_redeem", "label": "充值后绑定用户", "type": "switch", "default": True},
+    ],
+    "points.consume": [
+        {"key": "min_amount", "label": "单次最小扣减", "type": "number", "min": 1, "max": 100000000, "default": 1},
+        {"key": "max_amount", "label": "单次最大扣减", "type": "number", "min": 1, "max": 100000000, "default": 1000},
+        {"key": "require_biz_id", "label": "必须传 biz_id", "type": "switch", "default": True},
+    ],
+    "points.transactions": [
+        {"key": "max_page_size", "label": "最大分页条数", "type": "number", "min": 10, "max": 500, "default": 100},
+    ],
+    "sdk.public_key": [
+        {"key": "allow_public_key", "label": "允许获取公钥", "type": "switch", "default": True},
+    ],
+    "sdk.verify": [
+        {"key": "enable_user_authorization", "label": "启用用户授权能力", "type": "switch", "default": False},
+        {"key": "signature_required", "label": "签名校验", "type": "switch", "default": True},
+        {"key": "nonce_required", "label": "Nonce 防重放", "type": "switch", "default": True},
+        {"key": "timestamp_tolerance_seconds", "label": "时间戳容差秒", "type": "number", "min": 30, "max": 86400, "default": 300},
+        {"key": "ip_lock_enabled", "label": "IP 绑定验证", "type": "switch", "default": False},
+    ],
+    "sdk.unbind": [
+        {"key": "allow_unbind", "label": "允许解绑", "type": "switch", "default": False},
+        {"key": "max_unbind_count", "label": "最大解绑次数", "type": "number", "min": 0, "max": 100, "default": 0},
+        {"key": "unbind_cooldown_hours", "label": "解绑冷却小时", "type": "number", "min": 0, "max": 8760, "default": 24},
+        {"key": "unbind_deduct_hours", "label": "时间卡扣减小时", "type": "number", "min": 0, "max": 8760, "default": 0},
+        {"key": "unbind_deduct_times", "label": "次数卡扣减次数", "type": "number", "min": 0, "max": 1000000, "default": 0},
+        {"key": "ip_lock_enabled", "label": "解绑校验 IP", "type": "switch", "default": False},
+    ],
+    "sdk.device_limit": [
+        {"key": "release_on_logout", "label": "退出自动释放", "type": "switch", "default": True},
+        {"key": "heartbeat_timeout_seconds", "label": "心跳超时秒数", "type": "number", "min": 30, "max": 86400, "default": 180},
+    ],
+    "sdk.report": [
+        {"key": "allow_report", "label": "允许事件上报", "type": "switch", "default": True},
+        {"key": "max_payload_kb", "label": "最大载荷 KB", "type": "number", "min": 1, "max": 1024, "default": 64},
+    ],
 }
 
 
@@ -236,11 +319,12 @@ def _merchant_app_payload(app: App, user: EndUser) -> dict:
 def _merchant_app_interface_payload(interface: ApiInterface, config: Optional[AppInterfaceConfig], app_id: str) -> dict:
     payload = _interface_payload(interface)
     default_enabled = interface.is_builtin
-    default_config = (
-        {"release_on_logout": True, "heartbeat_timeout_seconds": 180}
-        if interface.interface_key == "sdk.device_limit"
-        else None
-    )
+    config_schema = [dict(item) for item in MERCHANT_INTERFACE_CONFIG_SCHEMAS.get(interface.interface_key, [])]
+    default_config = {
+        item["key"]: item["default"]
+        for item in config_schema
+        if "key" in item and "default" in item
+    } or None
     payload.update(
         {
             "app_id": app_id,
@@ -249,6 +333,7 @@ def _merchant_app_interface_payload(interface: ApiInterface, config: Optional[Ap
             "configured": config is not None,
             "enabled": config.enabled if config else default_enabled,
             "config": _load_json(config.config_json) if config else default_config,
+            "config_schema": config_schema,
             "remark": config.remark if config else None,
             "config_created_at": to_api_beijing_iso(config.created_at, naive="civil") if config else None,
             "config_updated_at": to_api_beijing_iso(config.updated_at, naive="civil") if config else None,
@@ -547,6 +632,66 @@ def _merchant_spec_payload(spec: KamiSpec, *, user: EndUser, is_editable: bool, 
     if stats:
         payload.update(stats)
     return payload
+
+
+def _merchant_batch_payload(
+    session: Session,
+    batch: KamiBatch,
+    current_user: EndUser,
+    *,
+    spec: Optional[KamiSpec] = None,
+    app: Optional[App] = None,
+    stats: Optional[dict] = None,
+) -> dict:
+    app = app or session.exec(select(App).where(App.app_id == batch.app_id)).first()
+    spec = spec or (session.get(KamiSpec, batch.spec_id) if batch.spec_id else None)
+    is_owned = bool(app and _app_is_owned_by_user(app, current_user))
+    stats = stats or batch_stats_payload(session, batch, created_by_user_id=current_user.id)
+    count = stats.get("total_count", 0)
+    payload = {
+        "id": batch.id,
+        "app_id": batch.app_id,
+        "spec_id": batch.spec_id,
+        "spec_name": spec.spec_name if spec else None,
+        "spec_group": _enum_value(spec.spec_group) if spec else None,
+        "batch_no": batch.batch_no,
+        "kami_type": _enum_value(batch.kami_type),
+        "points_amount": batch.points_amount,
+        "points_valid_days": batch.points_valid_days,
+        "time_value": batch.time_value,
+        "time_unit": batch.time_unit,
+        "times_total": batch.times_total,
+        "code_prefix": batch.code_prefix,
+        "code_length": batch.code_length,
+        "charset": batch.charset,
+        "code_valid_days": batch.code_valid_days,
+        "machine_bind_mode": _enum_value(batch.machine_bind_mode),
+        "max_bind_devices": batch.max_bind_devices,
+        "authorization_owner": _enum_value(batch.authorization_owner),
+        "user_bind_mode": _enum_value(batch.user_bind_mode),
+        "status": batch.status,
+        "remark": batch.remark,
+        "count": count,
+        "stats": stats,
+        **_batch_cost_snapshot(session, batch, current_user, count),
+        "can_manage": is_owned,
+        "source": "self_owned" if is_owned else "admin_authorized",
+        "created_at": to_api_beijing_iso(batch.created_at, naive="civil") if batch.created_at else None,
+        "updated_at": to_api_beijing_iso(batch.updated_at, naive="civil") if batch.updated_at else None,
+    }
+    return payload
+
+
+def _get_visible_merchant_batch_or_404(
+    session: Session,
+    current_user: EndUser,
+    batch_id: int,
+) -> tuple[KamiBatch, App, bool]:
+    batch = session.get(KamiBatch, batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    app = _get_visible_app_or_404(session, current_user, batch.app_id)
+    return batch, app, _app_is_owned_by_user(app, current_user)
 
 
 def _batch_cost_snapshot(session: Session, batch: KamiBatch, user: EndUser, fallback_count: int) -> dict:
@@ -1247,26 +1392,7 @@ async def list_merchant_spec_batches(
     ).all()
     items = []
     for batch in batches:
-        stats = batch_stats_payload(session, batch, created_by_user_id=current_user.id)
-        count = stats["total_count"]
-        if count <= 0:
-            continue
-        items.append(
-            {
-                "id": batch.id,
-                "app_id": batch.app_id,
-                "spec_id": batch.spec_id,
-                "spec_name": spec.spec_name,
-                "batch_no": batch.batch_no,
-                "kami_type": _enum_value(batch.kami_type),
-                "count": count,
-                "stats": stats,
-                **_batch_cost_snapshot(session, batch, current_user, count),
-                "created_at": to_api_beijing_iso(batch.created_at, naive="civil")
-                if batch.created_at
-                else None,
-            }
-        )
+        items.append(_merchant_batch_payload(session, batch, current_user, spec=spec))
     return {"success": True, "data": {"items": items, "total": len(items)}, "items": items}
 
 
@@ -1696,6 +1822,7 @@ async def issue_merchant_kamis(
             code_prefix=payload.code_prefix,
             code_length=payload.code_length,
             charset=payload.charset,
+            code_valid_days=payload.code_valid_days,
             points_amount=points_amount,
             points_valid_days=points_valid_days,
             times_total=times_total,
@@ -1803,24 +1930,163 @@ async def list_merchant_batches(
     ).all()
     result = []
     for batch in batches:
-        stats = batch_stats_payload(session, batch, created_by_user_id=current_user.id)
-        count = stats["total_count"]
-        if count <= 0:
-            continue
-        spec = session.get(KamiSpec, batch.spec_id) if batch.spec_id else None
-        cost_snapshot = _batch_cost_snapshot(session, batch, current_user, count)
-        result.append(
+        result.append(_merchant_batch_payload(session, batch, current_user))
+    return {"success": True, "data": result, "items": result}
+
+
+@router.put("/batches/{batch_id}", summary="Update merchant batch")
+async def update_merchant_batch(
+    batch_id: int,
+    payload: MerchantBatchUpdateRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    batch, app, is_owned = _get_visible_merchant_batch_or_404(session, current_user, batch_id)
+    if not is_owned:
+        raise HTTPException(status_code=403, detail="Only self-owned apps can manage batches")
+
+    data = payload.model_dump(exclude_unset=True)
+    if not data:
+        return {"success": True, "message": "batch unchanged", "data": _merchant_batch_payload(session, batch, current_user, app=app)}
+
+    current_kamis = session.exec(
+        select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
+    ).all()
+    requested_type = data.get("kami_type")
+    if requested_type and requested_type != _enum_value(batch.kami_type) and current_kamis:
+        raise HTTPException(status_code=400, detail="Batch already has kamis; kami_type cannot be changed")
+
+    new_batch_no = data.get("batch_no", batch.batch_no)
+    if new_batch_no != batch.batch_no:
+        duplicate = session.exec(
+            select(KamiBatch).where(
+                KamiBatch.app_id == batch.app_id,
+                KamiBatch.batch_no == new_batch_no,
+                KamiBatch.id != batch.id,
+            )
+        ).first()
+        if duplicate:
+            raise HTTPException(status_code=400, detail="Batch number already exists")
+
+    try:
+        if "kami_type" in data and data["kami_type"] is not None:
+            batch.kami_type = KamiType(data["kami_type"])
+        if "points_amount" in data:
+            batch.points_amount = data["points_amount"] if _enum_value(batch.kami_type) == KamiType.points.value else None
+        if "points_valid_days" in data:
+            batch.points_valid_days = data["points_valid_days"] if _enum_value(batch.kami_type) == KamiType.points.value else None
+        if "times_total" in data:
+            batch.times_total = data["times_total"] if _enum_value(batch.kami_type) == KamiType.times.value else None
+        if "time_value" in data:
+            batch.time_value = data["time_value"] if _enum_value(batch.kami_type) in TIME_CARD_UNITS else None
+        if "time_unit" in data:
+            batch.time_unit = data["time_unit"] if _enum_value(batch.kami_type) in TIME_CARD_UNITS else None
+        if "code_prefix" in data:
+            batch.code_prefix = data["code_prefix"] or None
+        if "code_length" in data and data["code_length"] is not None:
+            batch.code_length = data["code_length"]
+        if "charset" in data and data["charset"] is not None:
+            batch.charset = data["charset"]
+        if "code_valid_days" in data:
+            batch.code_valid_days = data["code_valid_days"]
+        if "machine_bind_mode" in data and data["machine_bind_mode"] is not None:
+            batch.machine_bind_mode = MachineBindMode(data["machine_bind_mode"])
+        if "max_bind_devices" in data and data["max_bind_devices"] is not None:
+            batch.max_bind_devices = data["max_bind_devices"]
+        if "authorization_owner" in data and data["authorization_owner"] is not None:
+            batch.authorization_owner = AuthorizationOwnerMode(data["authorization_owner"])
+        if "user_bind_mode" in data and data["user_bind_mode"] is not None:
+            batch.user_bind_mode = UserBindMode(data["user_bind_mode"])
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    if "status" in data and data["status"] is not None:
+        batch.status = data["status"]
+    if "remark" in data:
+        batch.remark = data["remark"]
+    if new_batch_no != batch.batch_no:
+        for kami in current_kamis:
+            kami.batch_no = new_batch_no
+            session.add(kami)
+        batch.batch_no = new_batch_no
+    batch.updated_at = get_now_naive()
+
+    session.add(batch)
+    session.commit()
+    session.refresh(batch)
+    return {"success": True, "message": "batch updated", "data": _merchant_batch_payload(session, batch, current_user, app=app)}
+
+
+@router.delete("/batches/{batch_id}", summary="Delete merchant batch")
+async def delete_merchant_batch(
+    batch_id: int,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    batch, _app, is_owned = _get_visible_merchant_batch_or_404(session, current_user, batch_id)
+    if not is_owned:
+        raise HTTPException(status_code=403, detail="Only self-owned apps can manage batches")
+    existing_kami = session.exec(
+        select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
+    ).first()
+    if existing_kami:
+        raise HTTPException(status_code=400, detail="Batch still has kamis")
+    payload = _merchant_batch_payload(session, batch, current_user)
+    session.delete(batch)
+    session.commit()
+    return {"success": True, "message": "batch deleted", "data": payload}
+
+
+@router.post("/batches/{batch_id}/append", summary="Append merchant kamis to a batch")
+async def append_merchant_batch_kamis(
+    batch_id: int,
+    payload: MerchantBatchAppendRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    batch, app, is_owned = _get_visible_merchant_batch_or_404(session, current_user, batch_id)
+    if not is_owned:
+        raise HTTPException(status_code=403, detail="Only self-owned apps can manage batches")
+    if batch.status != 1:
+        raise HTTPException(status_code=400, detail="Batch is disabled")
+    spec = session.get(KamiSpec, batch.spec_id) if batch.spec_id else None
+    try:
+        pricing = resolve_issue_pricing(session, user=current_user, app=app, spec=spec)
+        result = issue_user_kamis(
+            session,
+            current_user,
+            app,
+            spec_id=batch.spec_id,
+            kami_type=batch.kami_type,
+            count=payload.count,
+            batch_no=batch.batch_no,
+            code_prefix=payload.code_prefix if payload.code_prefix is not None else batch.code_prefix,
+            code_length=payload.code_length if payload.code_length is not None else batch.code_length,
+            charset=payload.charset if payload.charset is not None else batch.charset,
+            code_valid_days=payload.code_valid_days if payload.code_valid_days is not None else batch.code_valid_days,
+            points_amount=batch.points_amount,
+            points_valid_days=batch.points_valid_days,
+            times_total=batch.times_total,
+            time_value=batch.time_value,
+            time_unit=batch.time_unit,
+            machine_bind_mode=batch.machine_bind_mode,
+            max_bind_devices=batch.max_bind_devices,
+            authorization_owner=batch.authorization_owner,
+            user_bind_mode=batch.user_bind_mode,
+            unit_cost=pricing["unit_cost"],
+            pricing_source=pricing["pricing_source"],
+            pricing_rule_id=pricing["pricing_rule_id"],
+            allow_existing_batch=True,
+            biz_id_suffix=f"append:{batch.id}:{uuid.uuid4().hex[:8]}",
+        )
+        result.update(
             {
-                "id": batch.id,
-                "app_id": batch.app_id,
-                "spec_id": batch.spec_id,
-                "spec_name": spec.spec_name if spec else None,
-                "batch_no": batch.batch_no,
-                "kami_type": batch.kami_type.value if hasattr(batch.kami_type, "value") else batch.kami_type,
-                "count": count,
-                "stats": stats,
-                **cost_snapshot,
-                "created_at": to_api_beijing_iso(batch.created_at, naive="civil") if batch.created_at else None,
+                "pricing_source": pricing["pricing_source"],
+                "pricing_rule_id": pricing["pricing_rule_id"],
+                "pricing_rule_key": pricing["pricing_rule_key"],
             }
         )
-    return {"success": True, "data": result, "items": result}
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    session.commit()
+    session.refresh(batch)
+    return {"success": True, "message": "batch appended", "data": result}

@@ -157,6 +157,9 @@ async def get_public_key(
 
 
 def _client_ip_from_request(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip()
     return request.client.host if request.client else ""
 
 

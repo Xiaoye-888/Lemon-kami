@@ -383,6 +383,7 @@ def issue_user_kamis(
     code_prefix: Optional[str] = None,
     code_length: int = 16,
     charset: str = "upper_numeric",
+    code_valid_days: Optional[int] = None,
     points_amount: Optional[int] = None,
     points_valid_days: Optional[int] = None,
     times_total: Optional[int] = None,
@@ -392,6 +393,8 @@ def issue_user_kamis(
     max_bind_devices: int = 1,
     authorization_owner: str | AuthorizationOwnerMode = AuthorizationOwnerMode.device,
     user_bind_mode: str | UserBindMode = UserBindMode.none,
+    allow_existing_batch: bool = False,
+    biz_id_suffix: Optional[str] = None,
 ) -> dict:
     if count <= 0:
         raise ValueError("count must be greater than 0")
@@ -404,31 +407,8 @@ def issue_user_kamis(
             KamiBatch.batch_no == effective_batch_no,
         )
     ).first()
-    if existing_batch:
+    if existing_batch and not allow_existing_batch:
         raise ValueError("batch_no already exists")
-
-    account = get_or_create_user_quota_account(session, user.id, user.username)
-    total_cost = count * unit_cost
-    quota_result = consume_user_quota(
-        session=session,
-        account=account,
-        quota_type=UserQuotaType.kami_issue,
-        amount=total_cost,
-        biz_id=f"kami_issue:{app.app_id}:{effective_batch_no}:{code_prefix or ''}:{count}",
-        operator=user.username,
-        remark=f"Issue {count} kamis",
-        metadata={
-            "app_id": app.app_id,
-            "kami_type": _normalize_kami_type(kami_type).value,
-            "spec_id": spec_id,
-            "unit_cost": unit_cost,
-            "total_cost": total_cost,
-            "pricing_source": pricing_source or "default",
-            "pricing_rule_id": pricing_rule_id,
-        },
-    )
-    if quota_result.get("idempotent"):
-        raise ValueError("batch_no already processed")
 
     kami_type_enum = _normalize_kami_type(kami_type)
     if charset not in KAMI_CHARSETS:
@@ -456,12 +436,57 @@ def issue_user_kamis(
         if time_unit is None:
             time_unit = default_unit
 
+    account = get_or_create_user_quota_account(session, user.id, user.username)
+    total_cost = count * unit_cost
+    biz_scope = biz_id_suffix or (uuid.uuid4().hex[:8] if allow_existing_batch else f"{code_prefix or ''}:{count}")
+    quota_result = consume_user_quota(
+        session=session,
+        account=account,
+        quota_type=UserQuotaType.kami_issue,
+        amount=total_cost,
+        biz_id=f"kami_issue:{app.app_id}:{effective_batch_no}:{biz_scope}",
+        operator=user.username,
+        remark=f"Issue {count} kamis",
+        metadata={
+            "app_id": app.app_id,
+            "kami_type": _normalize_kami_type(kami_type).value,
+            "spec_id": spec_id,
+            "unit_cost": unit_cost,
+            "total_cost": total_cost,
+            "pricing_source": pricing_source or "default",
+            "pricing_rule_id": pricing_rule_id,
+        },
+    )
+    if quota_result.get("idempotent"):
+        raise ValueError("batch_no already processed")
+
     now = _now()
-    code_expires_at = None
+    code_expires_at = now + timedelta(days=code_valid_days) if code_valid_days else None
     codes: list[str] = []
     kamis: list[Kami] = []
-    session.add(
-        KamiBatch(
+    batch = existing_batch
+    if batch:
+        batch.kami_type = kami_type_enum
+        batch.points_amount = points_amount if kami_type_enum == KamiType.points else None
+        batch.points_valid_days = points_valid_days if kami_type_enum == KamiType.points else None
+        batch.time_value = time_value if kami_type_enum in TIME_CARD_UNITS else None
+        batch.time_unit = time_unit if kami_type_enum in TIME_CARD_UNITS else None
+        batch.times_total = times_total if kami_type_enum == KamiType.times else None
+        batch.code_prefix = code_prefix
+        batch.code_length = code_length
+        batch.charset = charset
+        batch.code_valid_days = code_valid_days
+        batch.machine_bind_mode = machine_bind_mode_enum
+        batch.max_bind_devices = max_bind_devices
+        batch.authorization_owner = authorization_owner_enum
+        batch.user_bind_mode = user_bind_mode_enum
+        batch.status = 1
+        batch.remark = batch.remark or f"Merchant issued by {user.username}"
+        batch.updated_at = now
+        session.add(batch)
+    else:
+        session.add(
+            KamiBatch(
             spec_id=spec_id,
             app_id=app.app_id,
             batch_no=effective_batch_no,
@@ -474,6 +499,7 @@ def issue_user_kamis(
             code_prefix=code_prefix,
             code_length=code_length,
             charset=charset,
+            code_valid_days=code_valid_days,
             machine_bind_mode=machine_bind_mode_enum,
             max_bind_devices=max_bind_devices,
             authorization_owner=authorization_owner_enum,
@@ -483,7 +509,7 @@ def issue_user_kamis(
             created_at=now,
             updated_at=now,
         )
-    )
+        )
 
     for _ in range(count):
         kami_code = generate_kami_code(code_length, code_prefix or "", charset)
@@ -506,7 +532,7 @@ def issue_user_kamis(
             code_prefix=code_prefix,
             code_length=code_length,
             charset=charset,
-            code_valid_days=None,
+            code_valid_days=code_valid_days,
             code_expires_at=code_expires_at,
             machine_bind_mode=machine_bind_mode_enum,
             max_bind_devices=max_bind_devices,

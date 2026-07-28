@@ -806,6 +806,335 @@ def test_merchant_authorized_app_issue_requires_existing_spec_and_hides_secrets(
         fastapi_app.dependency_overrides.clear()
 
 
+def test_merchant_issue_batch_persists_admin_grade_code_generation_options():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="code-option-merchant", password_hash=hash_password("secret123"), status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        app = App(
+            app_id="app_code_options",
+            name="Code Options",
+            app_secret="secret-code",
+            rsa_public_key="public-code",
+            rsa_private_key="private-code",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        spec = KamiSpec(
+            app_id=app.app_id,
+            spec_key="points-66",
+            spec_name="66积分",
+            kami_type="points",
+            points_amount=66,
+            status=1,
+        )
+        session.add_all([app, spec, UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=5)])
+        session.commit()
+        session.refresh(spec)
+        token = routes_user.create_user_access_token(merchant)
+
+    try:
+        issue = client.post(
+            "/api/v1/merchant/apps/app_code_options/kamis/batch",
+            headers=auth_headers(token),
+            json={
+                "spec_id": spec.id,
+                "count": 1,
+                "batch_no": "CODE-OPTIONS-001",
+                "code_prefix": "VIP-",
+                "code_length": 10,
+                "charset": "upper_numeric",
+                "code_valid_days": 7,
+            },
+        )
+        assert issue.status_code == 200
+
+        with Session(engine) as session:
+            batch = session.exec(select(KamiBatch).where(KamiBatch.batch_no == "CODE-OPTIONS-001")).one()
+            kami = session.exec(select(Kami).where(Kami.batch_no == "CODE-OPTIONS-001")).one()
+            assert batch.code_prefix == "VIP-"
+            assert batch.code_length == 10
+            assert batch.charset == "upper_numeric"
+            assert batch.code_valid_days == 7
+            assert kami.code_prefix == "VIP-"
+            assert kami.code_length == 10
+            assert kami.charset == "upper_numeric"
+            assert kami.code_valid_days == 7
+            assert kami.code_expires_at is not None
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_batch_lists_expose_admin_grade_generation_policy_and_permission_fields():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    now = get_now_naive()
+    with Session(engine) as session:
+        merchant = EndUser(username="batch-contract-merchant", password_hash=hash_password("secret123"), status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        app = App(
+            app_id="app_batch_contract",
+            name="Batch Contract",
+            app_secret="secret-batch-contract",
+            rsa_public_key="public-batch-contract",
+            rsa_private_key="private-batch-contract",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        spec = KamiSpec(
+            app_id=app.app_id,
+            spec_key="points-128-user-bind",
+            spec_name="128积分 / 用户绑定",
+            spec_group="custom",
+            kami_type="points",
+            points_amount=128,
+            points_valid_days=30,
+            machine_bind_mode="one_card_multi_device",
+            max_bind_devices=3,
+            authorization_owner="user",
+            user_bind_mode="required",
+            status=1,
+            remark="contract spec",
+        )
+        session.add_all([app, spec])
+        session.commit()
+        session.refresh(spec)
+        batch = KamiBatch(
+            spec_id=spec.id,
+            app_id=app.app_id,
+            batch_no="CONTRACT-001",
+            kami_type="points",
+            points_amount=128,
+            points_valid_days=30,
+            code_prefix="VIP-",
+            code_length=12,
+            charset="upper_numeric",
+            code_valid_days=14,
+            machine_bind_mode="one_card_multi_device",
+            max_bind_devices=3,
+            authorization_owner="user",
+            user_bind_mode="required",
+            status=1,
+            remark="contract batch",
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(batch)
+        session.add(
+            Kami(
+                spec_id=spec.id,
+                app_id=app.app_id,
+                kami_code="VIP-CONTRACT01",
+                kami_type="points",
+                status="unused",
+                batch_no=batch.batch_no,
+                points_amount=128,
+                points_valid_days=30,
+                code_prefix="VIP-",
+                code_length=12,
+                charset="upper_numeric",
+                code_valid_days=14,
+                machine_bind_mode="one_card_multi_device",
+                max_bind_devices=3,
+                authorization_owner="user",
+                user_bind_mode="required",
+                created_by_user_id=merchant.id,
+            )
+        )
+        session.add(UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=10))
+        session.commit()
+        token = routes_user.create_user_access_token(merchant)
+        spec_id = spec.id
+
+    try:
+        spec_batches = client.get(
+            f"/api/v1/merchant/kami-specs/{spec_id}/batches",
+            headers=auth_headers(token),
+        )
+        assert spec_batches.status_code == 200
+        spec_item = spec_batches.json()["data"]["items"][0]
+
+        app_batches = client.get(
+            "/api/v1/merchant/apps/app_batch_contract/batches",
+            headers=auth_headers(token),
+        )
+        assert app_batches.status_code == 200
+        app_item = app_batches.json()["items"][0]
+
+        for item in (spec_item, app_item):
+            assert item["batch_no"] == "CONTRACT-001"
+            assert item["spec_name"] == "128积分 / 用户绑定"
+            assert item["points_amount"] == 128
+            assert item["points_valid_days"] == 30
+            assert item["code_prefix"] == "VIP-"
+            assert item["code_length"] == 12
+            assert item["charset"] == "upper_numeric"
+            assert item["code_valid_days"] == 14
+            assert item["machine_bind_mode"] == "one_card_multi_device"
+            assert item["max_bind_devices"] == 3
+            assert item["authorization_owner"] == "user"
+            assert item["user_bind_mode"] == "required"
+            assert item["status"] == 1
+            assert item["remark"] == "contract batch"
+            assert item["can_manage"] is True
+            assert item["source"] == "self_owned"
+            assert item["created_at"]
+            assert item["updated_at"]
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_batch_update_append_and_delete_guard_follow_admin_grade_contract():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    now = get_now_naive()
+    with Session(engine) as session:
+        merchant = EndUser(username="batch-edit-merchant", password_hash=hash_password("secret123"), status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        app = App(
+            app_id="app_batch_edit",
+            name="Batch Edit",
+            app_secret="secret-batch-edit",
+            rsa_public_key="public-batch-edit",
+            rsa_private_key="private-batch-edit",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        spec = KamiSpec(
+            app_id=app.app_id,
+            spec_key="points-88-edit",
+            spec_name="88积分 / 编辑",
+            spec_group="custom",
+            kami_type="points",
+            points_amount=88,
+            points_valid_days=15,
+            machine_bind_mode="one_card_one_device",
+            max_bind_devices=1,
+            authorization_owner="device",
+            user_bind_mode="none",
+            status=1,
+        )
+        session.add_all([app, spec, UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=10)])
+        session.commit()
+        session.refresh(spec)
+        batch = KamiBatch(
+            spec_id=spec.id,
+            app_id=app.app_id,
+            batch_no="EDIT-001",
+            kami_type="points",
+            points_amount=88,
+            points_valid_days=15,
+            code_prefix="VIP-",
+            code_length=10,
+            charset="upper_numeric",
+            code_valid_days=7,
+            machine_bind_mode="one_card_one_device",
+            max_bind_devices=1,
+            authorization_owner="device",
+            user_bind_mode="none",
+            status=1,
+            remark="edit batch",
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(batch)
+        session.add(
+            Kami(
+                spec_id=spec.id,
+                app_id=app.app_id,
+                kami_code="VIP-EDIT0001",
+                kami_type="points",
+                status="unused",
+                batch_no=batch.batch_no,
+                points_amount=88,
+                points_valid_days=15,
+                code_prefix="VIP-",
+                code_length=10,
+                charset="upper_numeric",
+                code_valid_days=7,
+                machine_bind_mode="one_card_one_device",
+                max_bind_devices=1,
+                authorization_owner="device",
+                user_bind_mode="none",
+                created_by_user_id=merchant.id,
+            )
+        )
+        session.commit()
+        token = routes_user.create_user_access_token(merchant)
+        batch_id = batch.id
+
+    try:
+        update = client.put(
+            f"/api/v1/merchant/batches/{batch_id}",
+            headers=auth_headers(token),
+            json={
+                "batch_no": "EDIT-RENAMED",
+                "remark": "updated batch",
+                "code_valid_days": 14,
+            },
+        )
+        assert update.status_code == 200
+        update_data = update.json()["data"]
+        assert update_data["batch_no"] == "EDIT-RENAMED"
+        assert update_data["remark"] == "updated batch"
+        assert update_data["code_valid_days"] == 14
+        assert update_data["can_manage"] is True
+
+        append = client.post(
+            f"/api/v1/merchant/batches/{batch_id}/append",
+            headers=auth_headers(token),
+            json={
+                "count": 2,
+                "code_prefix": "VIP-",
+                "code_length": 10,
+                "charset": "upper_numeric",
+                "code_valid_days": 5,
+            },
+        )
+        assert append.status_code == 200
+        append_data = append.json()["data"]
+        assert append_data["count"] == 2
+        assert append_data["batch_no"] == "EDIT-RENAMED"
+
+        delete = client.delete(
+            f"/api/v1/merchant/batches/{batch_id}",
+            headers=auth_headers(token),
+        )
+        assert delete.status_code == 400
+
+        with Session(engine) as session:
+            batch_row = session.get(KamiBatch, batch_id)
+            assert batch_row.batch_no == "EDIT-RENAMED"
+            kamis = session.exec(select(Kami).where(Kami.app_id == app.app_id, Kami.batch_no == "EDIT-RENAMED")).all()
+            assert len(kamis) == 3
+            assert any(kami.code_valid_days == 5 for kami in kamis)
+            assert any(kami.code_expires_at is not None for kami in kamis)
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_merchant_can_create_self_owned_app_without_hidden_app_create_quota():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
@@ -1225,6 +1554,62 @@ def test_merchant_app_detail_and_interface_management_follow_ownership_boundarie
             headers=auth_headers(token),
         )
         assert missing_self.status_code == 404
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_app_interfaces_expose_schema_driven_config_fields():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="schema-merchant", password_hash=hash_password("secret123"), status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        app = App(
+            app_id="app_schema",
+            name="Schema App",
+            app_secret="secret-schema",
+            rsa_public_key="public-schema",
+            rsa_private_key="private-schema",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        session.add(app)
+        session.commit()
+        token = routes_user.create_user_access_token(merchant)
+
+    try:
+        response = client.get(
+            "/api/v1/merchant/apps/app_schema/interfaces",
+            headers=auth_headers(token),
+        )
+        assert response.status_code == 200
+        items = response.json()["data"]
+        by_key = {item["interface_key"]: item for item in items}
+
+        assert "points.redeem" in by_key
+        assert "sdk.verify" in by_key
+        assert "sdk.unbind" in by_key
+        assert "sdk.device_limit" in by_key
+
+        redeem_schema = by_key["points.redeem"].get("config_schema") or []
+        verify_schema = by_key["sdk.verify"].get("config_schema") or []
+        unbind_schema = by_key["sdk.unbind"].get("config_schema") or []
+
+        assert any(field["key"] == "allow_redeem" for field in redeem_schema)
+        assert any(field["key"] == "bind_user_on_redeem" for field in redeem_schema)
+        assert any(field["key"] == "signature_required" for field in verify_schema)
+        assert any(field["key"] == "ip_lock_enabled" for field in verify_schema)
+        assert any(field["key"] == "max_unbind_count" for field in unbind_schema)
+        assert by_key["points.redeem"]["config_schema"] != by_key["sdk.verify"]["config_schema"]
+        assert "quota_limit" not in by_key["points.redeem"]
+        assert "expires_at" not in by_key["points.redeem"]
     finally:
         fastapi_app.dependency_overrides.clear()
 

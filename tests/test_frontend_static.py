@@ -619,6 +619,34 @@ def test_merchant_apps_expose_self_owned_actions_and_interface_management():
     assert "justify-content: flex-start" in merchant_apps
     assert "white-space: nowrap" in merchant_apps
 
+
+def test_merchant_app_interface_config_uses_per_interface_schema_not_generic_quota_expiry():
+    merchant_apps = (PROJECT_ROOT / "admin/src/views/MerchantApps.vue").read_text(encoding="utf-8")
+
+    for token in (
+        "interfaceConfigSchemas",
+        "currentInterfaceSchema",
+        "schemaDefaults",
+        "allow_redeem",
+        "bind_user_on_redeem",
+        "signature_required",
+        "ip_lock_enabled",
+        "heartbeat_timeout_seconds",
+        "max_unbind_count",
+    ):
+        assert token in merchant_apps
+
+    assert "允许卡密充值" in merchant_apps
+    assert "签名校验" in merchant_apps
+    assert "心跳超时秒数" in merchant_apps
+    assert "最大解绑次数" in merchant_apps
+
+    dialog_source = merchant_apps.split('v-model="interfaceConfigDialogVisible"', 1)[1].split("</el-dialog>", 1)[0]
+    assert "额度限制" not in dialog_source
+    assert "过期时间" not in dialog_source
+    assert "配置 JSON" not in dialog_source
+
+
 def test_merchant_batches_exposes_spec_first_workbench_and_scoped_apis():
     merchant_api = (PROJECT_ROOT / "admin/src/api/merchant.js").read_text(encoding="utf-8")
     merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
@@ -631,6 +659,9 @@ def test_merchant_batches_exposes_spec_first_workbench_and_scoped_apis():
         "getMerchantSpecBatches",
         "getMerchantSpecKamis",
         "getMerchantBatchKamis",
+        "updateMerchantBatch",
+        "deleteMerchantBatch",
+        "appendMerchantBatchKamis",
     ):
         assert api_name in merchant_api
 
@@ -678,6 +709,58 @@ def test_merchant_batches_align_with_admin_type_and_group_vocab():
     assert "lifetime" in merchant_batches
     assert "common" in merchant_batches
     assert "custom" in merchant_batches
+
+
+def test_merchant_batches_share_admin_workbench_contract_with_permission_clipping():
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+
+    for token in (
+        "kami-batches-page",
+        "yz-admin-panel",
+        "yz-filter-strip",
+        "overview-strip",
+        "spec-section",
+        "variant-panel",
+        "batch-detail-shell",
+        "summary-metric-card",
+        "batches-panel",
+        "cards-panel",
+        "row-actions",
+        "icon-actions",
+        "count-pills",
+        "batchDialogVisible",
+        "appendDialogVisible",
+        "showAppendDialog",
+        "handleSaveBatch",
+        "handleAppendKamis",
+        "merchantBatchPermissions",
+        "canManageSelectedApp",
+    ):
+        assert token in merchant_batches
+
+    assert "同构管理员批次页，按权限隐藏/禁用" in merchant_batches
+    assert "授权应用只读" in merchant_batches
+
+
+def test_merchant_batch_generation_dialog_exposes_admin_grade_code_controls_and_quota_semantics():
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+
+    for token in (
+        "按规格生成卡密",
+        "随机长度",
+        "字符集",
+        "卡密有效期",
+        "格式预览",
+        "generateForm.code_validity_mode",
+        "generateForm.code_valid_days",
+        "generateCodePreview",
+        "单张消耗发卡额度",
+        "积分面额",
+    ):
+        assert token in merchant_batches
+
+    assert "当前额度" not in merchant_batches
+    assert "当前发卡额度" in merchant_batches
 
 
 def test_commercial_ops_stability_controls_are_exposed():

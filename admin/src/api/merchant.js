@@ -227,3 +227,26 @@ export function getMerchantBatchKamis(batchId, params) {
     params
   })
 }
+
+export function updateMerchantBatch(batchId, data) {
+  return request({
+    url: `/merchant/batches/${batchId}`,
+    method: 'put',
+    data
+  })
+}
+
+export function deleteMerchantBatch(batchId) {
+  return request({
+    url: `/merchant/batches/${batchId}`,
+    method: 'delete'
+  })
+}
+
+export function appendMerchantBatchKamis(batchId, data) {
+  return request({
+    url: `/merchant/batches/${batchId}/append`,
+    method: 'post',
+    data
+  })
+}

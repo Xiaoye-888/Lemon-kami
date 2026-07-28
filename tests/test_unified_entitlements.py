@@ -1592,6 +1592,66 @@ def test_sdk_verify_no_limit_device_authorization_links_card_device_and_admin_vi
         fastapi_app.dependency_overrides.clear()
 
 
+def test_sdk_verify_uses_forwarded_for_as_device_ip_source():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_sdk.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_sdk.get_redis] = lambda: FakeRedis()
+    fastapi_app.dependency_overrides[routes_sdk.get_decrypted_data] = lambda: {
+        "kami": "FORWARDED001",
+        "uuid": "device-forwarded-1",
+        "fingerprint": "fingerprint-forwarded-1",
+        "_app_info": {"app_id": "app_demo", "app_secret": "secret-app_demo"},
+    }
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        session.add(
+            ApiInterface(
+                name="SDK Verify",
+                interface_key="sdk.verify",
+                path="/api/v1/sdk/verify",
+                is_builtin=True,
+                status=1,
+            )
+        )
+        session.add(
+            Kami(
+                app_id="app_demo",
+                kami_code="FORWARDED001",
+                kami_type=KamiType.lifetime,
+                status=KamiStatus.unused,
+                authorization_owner=AuthorizationOwnerMode.device,
+                machine_bind_mode=MachineBindMode.one_card_one_device,
+                max_bind_devices=1,
+            )
+        )
+        session.commit()
+
+    try:
+        response = client.post(
+            "/api/v1/sdk/verify",
+            json={},
+            headers={"X-Forwarded-For": "198.51.100.77, 10.0.0.9"},
+        )
+        assert response.status_code == 200
+
+        with Session(engine) as session:
+            device = session.exec(select(Device).where(Device.uuid == "device-forwarded-1")).one()
+            binding = session.exec(
+                select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code == "FORWARDED001")
+            ).one()
+
+            assert device.last_ip == "198.51.100.77"
+            assert binding.bind_ip == "198.51.100.77"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_admin_kami_views_infer_legacy_device_binding_and_redeem_time_from_kami_row():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
