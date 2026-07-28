@@ -1323,6 +1323,18 @@ def evaluate_browser_result(result):
     action_groups = layout.get("action_groups")
     if action_groups is None:
         action_groups = layout.get("actionGroups")
+    duplicated_controls = layout.get("duplicated_controls")
+    if duplicated_controls is None:
+        duplicated_controls = layout.get("duplicatedControls")
+    header_occlusions = layout.get("header_occlusions")
+    if header_occlusions is None:
+        header_occlusions = layout.get("headerOcclusions")
+    table_column_mismatches = layout.get("table_column_mismatches")
+    if table_column_mismatches is None:
+        table_column_mismatches = layout.get("tableColumnMismatches")
+    split_workbench_detected = layout.get("split_workbench_detected")
+    if split_workbench_detected is None:
+        split_workbench_detected = layout.get("splitWorkbenchDetected")
 
     if horizontal_overflow:
         findings.append(_finding("P2", route, viewport, "Horizontal overflow detected"))
@@ -1330,6 +1342,14 @@ def evaluate_browser_result(result):
         findings.append(_finding("P2", route, viewport, "Large blank page area detected"))
     if overwide_cards:
         findings.append(_finding("P2", route, viewport, "Overwide cards detected"))
+    if duplicated_controls:
+        findings.append(_finding("P2", route, viewport, "Duplicated controls detected"))
+    if header_occlusions:
+        findings.append(_finding("P2", route, viewport, "Header/title occlusion detected"))
+    if table_column_mismatches:
+        findings.append(_finding("P2", route, viewport, "Admin/merchant table parity mismatch"))
+    if split_workbench_detected and route.startswith("/merchant/") and route.endswith("/batches"):
+        findings.append(_finding("P2", route, viewport, "Merchant batch page uses split workbench layout"))
     for group in action_groups or []:
         if not isinstance(group, dict):
             continue

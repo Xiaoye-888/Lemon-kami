@@ -877,6 +877,34 @@ def test_browser_result_evaluation_flags_layout_and_runtime_failures():
         assert findings[0]["message"] == message
 
 
+def test_browser_result_evaluation_flags_admin_merchant_parity_and_repeated_controls():
+    qa = load_qa_module()
+    result = {
+        "route": "/merchant/batches",
+        "viewport": "desktop",
+        "console_errors": [],
+        "exceptions": [],
+        "network_failures": [],
+        "bodyTextLength": 1800,
+        "layout": {
+            "horizontalOverflow": False,
+            "largeBlankRatio": 0.18,
+            "overwideCards": [],
+            "duplicatedControls": [{"label": "选择应用", "count": 2}],
+            "headerOcclusions": [{"text": "批次管理"}],
+            "tableColumnMismatches": [{"baselineRoute": "/admin/kamis/batches", "missing": ["策略数"]}],
+            "splitWorkbenchDetected": True,
+        },
+    }
+
+    messages = [finding["message"] for finding in qa.evaluate_browser_result(result)]
+
+    assert "Duplicated controls detected" in messages
+    assert "Header/title occlusion detected" in messages
+    assert "Admin/merchant table parity mismatch" in messages
+    assert "Merchant batch page uses split workbench layout" in messages
+
+
 def test_browser_result_evaluation_flags_non_2xx_document_status_without_sparse_noise():
     qa = load_qa_module()
     result = {

@@ -666,22 +666,31 @@ def test_merchant_batches_exposes_spec_first_workbench_and_scoped_apis():
         assert api_name in merchant_api
 
     for view_token in (
-        "spec-workbench",
+        "admin-isomorphic-batch-workbench",
+        "viewMode === 'list'",
+        "yz-clean-table",
+        "section-title-row",
+        "visibleCustomSpecs",
         "specRows",
-        "selectedSpec",
         "specDialogVisible",
         "generateDialogVisible",
         "batchDrawerVisible",
         "loadSpecBatches",
         "loadSpecKamis",
-        "openGenerateDialog",
+        "showGenerateForGroup",
+        "openSpecGroup",
         "openSpecDialog",
+        "resetListFilters",
     ):
         assert view_token in merchant_batches
 
+    assert "spec-workbench" not in merchant_batches
+    assert "detail-panel" not in merchant_batches
+    assert "spec-tabs" not in merchant_batches
+    assert merchant_batches.count('v-model="queryParams.app_id"') == 1
     assert "\u81ea\u5efa\u5e94\u7528" in merchant_batches
     assert "\u6388\u6743\u5e94\u7528" in merchant_batches
-    assert "\u89c4\u683c\u4fe1\u606f" in merchant_batches
+    assert "\u5e38\u7528\u89c4\u683c" in merchant_batches
 
 
 def test_merchant_batches_align_with_admin_type_and_group_vocab():
@@ -712,33 +721,57 @@ def test_merchant_batches_align_with_admin_type_and_group_vocab():
 
 
 def test_merchant_batches_share_admin_workbench_contract_with_permission_clipping():
+    admin_batches = (PROJECT_ROOT / "admin/src/views/KamiBatches.vue").read_text(encoding="utf-8")
     merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
 
     for token in (
         "kami-batches-page",
+        "admin-isomorphic-batch-workbench",
         "yz-admin-panel",
         "yz-filter-strip",
         "overview-strip",
         "spec-section",
         "variant-panel",
-        "batch-detail-shell",
         "summary-metric-card",
         "batches-panel",
         "cards-panel",
+        "yz-clean-table",
+        "section-title-row",
+        "batch-title-link",
+        "type-badge",
         "row-actions",
         "icon-actions",
         "count-pills",
+        "tooltip-action-wrap",
         "batchDialogVisible",
         "appendDialogVisible",
         "showAppendDialog",
+        "showGenerateForGroup",
+        "openSpecGroup",
         "handleSaveBatch",
         "handleAppendKamis",
         "merchantBatchPermissions",
         "canManageSelectedApp",
+        "resetListFilters",
     ):
         assert token in merchant_batches
 
-    assert "同构管理员批次页，按权限隐藏/禁用" in merchant_batches
+    for token in (
+        "yz-filter-strip",
+        "overview-strip",
+        "section-title-row",
+        "row-actions",
+        "tooltip-action-wrap",
+    ):
+        assert token in admin_batches
+
+    assert "spec-workbench" not in merchant_batches
+    assert "detail-panel" not in merchant_batches
+    assert "spec-tabs" not in merchant_batches
+    assert merchant_batches.count('v-model="queryParams.app_id"') == 1
+    assert "批次管理" in merchant_batches
+    assert "自定义规格" in merchant_batches
+    assert "自建应用可管理" in merchant_batches
     assert "授权应用只读" in merchant_batches
 
 

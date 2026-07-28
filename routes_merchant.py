@@ -295,6 +295,23 @@ def _get_visible_spec_or_404(session: Session, user: EndUser, spec_id: int) -> t
 
 def _merchant_app_payload(app: App, user: EndUser) -> dict:
     is_owned = _app_is_owned_by_user(app, user)
+    capabilities = {
+        "can_view": True,
+        "can_manage": is_owned,
+        "can_rename": is_owned,
+        "can_delete": is_owned,
+        "can_manage_interfaces": is_owned,
+        "can_manage_specs": is_owned,
+        "can_create_spec": is_owned,
+        "can_edit_spec": is_owned,
+        "can_delete_spec": is_owned,
+        "can_edit_batch": is_owned,
+        "can_append_batch": is_owned,
+        "can_delete_batch": is_owned,
+        "can_generate_batches": True,
+        "can_view_batches": True,
+        "can_view_kamis": True,
+    }
     payload = {
         "id": app.id,
         "app_id": app.app_id,
@@ -305,7 +322,9 @@ def _merchant_app_payload(app: App, user: EndUser) -> dict:
         "is_owned": is_owned,
         "source": "self_owned" if is_owned else "admin_authorized",
         "created_at": to_api_beijing_iso(app.created_at, naive="civil") if app.created_at else None,
+        "capabilities": capabilities,
     }
+    payload.update(capabilities)
     if is_owned:
         payload.update(
             {
@@ -620,6 +639,7 @@ def _merchant_spec_stats(session: Session, spec_id: int, user_id: int) -> dict:
 
 def _merchant_spec_payload(spec: KamiSpec, *, user: EndUser, is_editable: bool, stats: Optional[dict] = None) -> dict:
     payload = _spec_payload(spec)
+    batch_count = 0
     payload.update(
         {
             "is_editable": is_editable,
@@ -637,6 +657,18 @@ def _merchant_spec_payload(spec: KamiSpec, *, user: EndUser, is_editable: bool, 
     )
     if stats:
         payload.update(stats)
+    batch_count = int(payload.get("batch_count", 0) or 0)
+    capabilities = {
+        "can_view": True,
+        "can_manage": is_editable,
+        "can_generate_batch": True,
+        "can_view_batches": True,
+        "can_view_kamis": True,
+        "can_edit": is_editable,
+        "can_delete": is_editable and batch_count == 0,
+    }
+    payload["capabilities"] = capabilities
+    payload.update(capabilities)
     return payload
 
 
@@ -685,6 +717,15 @@ def _merchant_batch_payload(
         "created_at": to_api_beijing_iso(batch.created_at, naive="civil") if batch.created_at else None,
         "updated_at": to_api_beijing_iso(batch.updated_at, naive="civil") if batch.updated_at else None,
     }
+    capabilities = {
+        "can_view": True,
+        "can_manage": is_owned,
+        "can_edit": is_owned,
+        "can_append": is_owned,
+        "can_delete": is_owned and count == 0,
+    }
+    payload["capabilities"] = capabilities
+    payload.update(capabilities)
     return payload
 
 

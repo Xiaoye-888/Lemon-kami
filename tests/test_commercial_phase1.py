@@ -1373,6 +1373,8 @@ def test_merchant_self_owned_specs_are_manageable_and_authorized_specs_are_read_
         assert listed_self.status_code == 200
         assert listed_self.json()["data"]["total"] == 1
         assert listed_self.json()["data"]["items"][0]["is_editable"] is True
+        assert listed_self.json()["data"]["items"][0]["capabilities"]["can_edit"] is True
+        assert listed_self.json()["data"]["items"][0]["capabilities"]["can_delete"] is True
 
         updated = client.put(
             f"/api/v1/merchant/apps/app_spec_self/specs/{spec_id}",
@@ -1391,6 +1393,24 @@ def test_merchant_self_owned_specs_are_manageable_and_authorized_specs_are_read_
         authorized_items = authorized_list.json()["data"]["items"]
         assert [item["spec_name"] for item in authorized_items] == ["Enabled Spec"]
         assert authorized_items[0]["is_editable"] is False
+        assert authorized_items[0]["capabilities"]["can_edit"] is False
+        assert authorized_items[0]["capabilities"]["can_delete"] is False
+
+        filtered_authorized = client.get(
+            "/api/v1/merchant/apps/app_spec_authorized/specs",
+            headers=auth_headers(token),
+            params={"kami_type": "points", "keyword": "Enabled"},
+        )
+        assert filtered_authorized.status_code == 200
+        assert filtered_authorized.json()["data"]["total"] == 1
+
+        hidden_inactive = client.get(
+            "/api/v1/merchant/apps/app_spec_authorized/specs",
+            headers=auth_headers(token),
+            params={"keyword": "Disabled"},
+        )
+        assert hidden_inactive.status_code == 200
+        assert hidden_inactive.json()["data"]["total"] == 0
 
         forbidden_create = client.post(
             "/api/v1/merchant/apps/app_spec_authorized/specs",
@@ -1463,6 +1483,11 @@ def test_merchant_app_detail_and_interface_management_follow_ownership_boundarie
         assert self_data["is_owned"] is True
         assert self_data["app_secret"] == "secret-self"
         assert self_data["rsa_public_key"] == "public-self"
+        assert self_data["capabilities"]["can_rename"] is True
+        assert self_data["capabilities"]["can_delete"] is True
+        assert self_data["capabilities"]["can_manage_interfaces"] is True
+        assert self_data["capabilities"]["can_manage_specs"] is True
+        assert self_data["capabilities"]["can_generate_batches"] is True
 
         authorized_detail = client.get(
             "/api/v1/merchant/apps/app_workbench_authorized",
@@ -1474,6 +1499,11 @@ def test_merchant_app_detail_and_interface_management_follow_ownership_boundarie
         assert authorized_data["source"] == "admin_authorized"
         assert "app_secret" not in authorized_data
         assert "rsa_public_key" not in authorized_data
+        assert authorized_data["capabilities"]["can_rename"] is False
+        assert authorized_data["capabilities"]["can_delete"] is False
+        assert authorized_data["capabilities"]["can_manage_interfaces"] is False
+        assert authorized_data["capabilities"]["can_manage_specs"] is False
+        assert authorized_data["capabilities"]["can_generate_batches"] is True
 
         authorized_rename = client.put(
             "/api/v1/merchant/apps/app_workbench_authorized",

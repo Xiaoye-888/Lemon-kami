@@ -363,6 +363,74 @@ async function evaluateLayout(cdp, sessionId) {
     })
     .filter(Boolean)
     .slice(0, 8);
+  const controlCounts = new Map();
+  Array.from(document.querySelectorAll('button, .el-button, .el-select, .el-input, .el-date-editor, [role="button"]'))
+    .map((el) => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0 || rect.bottom < 0 || rect.top > viewportHeight) {
+        return null;
+      }
+      const label = (
+        el.getAttribute('aria-label') ||
+        el.getAttribute('placeholder') ||
+        el.getAttribute('title') ||
+        (el.innerText || el.textContent || '')
+      ).trim().replace(/\s+/g, ' ');
+      if (!label || label.length > 80) {
+        return null;
+      }
+      return label;
+    })
+    .filter(Boolean)
+    .forEach((label) => {
+      controlCounts.set(label, (controlCounts.get(label) || 0) + 1);
+    });
+  const duplicatedControls = Array.from(controlCounts.entries())
+    .filter(([, count]) => count >= 2)
+    .slice(0, 8)
+    .map(([label, count]) => ({ label, count }));
+  const headerBottom = (() => {
+    const fixedHeader = document.querySelector('.el-header, header, .app-header, .layout-header');
+    if (!fixedHeader) return 0;
+    const rect = fixedHeader.getBoundingClientRect();
+    return rect.bottom > 0 ? rect.bottom : 0;
+  })();
+  const headerOcclusions = Array.from(document.querySelectorAll('h1, h2, h3, .yz-panel-title, .page-title, .panel-title'))
+    .map((el) => {
+      const rect = el.getBoundingClientRect();
+      const text = (el.innerText || el.textContent || '').trim();
+      if (!text || rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top > viewportHeight) {
+        return null;
+      }
+      const probeX = Math.max(1, Math.min(rect.left + Math.min(rect.width / 2, 24), viewportWidth - 2));
+      const probeY = Math.max(1, Math.min(rect.top + 2, viewportHeight - 2));
+      const topElement = document.elementFromPoint(probeX, probeY);
+      const occluded = topElement && topElement !== el && !el.contains(topElement);
+      if (rect.top <= headerBottom + 8 && (occluded || rect.bottom <= headerBottom + 24)) {
+        return { text: text.slice(0, 80), top: Math.round(rect.top) };
+      }
+      return null;
+    })
+    .filter(Boolean)
+    .slice(0, 6);
+  const tableHeaders = Array.from(document.querySelectorAll('.yz-clean-table thead tr, .el-table__header-wrapper thead tr'))
+    .map((row) => Array.from(row.querySelectorAll('th .cell, th')).map((cell) => (cell.innerText || cell.textContent || '').trim()).filter(Boolean))
+    .filter((row) => row.length > 0);
+  const tableColumnMismatches = [];
+  if (window.location.pathname.includes('/merchant/batches')) {
+    const expectedHeaders = ['规格', '类型', '策略数', '批次', '总数/已用/剩余', '状态', '用途备注', '操作'];
+    const firstTableHeaders = tableHeaders[0] || [];
+    const missing = expectedHeaders.filter((label) => !firstTableHeaders.includes(label));
+    const extra = firstTableHeaders.filter((label) => !expectedHeaders.includes(label));
+    if (missing.length || extra.length) {
+      tableColumnMismatches.push({
+        baselineRoute: '/admin/kamis/batches',
+        missing,
+        extra,
+      });
+    }
+  }
+  const splitWorkbenchDetected = Boolean(document.querySelector('.spec-workbench, .detail-panel'));
   const visibleArea = rects.reduce((sum, { rect }) => {
     const w = Math.max(0, Math.min(rect.right, viewportWidth) - Math.max(rect.left, 0));
     const h = Math.max(0, Math.min(rect.bottom, viewportHeight) - Math.max(rect.top, 0));
@@ -376,6 +444,10 @@ async function evaluateLayout(cdp, sessionId) {
     horizontalOverflow,
     overwideCards,
     action_groups: actionGroups,
+    duplicatedControls,
+    headerOcclusions,
+    tableColumnMismatches,
+    splitWorkbenchDetected,
     largeBlankRatio: Number(largeBlankRatio.toFixed(2)),
     toastText: Array.from(document.querySelectorAll('.el-message, .el-notification')).map((el) => el.innerText.trim()).filter(Boolean),
   };

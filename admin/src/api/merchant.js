@@ -128,10 +128,11 @@ export function updateMerchantAppInterface(appId, interfaceId, data) {
   })
 }
 
-export function getMerchantAppSpecs(appId) {
+export function getMerchantAppSpecs(appId, params) {
   return request({
     url: `/merchant/apps/${appId}/specs`,
-    method: 'get'
+    method: 'get',
+    params
   })
 }
 
