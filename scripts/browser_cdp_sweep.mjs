@@ -318,6 +318,19 @@ async function evaluateLayout(cdp, sessionId) {
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
   const body = document.body;
+  const rectFor = (el) => {
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    return {
+      left: Math.round(rect.left),
+      top: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      right: Math.round(rect.right),
+      bottom: Math.round(rect.bottom),
+    };
+  };
   const elements = Array.from(document.querySelectorAll('body *'));
   const rects = elements
     .map((el) => ({ el, rect: el.getBoundingClientRect() }))
@@ -475,6 +488,31 @@ async function evaluateLayout(cdp, sessionId) {
       }
     }
   }
+  const detailSummaryCard = document.querySelector('.batch-detail-shell .summary-metric-card');
+  const detailSummaryRect = rectFor(detailSummaryCard);
+  const detailSummaryMismatches = [];
+  if (window.location.pathname.includes('/merchant/batches') && detailSummaryCard) {
+    const expectedLabels = ['总数', '未使用', '已使用'];
+    const metricItems = Array.from(detailSummaryCard.querySelectorAll('.metric-item'));
+    const labels = metricItems
+      .map((item) => {
+        const label = item.querySelector('span');
+        return (label?.innerText || label?.textContent || '').trim();
+      })
+      .filter(Boolean);
+    const missing = expectedLabels.filter((label) => !labels.includes(label));
+    const unexpected = labels.filter((label) => !expectedLabels.includes(label));
+    if (metricItems.length !== 3 || missing.length || unexpected.length) {
+      detailSummaryMismatches.push({
+        baselineRoute: '/admin/kamis/batches',
+        expected: expectedLabels,
+        labels,
+        metricCount: metricItems.length,
+        missing,
+        unexpected,
+      });
+    }
+  }
   const splitWorkbenchDetected = Boolean(document.querySelector('.spec-workbench, .detail-panel'));
   const visibleArea = rects.reduce((sum, { rect }) => {
     const w = Math.max(0, Math.min(rect.right, viewportWidth) - Math.max(rect.left, 0));
@@ -493,6 +531,8 @@ async function evaluateLayout(cdp, sessionId) {
     headerOcclusions,
     tableColumnMismatches,
     detailPanelMismatches,
+    detailSummaryMismatches,
+    detailSummaryRect,
     splitWorkbenchDetected,
     largeBlankRatio: Number(largeBlankRatio.toFixed(2)),
     toastText: Array.from(document.querySelectorAll('.el-message, .el-notification')).map((el) => el.innerText.trim()).filter(Boolean),
@@ -605,6 +645,11 @@ async function sweepPage(cdp, payload, routeCase, viewport) {
               ...(layout.detailPanelMismatches || []),
               ...(detailLayout.detailPanelMismatches || []),
             ],
+            detailSummaryMismatches: [
+              ...(layout.detailSummaryMismatches || []),
+              ...(detailLayout.detailSummaryMismatches || []),
+            ],
+            detailSummaryRect: detailLayout.detailSummaryRect || layout.detailSummaryRect || null,
           };
           const detailScreenshotName = `${routeCase.role}-${viewport.name}-${slugFor(routeCase.route)}-detail.png`;
           detailScreenshotPath = path.join(payload.artifactDir, "screenshots", detailScreenshotName);

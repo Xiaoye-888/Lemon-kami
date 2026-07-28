@@ -932,6 +932,36 @@ def test_browser_result_evaluation_flags_merchant_detail_panel_parity_mismatch()
     assert "Admin/merchant detail panel parity mismatch" in messages
 
 
+def test_browser_result_evaluation_flags_merchant_detail_summary_parity_mismatch():
+    qa = load_qa_module()
+    result = {
+        "route": "/merchant/batches",
+        "viewport": "desktop",
+        "console_errors": [],
+        "exceptions": [],
+        "network_failures": [],
+        "bodyTextLength": 2000,
+        "layout": {
+            "horizontalOverflow": False,
+            "largeBlankRatio": 0.18,
+            "overwideCards": [],
+            "detailSummaryMismatches": [
+                {
+                    "baselineRoute": "/admin/kamis/batches",
+                    "metricCount": 5,
+                    "labels": ["总数", "未使用", "已使用", "创建时间", "更新时间"],
+                    "missing": [],
+                    "unexpected": ["创建时间", "更新时间"],
+                }
+            ],
+        },
+    }
+
+    messages = [finding["message"] for finding in qa.evaluate_browser_result(result)]
+
+    assert "Admin/merchant detail summary parity mismatch" in messages
+
+
 def test_browser_result_evaluation_flags_non_2xx_document_status_without_sparse_noise():
     qa = load_qa_module()
     result = {
@@ -996,6 +1026,14 @@ def test_browser_cdp_helper_kills_profile_processes_before_removing_profile_dir(
     assert "await cleanupProfileDir(profileDir);" in helper
 
 
+def test_browser_cdp_helper_exports_detail_summary_rect_and_mismatch_checks():
+    helper = (ROOT / "scripts" / "browser_cdp_sweep.mjs").read_text(encoding="utf-8")
+
+    assert "detailSummaryMismatches" in helper
+    assert "detailSummaryRect" in helper
+    assert ".batch-detail-shell .summary-metric-card" in helper
+
+
 def test_browser_result_evaluation_accepts_cdp_layout_keys():
     qa = load_qa_module()
     result = {
@@ -1034,6 +1072,22 @@ def _draw_action_group_screenshot(path, button_shift=0):
     image.save(path)
 
 
+def _draw_detail_summary_screenshot(path):
+    image = Image.new("RGBA", (520, 180), (248, 250, 252, 255))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((18, 18, 502, 162), radius=12, fill=(255, 255, 255, 255), outline=(219, 234, 254, 255))
+    draw.rectangle((34, 38, 186, 134), fill=(248, 250, 252, 255), outline=(219, 234, 254, 255))
+    draw.rectangle((204, 38, 356, 134), fill=(248, 250, 252, 255), outline=(219, 234, 254, 255))
+    draw.rectangle((374, 38, 486, 134), fill=(248, 250, 252, 255), outline=(219, 234, 254, 255))
+    draw.text((52, 58), "3", fill=(37, 99, 235, 255))
+    draw.text((222, 58), "0", fill=(5, 150, 105, 255))
+    draw.text((392, 58), "3", fill=(245, 158, 11, 255))
+    draw.text((44, 102), "total", fill=(71, 85, 105, 255))
+    draw.text((214, 102), "unused", fill=(71, 85, 105, 255))
+    draw.text((384, 102), "used", fill=(71, 85, 105, 255))
+    image.save(path)
+
+
 def test_visual_regression_accepts_matching_action_group_crop(tmp_path, monkeypatch):
     qa = load_qa_module()
     baseline_dir = tmp_path / "baselines"
@@ -1064,6 +1118,38 @@ def test_visual_regression_accepts_matching_action_group_crop(tmp_path, monkeypa
     assert (tmp_path / "visual-regression" / "merchant-apps-row-actions.desktop.actual.png").exists()
     assert results["comparisons"][0]["mean_diff"] == 0
     assert results["comparisons"][0]["changed_ratio"] == 0
+
+
+def test_visual_regression_accepts_matching_detail_summary_crop(tmp_path, monkeypatch):
+    qa = load_qa_module()
+    baseline_dir = tmp_path / "baselines"
+    baseline_dir.mkdir()
+    monkeypatch.setattr(qa, "VISUAL_BASELINE_DIR", baseline_dir)
+
+    screenshot_path = tmp_path / "merchant-batches-detail.png"
+    _draw_detail_summary_screenshot(screenshot_path)
+    detail_rect = {"left": 18, "top": 18, "width": 484, "height": 144}
+    baseline_crop, _ = qa._crop_visual_target(screenshot_path, detail_rect, 12)
+    baseline_crop.save(baseline_dir / "merchant-batches-detail-summary.desktop.png")
+
+    results = qa.run_visual_regression(
+        [
+            {
+                "role": "merchant",
+                "route": "/merchant/batches",
+                "viewport": "desktop",
+                "detailScreenshot": str(screenshot_path),
+                "layout": {"detailSummaryRect": detail_rect},
+            }
+        ],
+        tmp_path,
+    )
+
+    assert results["checks"] == 1
+    assert results["findings"] == []
+    assert (tmp_path / "visual-regression" / "merchant-batches-detail-summary.desktop.actual.png").exists()
+    assert results["comparisons"][0]["crop_kind"] == "rect"
+    assert results["comparisons"][0]["screenshot_key"] == "detailScreenshot"
 
 
 def test_visual_regression_flags_changed_action_group_crop(tmp_path, monkeypatch):

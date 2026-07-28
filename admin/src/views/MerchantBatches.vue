@@ -382,18 +382,6 @@
             <strong class="metric-value is-amber">{{ usedCount(selectedSpec) }}</strong>
             <span>已使用</span>
           </div>
-          <div class="metric-item">
-            <strong class="metric-value is-time">
-              {{ selectedSpec?.created_at ? formatBeijingTime(selectedSpec.created_at) : '-' }}
-            </strong>
-            <span>创建时间</span>
-          </div>
-          <div class="metric-item">
-            <strong class="metric-value is-time">
-              {{ selectedSpec?.updated_at ? formatBeijingTime(selectedSpec.updated_at) : '-' }}
-            </strong>
-            <span>更新时间</span>
-          </div>
         </section>
       </div>
 
@@ -2210,47 +2198,44 @@ onMounted(loadAll)
 }
 
 .summary-metric-card {
-  padding: 14px 16px;
+  min-height: 150px;
+  padding: 30px 34px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
+  align-items: center;
+  text-align: center;
   gap: 10px;
 }
 
 .summary-metric-card .metric-item {
-  padding: 10px 12px;
-  border: 1px solid #dbeafe;
-  border-radius: 8px;
-  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #475569;
 }
 
 .metric-item span {
   display: block;
-  color: #64748b;
-  font-size: 13px;
 }
 
 .metric-value {
   display: block;
-  margin-bottom: 4px;
-  font-size: 28px;
+  font-size: 34px;
+  font-weight: 800;
+  line-height: 1;
   color: #0f172a;
 }
 
 .metric-value.is-primary {
-  color: #1d4ed8;
+  color: #2563eb;
 }
 
 .metric-value.is-green {
-  color: #16a34a;
+  color: #059669;
 }
 
 .metric-value.is-amber {
-  color: #d97706;
-}
-
-.metric-value.is-time {
-  font-size: 16px;
-  line-height: 1.25;
+  color: #f59e0b;
 }
 
 .spec-section {
@@ -2432,11 +2417,14 @@ onMounted(loadAll)
 
 .batch-detail-shell {
   display: grid;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  gap: 24px;
+  margin-bottom: 24px;
 }
 
 .batch-overview-card {
-  padding: 18px 22px;
+  min-height: 150px;
+  padding: 30px 36px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2444,9 +2432,10 @@ onMounted(loadAll)
 }
 
 .batch-overview-main h2 {
-  margin: 0;
+  margin: 8px 0 14px;
   color: #0f172a;
-  font-size: 28px;
+  font-size: 30px;
+  line-height: 1.2;
 }
 
 .hero-tags {
@@ -2475,7 +2464,7 @@ onMounted(loadAll)
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .summary-metric-card {
+  .batch-detail-shell {
     grid-template-columns: 1fr;
   }
 }
@@ -2498,7 +2487,8 @@ onMounted(loadAll)
   }
 
   .summary-metric-card {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding: 24px 16px;
   }
 
   .issue-preview {

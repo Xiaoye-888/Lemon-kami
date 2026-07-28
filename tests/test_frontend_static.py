@@ -448,8 +448,6 @@ def test_merchant_batches_exposes_grouped_specs_and_beijing_time_rendering():
         "getAuthorizationOwnerText",
         "getUserBindModeText",
         "getValidityText",
-        "formatBeijingTime(selectedSpec.created_at)",
-        "formatBeijingTime(selectedSpec.updated_at)",
         "formatBeijingTime(row.created_at)",
     ):
         assert token in source
@@ -833,6 +831,45 @@ def test_merchant_batch_spec_detail_matches_admin_card_panel_contract():
     assert "删除选中" in merchant_batches
     assert "发卡用户无批量删除卡密权限" in merchant_batches
     assert "追加卡密" in merchant_batches
+
+
+def test_merchant_batch_spec_detail_top_summary_matches_admin_three_card_layout():
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+
+    detail_shell = merchant_batches.split('<div class="batch-detail-shell">', 1)[1].split(
+        '<section class="yz-admin-panel batches-panel">',
+        1,
+    )[0]
+    summary_block = detail_shell.split('<section class="summary-metric-card">', 1)[1].split("</section>", 1)[0]
+
+    assert summary_block.count('<div class="metric-item">') == 3
+    for token in (
+        "selectedSpec?.total_count || 0",
+        "selectedSpec?.unused_count || 0",
+        "usedCount(selectedSpec)",
+    ):
+        assert token in summary_block
+
+    for token in (
+        "grid-template-columns: minmax(0, 1fr) 420px;",
+        "grid-template-columns: repeat(3, 1fr);",
+        "text-align: center;",
+    ):
+        assert token in merchant_batches
+
+    for forbidden in (
+        "selectedSpec?.created_at",
+        "selectedSpec?.updated_at",
+        "创建时间",
+        "更新时间",
+        "is-time",
+    ):
+        assert forbidden not in summary_block
+
+    for forbidden in (
+        "grid-template-columns: repeat(auto-fit",
+    ):
+        assert forbidden not in merchant_batches
 
 
 def test_merchant_batch_generation_dialog_exposes_admin_grade_code_controls_and_quota_semantics():

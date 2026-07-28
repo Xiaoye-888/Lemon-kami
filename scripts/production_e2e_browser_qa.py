@@ -57,7 +57,20 @@ VISUAL_REGRESSION_TARGETS = [
         "crop_padding": 12,
         "max_mean_diff": 5.0,
         "max_changed_ratio": 0.01,
-    }
+    },
+    {
+        "role": "merchant",
+        "route": "/merchant/batches",
+        "viewport": "desktop",
+        "label": "merchant-batches-detail-summary",
+        "baseline": "merchant-batches-detail-summary.desktop.png",
+        "screenshot_key": "detailScreenshot",
+        "crop_kind": "rect",
+        "crop_key": "detailSummaryRect",
+        "crop_padding": 12,
+        "max_mean_diff": 12.0,
+        "max_changed_ratio": 0.08,
+    },
 ]
 RUN_PREFIX_RE = re.compile(r"^E2E_UI_QA_\d{8}_\d{6}_[A-Za-z0-9]{6,16}_$")
 FORBIDDEN_REPORT_PATTERNS = tuple(
@@ -1337,6 +1350,9 @@ def evaluate_browser_result(result):
     detail_panel_mismatches = layout.get("detail_panel_mismatches")
     if detail_panel_mismatches is None:
         detail_panel_mismatches = layout.get("detailPanelMismatches")
+    detail_summary_mismatches = layout.get("detail_summary_mismatches")
+    if detail_summary_mismatches is None:
+        detail_summary_mismatches = layout.get("detailSummaryMismatches")
     split_workbench_detected = layout.get("split_workbench_detected")
     if split_workbench_detected is None:
         split_workbench_detected = layout.get("splitWorkbenchDetected")
@@ -1355,6 +1371,8 @@ def evaluate_browser_result(result):
         findings.append(_finding("P2", route, viewport, "Admin/merchant table parity mismatch"))
     if detail_panel_mismatches and route.startswith("/merchant/") and route.endswith("/batches"):
         findings.append(_finding("P2", route, viewport, "Admin/merchant detail panel parity mismatch"))
+    if detail_summary_mismatches and route.startswith("/merchant/") and route.endswith("/batches"):
+        findings.append(_finding("P2", route, viewport, "Admin/merchant detail summary parity mismatch"))
     if split_workbench_detected and route.startswith("/merchant/") and route.endswith("/batches"):
         findings.append(_finding("P2", route, viewport, "Merchant batch page uses split workbench layout"))
     for group in action_groups or []:
@@ -1481,20 +1499,29 @@ def run_visual_regression(browser_results, artifact_dir):
         if not result:
             continue
         layout = result.get("layout") or {}
-        group = _select_visual_action_group(layout)
+        crop_kind = target.get("crop_kind", "action_group")
+        if crop_kind == "rect":
+            group = layout.get(target.get("crop_key", ""))
+            missing_crop_message = "Visual regression target layout region is missing"
+        else:
+            group = _select_visual_action_group(layout)
+            missing_crop_message = "Visual regression target action group is missing"
         comparison = {
             "role": target["role"],
             "route": target["route"],
             "viewport": target["viewport"],
             "label": target["label"],
             "baseline": str(VISUAL_BASELINE_DIR / target["baseline"]),
+            "crop_kind": crop_kind,
         }
         comparisons.append(comparison)
         if not group:
-            findings.append(_visual_finding(target, "Visual regression target action group is missing"))
+            findings.append(_visual_finding(target, missing_crop_message))
             continue
 
-        screenshot_path = result.get("screenshot")
+        screenshot_key = target.get("screenshot_key", "screenshot")
+        comparison["screenshot_key"] = screenshot_key
+        screenshot_path = result.get(screenshot_key)
         if not screenshot_path or not Path(screenshot_path).exists():
             findings.append(_visual_finding(target, "Visual regression screenshot is missing"))
             continue
@@ -1647,10 +1674,12 @@ PRODUCT_BROWSER_MESSAGES = {
     "Large blank page area detected",
     "Overwide cards detected",
     "Action button group is overly dispersed",
+    "Admin/merchant detail summary parity mismatch",
     "Visual regression baseline is missing",
     "Visual regression check failed",
     "Visual regression screenshot is missing",
     "Visual regression target action group is missing",
+    "Visual regression target layout region is missing",
     "Visual regression diff exceeded threshold",
 }
 
@@ -1661,10 +1690,12 @@ ENGINEERING_BROWSER_MESSAGES = {
     "HTTP errors detected",
     "Route document returned bad status",
     "Action button group is overly dispersed",
+    "Admin/merchant detail summary parity mismatch",
     "Visual regression baseline is missing",
     "Visual regression check failed",
     "Visual regression screenshot is missing",
     "Visual regression target action group is missing",
+    "Visual regression target layout region is missing",
     "Visual regression diff exceeded threshold",
 }
 
