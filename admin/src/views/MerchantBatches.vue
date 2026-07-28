@@ -1565,9 +1565,9 @@ function buildIssuePayload() {
 
 async function loadApps() {
   const res = await getMerchantApps()
-  apps.value = res.data || []
+  apps.value = responseItems(res)
   const routeAppId = route.query.app_id ? String(route.query.app_id) : ''
-  if (routeAppId && apps.value.some((app) => app.app_id === routeAppId)) {
+  if (routeAppId) {
     queryParams.app_id = routeAppId
   } else if (!queryParams.app_id && apps.value.length) {
     queryParams.app_id = apps.value[0].app_id
@@ -1685,11 +1685,29 @@ async function loadIssuePreview() {
   }
 }
 
+async function loadQuotaSafely() {
+  try {
+    await loadQuota()
+  } catch (error) {
+    issueCardQuota.value = {
+      balance: 0,
+      warning_threshold: 0,
+      low_balance_warning: false
+    }
+  }
+}
+
 async function loadAll() {
   loading.value = true
   try {
-    await loadQuota()
-    await loadApps()
+    const routeAppId = route.query.app_id ? String(route.query.app_id) : ''
+    if (routeAppId) {
+      queryParams.app_id = routeAppId
+    }
+    await Promise.all([loadQuotaSafely(), loadApps()])
+    if (routeAppId) {
+      queryParams.app_id = routeAppId
+    }
     await loadSpecs()
     await hydrateRouteDetail()
   } finally {
@@ -2137,12 +2155,24 @@ onMounted(loadAll)
 .section-actions,
 .hero-actions,
 .hero-tags,
-.row-actions,
 .icon-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.row-actions :deep(.el-button) {
+  margin-left: 0;
+  border-radius: 8px;
+  font-weight: 600;
 }
 
 .yz-filter-strip {

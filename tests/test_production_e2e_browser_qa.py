@@ -241,6 +241,22 @@ def test_config_from_env_builds_config_without_printing_values(monkeypatch, caps
     assert captured.err == ""
 
 
+def test_config_from_env_supports_separate_api_and_browser_base_urls(monkeypatch):
+    qa = load_qa_module()
+    monkeypatch.setenv("LEMON_QA_BASE_URL", "https://qa.example.invalid")
+    monkeypatch.setenv("LEMON_QA_API_BASE_URL", "https://api.qa.example.invalid")
+    monkeypatch.setenv("LEMON_QA_BROWSER_BASE_URL", "http://127.0.0.1:3001")
+    monkeypatch.setenv("LEMON_QA_ADMIN_USERNAME", "fake-admin")
+    monkeypatch.setenv("LEMON_QA_ADMIN_PASSWORD", "fake-password")
+    monkeypatch.setenv("LEMON_QA_CONFIRM_PRODUCTION", qa.PRODUCTION_CONFIRMATION)
+
+    config = qa.QAConfig.from_env()
+
+    assert config.base_url == "https://qa.example.invalid"
+    assert config.api_base_url == "https://api.qa.example.invalid"
+    assert config.browser_base_url == "http://127.0.0.1:3001"
+
+
 def test_auth_session_browser_storage_uses_frontend_keys():
     qa = load_qa_module()
     session = qa.AuthSession(
@@ -862,6 +878,7 @@ def test_browser_result_evaluation_flags_layout_and_runtime_failures():
         ({"layout": {"large_blank_ratio": 0.72}}, "P2", "Large blank page area detected"),
         ({"layout": {"overwide_cards": [".card"]}}, "P2", "Overwide cards detected"),
         ({"layout": {"action_groups": [{"button_count": 3, "max_gap": 84, "spread_ratio": 1.8}]}}, "P2", "Action button group is overly dispersed"),
+        ({"layout": {"action_groups": [{"button_count": 4, "wrapped": True, "max_top_delta": 18}]}}, "P2", "Action button group wraps across rows"),
     ]
 
     for patch, severity, message in cases:
@@ -1017,6 +1034,29 @@ def test_run_browser_sweep_timeout_raises_sanitized_error(monkeypatch, tmp_path)
         raise AssertionError("browser sweep timeout did not raise QASafetyError")
 
 
+def test_run_browser_sweep_passes_merchant_batch_app_context(monkeypatch, tmp_path):
+    qa = load_qa_module()
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["payload"] = qa.json.loads(kwargs["input"])
+        return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(qa.subprocess, "run", fake_run)
+
+    result = qa.run_browser_sweep(
+        "https://example.invalid",
+        tmp_path,
+        {"token": "admin-secret"},
+        {"token": "merchant-secret"},
+        context={"merchantBatchAppId": "app_self"},
+    )
+
+    assert result == []
+    assert captured["payload"]["context"]["merchantBatchAppId"] == "app_self"
+    assert captured["payload"]["routes"]["merchant"].count("/merchant/batches") == 1
+
+
 def test_browser_cdp_helper_kills_profile_processes_before_removing_profile_dir():
     helper = (ROOT / "scripts" / "browser_cdp_sweep.mjs").read_text(encoding="utf-8")
 
@@ -1029,8 +1069,27 @@ def test_browser_cdp_helper_kills_profile_processes_before_removing_profile_dir(
 def test_browser_cdp_helper_exports_detail_summary_rect_and_mismatch_checks():
     helper = (ROOT / "scripts" / "browser_cdp_sweep.mjs").read_text(encoding="utf-8")
 
+    assert "waitForRouteContent" in helper
+    assert "sweepPageWithRetry" in helper
+    assert "hasRetryableNetworkFailure" in helper
+    assert "retry_attempts" in helper
+    assert ".merchant-apps .row-actions" in helper
+    assert "waiting for merchant apps table content" in helper
+    assert ".el-loading-mask" in helper
+    assert "waiting for batch table content" in helper
     assert "detailSummaryMismatches" in helper
     assert "detailSummaryRect" in helper
+    assert "max_top_delta" in helper
+    assert "wrapped" in helper
+    assert "merchantBatchSpecRowActionsRect" in helper
+    assert "merchantBatchDiagnostics" in helper
+    assert "routeWithContext" in helper
+    assert "merchantBatchAppId" in helper
+    assert "encodeURIComponent(payload.context.merchantBatchAppId)" in helper
+    assert "const hasMerchantBatchAppContext" in helper
+    assert "const hasUnboundMerchantAppSelection" in helper
+    assert "hasStableEmpty = !hasMerchantBatchAppContext" in helper
+    assert "waiting for merchant batch app selection" in helper
     assert ".batch-detail-shell .summary-metric-card" in helper
 
 
@@ -1059,6 +1118,49 @@ def test_browser_result_evaluation_accepts_cdp_layout_keys():
     ]
 
 
+def test_visual_regression_targets_cover_merchant_batch_row_actions():
+    qa = load_qa_module()
+
+    target = next(
+        target for target in qa.VISUAL_REGRESSION_TARGETS if target["label"] == "merchant-batches-spec-row-actions"
+    )
+
+    assert target["role"] == "merchant"
+    assert target["route"] == "/merchant/batches"
+    assert target["viewport"] == "desktop"
+    assert target["screenshot_key"] == "screenshot"
+    assert target["crop_kind"] == "rect"
+    assert target["crop_key"] == "merchantBatchSpecRowActionsRect"
+    assert target["baseline"] == "merchant-batches-spec-row-actions.desktop.png"
+
+
+def test_blocking_visual_findings_include_missing_targets_and_diffs():
+    qa = load_qa_module()
+    findings = [
+        {"message": "Visual regression target layout region is missing"},
+        {"message": "Visual regression diff exceeded threshold"},
+        {"message": "Header/title occlusion detected"},
+    ]
+
+    blocking = qa._blocking_visual_findings(findings)
+
+    assert [finding["message"] for finding in blocking] == [
+        "Visual regression target layout region is missing",
+        "Visual regression diff exceeded threshold",
+    ]
+
+
+def test_blocking_browser_findings_include_p0_and_p1_only():
+    qa = load_qa_module()
+    findings = [
+        {"severity": "P0", "message": "Runtime exceptions detected"},
+        {"severity": "P1", "message": "Network failures detected"},
+        {"severity": "P2", "message": "Header/title occlusion detected"},
+    ]
+
+    assert qa._blocking_browser_findings(findings) == findings[:2]
+
+
 def _draw_action_group_screenshot(path, button_shift=0):
     image = Image.new("RGBA", (220, 100), (248, 250, 252, 255))
     draw = ImageDraw.Draw(image)
@@ -1069,6 +1171,20 @@ def _draw_action_group_screenshot(path, button_shift=0):
         (150 + button_shift, 188 + button_shift, (239, 68, 68, 255)),
     ):
         draw.rounded_rectangle((left, 38, right, 60), radius=4, fill=color)
+    image.save(path)
+
+
+def _draw_batch_row_actions_screenshot(path, button_shift=0):
+    image = Image.new("RGBA", (420, 120), (248, 250, 252, 255))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((18, 20, 402, 92), radius=12, fill=(255, 255, 255, 255), outline=(219, 234, 254, 255))
+    for left, right, color in (
+        (32 + button_shift, 90 + button_shift, (37, 99, 235, 255)),
+        (104 + button_shift, 162 + button_shift, (6, 182, 212, 255)),
+        (176 + button_shift, 234 + button_shift, (148, 163, 184, 255)),
+        (248 + button_shift, 306 + button_shift, (239, 68, 68, 255)),
+    ):
+        draw.rounded_rectangle((left, 38, right, 62), radius=5, fill=color)
     image.save(path)
 
 
@@ -1125,6 +1241,11 @@ def test_visual_regression_accepts_matching_detail_summary_crop(tmp_path, monkey
     baseline_dir = tmp_path / "baselines"
     baseline_dir.mkdir()
     monkeypatch.setattr(qa, "VISUAL_BASELINE_DIR", baseline_dir)
+    monkeypatch.setattr(
+        qa,
+        "VISUAL_REGRESSION_TARGETS",
+        [target for target in qa.VISUAL_REGRESSION_TARGETS if target["label"] == "merchant-batches-detail-summary"],
+    )
 
     screenshot_path = tmp_path / "merchant-batches-detail.png"
     _draw_detail_summary_screenshot(screenshot_path)
@@ -1150,6 +1271,82 @@ def test_visual_regression_accepts_matching_detail_summary_crop(tmp_path, monkey
     assert (tmp_path / "visual-regression" / "merchant-batches-detail-summary.desktop.actual.png").exists()
     assert results["comparisons"][0]["crop_kind"] == "rect"
     assert results["comparisons"][0]["screenshot_key"] == "detailScreenshot"
+
+
+def test_visual_regression_accepts_matching_merchant_batch_row_actions_crop(tmp_path, monkeypatch):
+    qa = load_qa_module()
+    baseline_dir = tmp_path / "baselines"
+    baseline_dir.mkdir()
+    monkeypatch.setattr(qa, "VISUAL_BASELINE_DIR", baseline_dir)
+    monkeypatch.setattr(
+        qa,
+        "VISUAL_REGRESSION_TARGETS",
+        [target for target in qa.VISUAL_REGRESSION_TARGETS if target["label"] == "merchant-batches-spec-row-actions"],
+    )
+
+    screenshot_path = tmp_path / "merchant-batches-detail.png"
+    _draw_batch_row_actions_screenshot(screenshot_path)
+    row_rect = {"left": 18, "top": 20, "width": 384, "height": 72}
+    baseline_crop, _ = qa._crop_visual_target(screenshot_path, row_rect, 12)
+    baseline_crop.save(baseline_dir / "merchant-batches-spec-row-actions.desktop.png")
+
+    results = qa.run_visual_regression(
+        [
+            {
+                "role": "merchant",
+                "route": "/merchant/batches",
+                "viewport": "desktop",
+                "screenshot": str(screenshot_path),
+                "layout": {"merchantBatchSpecRowActionsRect": row_rect},
+            }
+        ],
+        tmp_path,
+    )
+
+    assert results["checks"] == 1
+    assert results["findings"] == []
+    assert (tmp_path / "visual-regression" / "merchant-batches-spec-row-actions.desktop.actual.png").exists()
+    assert results["comparisons"][0]["crop_kind"] == "rect"
+    assert results["comparisons"][0]["screenshot_key"] == "screenshot"
+
+
+def test_visual_regression_flags_changed_merchant_batch_row_actions_crop(tmp_path, monkeypatch):
+    qa = load_qa_module()
+    baseline_dir = tmp_path / "baselines"
+    baseline_dir.mkdir()
+    monkeypatch.setattr(qa, "VISUAL_BASELINE_DIR", baseline_dir)
+    monkeypatch.setattr(
+        qa,
+        "VISUAL_REGRESSION_TARGETS",
+        [target for target in qa.VISUAL_REGRESSION_TARGETS if target["label"] == "merchant-batches-spec-row-actions"],
+    )
+
+    baseline_source = tmp_path / "baseline-source.png"
+    screenshot_path = tmp_path / "merchant-batches-detail.png"
+    row_rect = {"left": 18, "top": 20, "width": 384, "height": 72}
+    _draw_batch_row_actions_screenshot(baseline_source)
+    _draw_batch_row_actions_screenshot(screenshot_path, button_shift=24)
+    baseline_crop, _ = qa._crop_visual_target(baseline_source, row_rect, 12)
+    baseline_crop.save(baseline_dir / "merchant-batches-spec-row-actions.desktop.png")
+
+    results = qa.run_visual_regression(
+        [
+            {
+                "role": "merchant",
+                "route": "/merchant/batches",
+                "viewport": "desktop",
+                "screenshot": str(screenshot_path),
+                "layout": {"merchantBatchSpecRowActionsRect": row_rect},
+            }
+        ],
+        tmp_path,
+    )
+
+    assert [finding["message"] for finding in results["findings"]] == [
+        "Visual regression diff exceeded threshold"
+    ]
+    assert results["findings"][0]["role"] == "merchant"
+    assert (tmp_path / "visual-regression" / "merchant-batches-spec-row-actions.desktop.diff.png").exists()
 
 
 def test_visual_regression_flags_changed_action_group_crop(tmp_path, monkeypatch):
@@ -1978,6 +2175,32 @@ def test_self_owned_app_spec_and_issue_flow_never_calls_merchant_spec_create():
     assert issue_payload["points_amount"] == 10
 
 
+def test_merchant_ui_seed_spec_is_persisted_for_browser_batch_page():
+    qa = load_qa_module()
+    prefix = "E2E_UI_QA_20260726_030000_abc123_"
+    merchant = qa.MerchantContext(
+        prefix=prefix,
+        base_url="https://qa.example.invalid",
+        username="merchant",
+        user_id=42,
+        auth=qa.AuthSession("merchant-token", "merchant", {"id": 42}),
+        client=FakeAPIClient([{"success": True, "data": {"id": 55, "kami_type": "points"}}]),
+    )
+
+    spec = qa.create_merchant_ui_seed_spec(merchant, "app_self", prefix)
+
+    assert spec.spec_id == 55
+    assert spec.source == "self_owned_ui_seed"
+    assert spec.issue_payload == {"spec_id": 55}
+    call = merchant.client.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == "/api/v1/merchant/apps/app_self/specs"
+    assert call["kwargs"]["json"]["spec_group"] == "custom"
+    assert call["kwargs"]["json"]["kami_type"] == "points"
+    assert call["kwargs"]["json"]["points_amount"] == 10
+    assert call["kwargs"]["json"]["remark"].startswith(prefix)
+
+
 def test_issue_batch_failure_reports_safe_preview_context():
     qa = load_qa_module()
     prefix = "E2E_UI_QA_20260726_030000_abc123_"
@@ -2234,6 +2457,11 @@ def test_run_production_flow_preserves_completed_sections_when_browser_sweep_fai
         },
         source="admin_authorized",
     )
+    ui_seed_spec = qa.SpecDescriptor(
+        spec_id=55,
+        issue_payload={"spec_id": 55},
+        source="self_owned_ui_seed",
+    )
     self_batch = qa.BatchResult(
         "app_self",
         7,
@@ -2252,12 +2480,17 @@ def test_run_production_flow_preserves_completed_sections_when_browser_sweep_fai
         {"total_cost": 2},
         {},
     )
-    balances = iter([100, 10010, 10010, 10008, 10008, 10006])
+    balances = iter([100, 10010, 10010, 10008, 10008, 10006, 10006, 10004])
     issued = []
+    browser_contexts = []
 
-    def fake_issue_batch(_merchant, app_id, spec, _prefix):
+    def fake_issue_batch(_merchant, app_id, spec, _prefix, count=2):
         issued.append((app_id, spec.source))
         return self_batch if app_id == "app_self" else authorized_batch
+
+    def fake_run_browser_sweep(_base_url, _artifact_dir, _admin_storage, _merchant_storage, context=None):
+        browser_contexts.append(context)
+        raise qa.QASafetyError("Browser failed token=hidden")
 
     monkeypatch.setattr(qa, "build_run_prefix", lambda: prefix)
     monkeypatch.setattr(qa, "_artifact_dir_for_run", lambda _run_id: tmp_path)
@@ -2271,6 +2504,7 @@ def test_run_production_flow_preserves_completed_sections_when_browser_sweep_fai
     monkeypatch.setattr(qa, "approve_recharge_order", lambda *_args: {"credit_quota": 9910})
     monkeypatch.setattr(qa, "create_self_app", lambda *_args: self_app)
     monkeypatch.setattr(qa, "create_self_spec", lambda *_args: self_spec)
+    monkeypatch.setattr(qa, "create_merchant_ui_seed_spec", lambda *_args: ui_seed_spec)
     monkeypatch.setattr(qa, "issue_batch", fake_issue_batch)
     monkeypatch.setattr(
         qa,
@@ -2289,7 +2523,7 @@ def test_run_production_flow_preserves_completed_sections_when_browser_sweep_fai
     monkeypatch.setattr(qa, "create_admin_app_and_spec", lambda *_args: (admin_app, admin_spec))
     monkeypatch.setattr(qa, "authorize_app_to_merchant", lambda *_args: {"id": 88})
     monkeypatch.setattr(qa, "verify_permission_boundaries", lambda *_args: {"checked": 2, "results": []})
-    monkeypatch.setattr(qa, "run_browser_sweep", lambda *_args: (_ for _ in ()).throw(qa.QASafetyError("Browser failed token=hidden")))
+    monkeypatch.setattr(qa, "run_browser_sweep", fake_run_browser_sweep)
     monkeypatch.setattr(qa, "restore_payment_snapshot", lambda *_args: None)
     monkeypatch.setattr(qa, "cleanup_run", lambda *_args: {"merchant_user_ids": [42], "admin_app_ids": ["app_admin"]})
 
@@ -2308,7 +2542,12 @@ def test_run_production_flow_preserves_completed_sections_when_browser_sweep_fai
         raise AssertionError("browser sweep failure did not fail production flow")
 
     content = (tmp_path / "production-e2e-browser-report.md").read_text(encoding="utf-8")
-    assert issued == [("app_self", "self_owned_direct_fields"), ("app_admin", "admin_authorized")]
+    assert issued == [
+        ("app_self", "self_owned_direct_fields"),
+        ("app_self", "self_owned_ui_seed"),
+        ("app_admin", "admin_authorized"),
+    ]
+    assert browser_contexts == [{"merchantBatchAppId": "app_self"}]
     assert "## Deployment And Health" in content
     assert "## Browser Sweep" not in content
     assert "## Recharge Flow" in content
@@ -2316,6 +2555,8 @@ def test_run_production_flow_preserves_completed_sections_when_browser_sweep_fai
     assert "## Self Owned Flow" in content
     assert "self_owned_direct_fields" in content
     assert "KAM***567" in content
+    assert "## Browser UI Seed Flow" in content
+    assert "self_owned_ui_seed" in content
     assert "## Authorized Flow" in content
     assert "admin_authorized" in content
     assert "KAM***543" in content

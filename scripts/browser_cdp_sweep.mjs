@@ -244,6 +244,19 @@ function joinUrl(baseUrl, route) {
   return new URL(route, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
 }
 
+function routeWithContext(routeCase, payload) {
+  let route = routeCase.route;
+  if (
+    routeCase.role === "merchant" &&
+    routeCase.route === "/merchant/batches" &&
+    payload.context?.merchantBatchAppId
+  ) {
+    const separator = route.includes("?") ? "&" : "?";
+    route = `${route}${separator}app_id=${encodeURIComponent(payload.context.merchantBatchAppId)}`;
+  }
+  return route;
+}
+
 function slugFor(route) {
   const slug = route.replace(/^\/$/, "root").replace(/^\//, "").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return slug || "root";
@@ -313,6 +326,65 @@ async function waitForLoad(cdp, sessionId, routeUrl, pageState) {
   await sleep(900);
 }
 
+async function waitForRouteContent(cdp, sessionId, route) {
+  if (!route.endsWith("/batches") && route !== "/merchant/apps") {
+    return { ready: true, skipped: true };
+  }
+
+  const deadline = Date.now() + 15_000;
+  let lastState = { ready: false, reason: "not checked" };
+  while (Date.now() < deadline) {
+    const routeLiteral = JSON.stringify(route);
+    const expression = `(() => {
+  const route = ${routeLiteral};
+  const viewportHeight = window.innerHeight;
+  const visible = (el) => {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.top <= viewportHeight && style.display !== 'none' && style.visibility !== 'hidden';
+  };
+  const text = document.body.innerText || '';
+  const loadingMasks = Array.from(document.querySelectorAll('.el-loading-mask, .el-loading-spinner')).filter(visible);
+  const specRowActions = Array.from(document.querySelectorAll('.spec-section .row-actions')).filter(visible);
+  const specLinks = Array.from(document.querySelectorAll('.spec-section .batch-title-link')).filter(visible);
+  const merchantAppRowActions = Array.from(document.querySelectorAll('.merchant-apps .row-actions')).filter(visible);
+  const hasMerchantBatchAppContext = route === '/merchant/batches' && window.location.pathname.includes('/merchant/batches') && window.location.search.includes('app_id=');
+  const hasUnboundMerchantAppSelection = hasMerchantBatchAppContext && text.includes('\\u8bf7\\u5148\\u9009\\u62e9\\u5e94\\u7528');
+  const hasStableEmpty = !hasMerchantBatchAppContext && (text.includes('\\u6682\\u65e0\\u6570\\u636e') || text.includes('\\u8bf7\\u5148\\u9009\\u62e9\\u5e94\\u7528'));
+  const hasSelectedMerchantEmpty = hasMerchantBatchAppContext && text.includes('\\u6682\\u65e0\\u6570\\u636e') && !hasUnboundMerchantAppSelection;
+  const isMerchantAppsRoute = route === '/merchant/apps' && window.location.pathname.includes('/merchant/apps');
+  const hasMerchantAppsEmpty = isMerchantAppsRoute && text.includes('\\u6682\\u65e0\\u6570\\u636e');
+  const ready = loadingMasks.length === 0 && (
+    isMerchantAppsRoute
+      ? (merchantAppRowActions.length > 0 || hasMerchantAppsEmpty)
+      : (!hasUnboundMerchantAppSelection && (specRowActions.length > 0 || specLinks.length > 0 || hasStableEmpty || hasSelectedMerchantEmpty))
+  );
+  return {
+    ready,
+    route,
+    loadingMasks: loadingMasks.length,
+    specRowActions: specRowActions.length,
+    specLinks: specLinks.length,
+    merchantAppRowActions: merchantAppRowActions.length,
+    hasStableEmpty,
+    hasMerchantBatchAppContext,
+    hasUnboundMerchantAppSelection,
+    reason: hasUnboundMerchantAppSelection
+      ? 'waiting for merchant batch app selection'
+      : (ready ? 'ready' : (isMerchantAppsRoute ? 'waiting for merchant apps table content' : 'waiting for batch table content')),
+  };
+})()`;
+    const result = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
+    lastState = result.result?.value || { ready: false, reason: "unable to read route content state" };
+    if (lastState.ready) {
+      return lastState;
+    }
+    await sleep(350);
+  }
+  return { ...lastState, timedOut: true };
+}
+
 async function evaluateLayout(cdp, sessionId) {
   const expression = `(() => {
   const viewportWidth = window.innerWidth;
@@ -356,6 +428,10 @@ async function evaluateLayout(cdp, sessionId) {
       const totalItemWidth = sortedItems.reduce((sum, item) => sum + item.rect.width, 0);
       const gaps = sortedItems.slice(1).map((item, index) => Math.max(0, item.rect.left - sortedItems[index].rect.right));
       const maxGap = gaps.length ? Math.max(...gaps) : 0;
+      const topValues = sortedItems.map((item) => Math.round(item.rect.top));
+      const minTop = Math.min(...topValues);
+      const maxTop = Math.max(...topValues);
+      const maxTopDelta = maxTop - minTop;
       const leftPadding = Math.max(0, sortedItems[0].rect.left - groupRect.left);
       const rightPadding = Math.max(0, groupRect.right - sortedItems[sortedItems.length - 1].rect.right);
       return {
@@ -368,6 +444,8 @@ async function evaluateLayout(cdp, sessionId) {
         group_width: Math.round(groupRect.width),
         content_width: Math.round(totalItemWidth),
         max_gap: Math.round(maxGap),
+        max_top_delta: Math.round(maxTopDelta),
+        wrapped: maxTopDelta > 10,
         left_padding: Math.round(leftPadding),
         right_padding: Math.round(rightPadding),
         spread_ratio: Number((groupRect.width / Math.max(totalItemWidth, 1)).toFixed(2)),
@@ -490,6 +568,21 @@ async function evaluateLayout(cdp, sessionId) {
   }
   const detailSummaryCard = document.querySelector('.batch-detail-shell .summary-metric-card');
   const detailSummaryRect = rectFor(detailSummaryCard);
+  const merchantBatchSpecRowActions = window.location.pathname.includes('/merchant/batches')
+    ? document.querySelector('.spec-section .row-actions')
+    : null;
+  const merchantBatchSpecRowActionsRect = rectFor(merchantBatchSpecRowActions);
+  const merchantBatchDiagnostics = window.location.pathname.includes('/merchant/batches')
+    ? {
+      href: window.location.href,
+      search: window.location.search,
+      selectedAppText: (document.querySelector('.yz-filter-strip .el-select .el-select__selected-item, .yz-filter-strip .el-select .el-input__inner')?.innerText || document.querySelector('.yz-filter-strip .el-select input')?.value || '').trim(),
+      appOptionCount: document.querySelectorAll('.el-select-dropdown__item').length,
+      specRowActionCount: document.querySelectorAll('.spec-section .row-actions').length,
+      specLinkCount: document.querySelectorAll('.spec-section .batch-title-link').length,
+      emptyText: Array.from(document.querySelectorAll('.el-empty__description')).map((el) => (el.innerText || el.textContent || '').trim()).filter(Boolean).join(' | '),
+    }
+    : null;
   const detailSummaryMismatches = [];
   if (window.location.pathname.includes('/merchant/batches') && detailSummaryCard) {
     const expectedLabels = ['总数', '未使用', '已使用'];
@@ -533,6 +626,8 @@ async function evaluateLayout(cdp, sessionId) {
     detailPanelMismatches,
     detailSummaryMismatches,
     detailSummaryRect,
+    merchantBatchSpecRowActionsRect,
+    merchantBatchDiagnostics,
     splitWorkbenchDetected,
     largeBlankRatio: Number(largeBlankRatio.toFixed(2)),
     toastText: Array.from(document.querySelectorAll('.el-message, .el-notification')).map((el) => el.innerText.trim()).filter(Boolean),
@@ -627,8 +722,15 @@ async function sweepPage(cdp, payload, routeCase, viewport) {
       const script = localStorageScript(routeCase.authRole, payload.sessions?.[routeCase.authRole]);
       await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: script }, sessionId);
 
-      const url = joinUrl(payload.baseUrl, routeCase.route);
+      const url = joinUrl(payload.baseUrl, routeWithContext(routeCase, payload));
       await waitForLoad(cdp, sessionId, url, pageState);
+      const contentState = await waitForRouteContent(cdp, sessionId, routeCase.route);
+      if (!contentState.ready && !contentState.skipped) {
+        pageState.networkFailures.push({
+          errorText: `Timed out waiting for route content: ${contentState.reason || "unknown"}`,
+          url,
+        });
+      }
       let layout = await evaluateLayout(cdp, sessionId);
 
       const screenshotName = `${routeCase.role}-${viewport.name}-${slugFor(routeCase.route)}.png`;
@@ -678,6 +780,26 @@ async function sweepPage(cdp, payload, routeCase, viewport) {
       removeListener();
     }
   });
+}
+
+function hasRetryableNetworkFailure(result) {
+  return Boolean(
+    (result.network_failures || []).length ||
+    (result.http_errors || []).some((error) => Number(error.status) >= 500)
+  );
+}
+
+async function sweepPageWithRetry(cdp, payload, routeCase, viewport) {
+  let lastResult = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    lastResult = await sweepPage(cdp, payload, routeCase, viewport);
+    lastResult.retry_attempts = attempt;
+    if (!hasRetryableNetworkFailure(lastResult)) {
+      return lastResult;
+    }
+    await sleep(700 * (attempt + 1));
+  }
+  return lastResult;
 }
 
 function routeCases(routes) {
@@ -745,7 +867,7 @@ async function main() {
       const results = [];
       for (const viewport of payload.viewports || []) {
         for (const routeCase of routeCases(payload.routes || {})) {
-          results.push(await sweepPage(cdp, payload, routeCase, viewport));
+          results.push(await sweepPageWithRetry(cdp, payload, routeCase, viewport));
         }
       }
       return results;
