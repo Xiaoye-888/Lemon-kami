@@ -410,6 +410,8 @@ def run_browser_sweep(base_url: str, artifact_dir: Path, admin_session: dict, me
             ["node", str(helper)],
             input=raw_payload,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             check=False,
             timeout=BROWSER_SWEEP_TIMEOUT_SECONDS,
@@ -1884,6 +1886,8 @@ def _check_node_cdp_capability():
     completed = subprocess.run(
         ["node", "-e", "if (typeof WebSocket !== 'function') process.exit(2); console.log('websocket-ok')"],
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
         timeout=15,

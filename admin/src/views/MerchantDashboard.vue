@@ -98,6 +98,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { getMerchantDashboard } from '../api/merchant'
 import { useUserStore } from '../stores/user'
+import { formatBeijingTime } from '../utils/datetime'
 
 const router = useRouter()
 const userStore = useUserStore()

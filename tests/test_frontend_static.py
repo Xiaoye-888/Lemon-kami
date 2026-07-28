@@ -569,6 +569,19 @@ def test_merchant_views_format_all_visible_time_columns():
     assert "profile.created_at || '-'" not in merchant_account
     assert "profile.last_login || '-'" not in merchant_account
 
+
+def test_merchant_time_formatter_calls_have_script_bindings():
+    offenders = []
+    for source_path in sorted((PROJECT_ROOT / "admin/src/views").glob("Merchant*.vue")):
+        source = source_path.read_text(encoding="utf-8")
+        if "formatBeijingTime(" in source and "from '../utils/datetime'" not in source:
+            offenders.append(f"{source_path.name}: missing formatBeijingTime import")
+        if "formatOptionalTime(" in source and not re.search(r"\b(?:const|function)\s+formatOptionalTime\b", source):
+            offenders.append(f"{source_path.name}: missing formatOptionalTime binding")
+
+    assert offenders == []
+
+
 def test_merchant_apps_create_flow_uses_dialog_instead_of_inline_input():
     merchant_apps = (PROJECT_ROOT / "admin/src/views/MerchantApps.vue").read_text(encoding="utf-8")
 

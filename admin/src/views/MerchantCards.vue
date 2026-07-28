@@ -69,6 +69,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { Download, Refresh, Search } from '@element-plus/icons-vue'
 import { exportMerchantKamis, getMerchantApps, getMerchantKamis } from '../api/merchant'
+import { formatBeijingTime } from '../utils/datetime'
 
 const loading = ref(false)
 const exporting = ref(false)
@@ -83,6 +84,8 @@ const query = reactive({
   page: 1,
   page_size: 20
 })
+
+const formatOptionalTime = (value) => (value ? formatBeijingTime(value) : '-')
 
 function normalizedParams(includePage = true) {
   const params = {}
