@@ -877,8 +877,8 @@ def test_browser_result_evaluation_flags_layout_and_runtime_failures():
         ({"layout": {"horizontal_overflow": True}}, "P2", "Horizontal overflow detected"),
         ({"layout": {"large_blank_ratio": 0.72}}, "P2", "Large blank page area detected"),
         ({"layout": {"overwide_cards": [".card"]}}, "P2", "Overwide cards detected"),
-        ({"layout": {"action_groups": [{"button_count": 3, "max_gap": 84, "spread_ratio": 1.8}]}}, "P2", "Action button group is overly dispersed"),
-        ({"layout": {"action_groups": [{"button_count": 4, "wrapped": True, "max_top_delta": 18}]}}, "P2", "Action button group wraps across rows"),
+        ({"layout": {"action_groups": [{"button_count": 3, "max_gap": 84, "spread_ratio": 1.8}]}}, "P1", "Action button group is overly dispersed"),
+        ({"layout": {"action_groups": [{"button_count": 4, "wrapped": True, "max_top_delta": 18}]}}, "P1", "Action button group wraps across rows"),
     ]
 
     for patch, severity, message in cases:
@@ -914,12 +914,21 @@ def test_browser_result_evaluation_flags_admin_merchant_parity_and_repeated_cont
         },
     }
 
-    messages = [finding["message"] for finding in qa.evaluate_browser_result(result)]
+    findings = qa.evaluate_browser_result(result)
+    messages = [finding["message"] for finding in findings]
 
     assert "Duplicated controls detected" in messages
     assert "Header/title occlusion detected" in messages
     assert "Admin/merchant table parity mismatch" in messages
     assert "Merchant batch page uses split workbench layout" in messages
+    assert {
+        finding["message"]: finding["severity"]
+        for finding in findings
+        if finding["message"] in {"Admin/merchant table parity mismatch", "Merchant batch page uses split workbench layout"}
+    } == {
+        "Admin/merchant table parity mismatch": "P1",
+        "Merchant batch page uses split workbench layout": "P1",
+    }
 
 
 def test_browser_result_evaluation_flags_merchant_detail_panel_parity_mismatch():
@@ -944,9 +953,14 @@ def test_browser_result_evaluation_flags_merchant_detail_panel_parity_mismatch()
         },
     }
 
-    messages = [finding["message"] for finding in qa.evaluate_browser_result(result)]
+    findings = qa.evaluate_browser_result(result)
+    messages = [finding["message"] for finding in findings]
 
     assert "Admin/merchant detail panel parity mismatch" in messages
+    assert any(
+        finding["message"] == "Admin/merchant detail panel parity mismatch" and finding["severity"] == "P1"
+        for finding in findings
+    )
 
 
 def test_browser_result_evaluation_flags_merchant_detail_summary_parity_mismatch():
@@ -974,9 +988,14 @@ def test_browser_result_evaluation_flags_merchant_detail_summary_parity_mismatch
         },
     }
 
-    messages = [finding["message"] for finding in qa.evaluate_browser_result(result)]
+    findings = qa.evaluate_browser_result(result)
+    messages = [finding["message"] for finding in findings]
 
     assert "Admin/merchant detail summary parity mismatch" in messages
+    assert any(
+        finding["message"] == "Admin/merchant detail summary parity mismatch" and finding["severity"] == "P1"
+        for finding in findings
+    )
 
 
 def test_browser_result_evaluation_flags_non_2xx_document_status_without_sparse_noise():
@@ -1075,6 +1094,10 @@ def test_browser_cdp_helper_exports_detail_summary_rect_and_mismatch_checks():
     assert "retry_attempts" in helper
     assert ".merchant-apps .row-actions" in helper
     assert "waiting for merchant apps table content" in helper
+    assert "pageContractMismatches" in helper
+    assert "evaluatePageContracts" in helper
+    assert "merchant-apps.toolbar-actions" in helper
+    assert "merchant-batches.detail-card-toolbar" in helper
     assert ".el-loading-mask" in helper
     assert "waiting for batch table content" in helper
     assert "detailSummaryMismatches" in helper
@@ -1094,6 +1117,10 @@ def test_browser_cdp_helper_exports_detail_summary_rect_and_mismatch_checks():
     assert "hasStableEmpty = !hasMerchantBatchAppContext" in helper
     assert "waiting for merchant batch app selection" in helper
     assert ".batch-detail-shell .summary-metric-card" in helper
+    assert "expectedMerchantBatchListHeaders" in helper
+    assert "expectedMerchantBatchDetailHeaders" in helper
+    assert "merchant-batches.list.table-columns" in helper
+    assert "merchant-batches.detail.table-columns" in helper
 
 
 def test_browser_result_evaluation_accepts_cdp_layout_keys():
@@ -1172,6 +1199,59 @@ def test_browser_result_evaluation_blocks_merchant_batch_drawer_detail_regressio
         "Merchant batch detail route did not retain batch_no context",
     ]
     assert {finding["severity"] for finding in findings} == {"P1"}
+
+
+def test_browser_result_evaluation_blocks_page_contract_mismatches():
+    qa = load_qa_module()
+
+    findings = qa.evaluate_browser_result(
+        {
+            "role": "merchant",
+            "route": "/merchant/batches",
+            "viewport": "desktop",
+            "console_errors": [],
+            "exceptions": [],
+            "network_failures": [],
+            "bodyTextLength": 1200,
+            "layout": {
+                "pageContractMismatches": [
+                    {
+                        "contract": "merchant-batches.detail.summary-cards",
+                        "message": "Expected 3 metric cards in order",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert any(
+        finding["severity"] == "P1" and finding["message"] == "Page contract mismatch detected"
+        for finding in findings
+    )
+
+
+def test_blocking_browser_findings_include_critical_action_layout_regressions():
+    qa = load_qa_module()
+    findings = qa.evaluate_browser_result(
+        {
+            "role": "merchant",
+            "route": "/merchant/batches",
+            "viewport": "desktop",
+            "console_errors": [],
+            "exceptions": [],
+            "network_failures": [],
+            "bodyTextLength": 1200,
+            "layout": {
+                "action_groups": [
+                    {"button_count": 3, "wrapped": True, "max_top_delta": 24},
+                ],
+            },
+        }
+    )
+
+    blocking = qa._blocking_browser_findings(findings)
+
+    assert any(finding["message"] == "Action button group wraps across rows" for finding in blocking)
 
 
 def test_blocking_visual_findings_include_missing_targets_and_diffs():

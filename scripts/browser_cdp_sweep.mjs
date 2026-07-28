@@ -507,18 +507,140 @@ async function evaluateLayout(cdp, sessionId) {
   const tableHeaders = Array.from(document.querySelectorAll('.yz-clean-table thead tr, .el-table__header-wrapper thead tr'))
     .map((row) => Array.from(row.querySelectorAll('th .cell, th')).map((cell) => (cell.innerText || cell.textContent || '').trim()).filter(Boolean))
     .filter((row) => row.length > 0);
+  const evaluatePageContracts = () => {
+    const mismatches = [];
+    const path = window.location.pathname;
+    const isVisible = (el) => {
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.top <= viewportHeight && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const firstVisible = (selector) => Array.from(document.querySelectorAll(selector)).find(isVisible) || null;
+    const fail = (contract, message, detail = {}) => {
+      mismatches.push({ contract, message, detail });
+    };
+    const requireRegion = (contract, selector) => {
+      if (!firstVisible(selector)) {
+        fail(contract, 'Required page region is missing', { selector });
+      }
+    };
+    const requireOrder = (contract, selectors) => {
+      const positions = selectors.map((selector) => {
+        const el = firstVisible(selector);
+        return el ? { selector, top: Math.round(el.getBoundingClientRect().top) } : { selector, top: null };
+      });
+      const missing = positions.filter((item) => item.top === null).map((item) => item.selector);
+      if (missing.length) {
+        fail(contract, 'Required ordered regions are missing', { missing });
+        return;
+      }
+      const sorted = [...positions].sort((left, right) => left.top - right.top).map((item) => item.selector);
+      const expected = selectors.join(' > ');
+      const actual = sorted.join(' > ');
+      if (actual !== expected) {
+        fail(contract, 'Page regions are not in expected vertical order', { expected, actual });
+      }
+    };
+    const requireMetricCount = (contract, selector, expectedCount) => {
+      const count = Array.from(document.querySelectorAll(selector)).filter(isVisible).length;
+      if (count !== expectedCount) {
+        fail(contract, 'Metric/card count does not match contract', { selector, expectedCount, count });
+      }
+    };
+    const requireActionGroup = (contract, selector, options = {}) => {
+      const group = firstVisible(selector);
+      if (!group) {
+        fail(contract, 'Action group is missing', { selector });
+        return;
+      }
+      const groupRect = group.getBoundingClientRect();
+      const items = Array.from(group.querySelectorAll('button, a, [role="button"], .el-button'))
+        .map((el) => ({ rect: el.getBoundingClientRect(), text: (el.innerText || el.textContent || '').trim() }))
+        .filter(({ rect }) => rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.top <= viewportHeight);
+      const topValues = items.map((item) => Math.round(item.rect.top));
+      const maxTopDelta = topValues.length ? Math.max(...topValues) - Math.min(...topValues) : 0;
+      const totalItemWidth = items.reduce((sum, item) => sum + item.rect.width, 0);
+      const spreadRatio = Number((groupRect.width / Math.max(totalItemWidth, 1)).toFixed(2));
+      if (options.minItems && items.length < options.minItems) {
+        fail(contract, 'Action group has too few visible buttons', { selector, expectedMin: options.minItems, count: items.length });
+      }
+      if (options.maxItems && items.length > options.maxItems) {
+        fail(contract, 'Action group has too many visible buttons', { selector, expectedMax: options.maxItems, count: items.length });
+      }
+      if (maxTopDelta > (options.maxTopDelta ?? 10)) {
+        fail(contract, 'Action group wraps or stacks vertically', { selector, maxTopDelta, buttons: items.map((item) => item.text).filter(Boolean) });
+      }
+      if (options.maxSpreadRatio && spreadRatio > options.maxSpreadRatio) {
+        fail(contract, 'Action group is visually too spread out', { selector, spreadRatio, groupWidth: Math.round(groupRect.width), contentWidth: Math.round(totalItemWidth) });
+      }
+    };
+
+    if (path.includes('/merchant/apps')) {
+      requireOrder('merchant-apps.regions', ['.merchant-apps .page-toolbar', '.merchant-apps .page-card']);
+      requireActionGroup('merchant-apps.toolbar-actions', '.merchant-apps .page-toolbar .actions', { minItems: 2, maxItems: 2, maxSpreadRatio: 2.5 });
+      if (firstVisible('.merchant-apps .row-actions')) {
+        requireActionGroup('merchant-apps.row-actions', '.merchant-apps .row-actions', { minItems: 3, maxItems: 5, maxTopDelta: 10, maxSpreadRatio: 2.8 });
+      }
+    }
+
+    if (path.includes('/merchant/batches')) {
+      const inDetail = Boolean(firstVisible('.batch-detail-shell'));
+      if (inDetail) {
+        requireOrder('merchant-batches.detail.regions', ['.batch-detail-shell', '.batches-panel', '.cards-panel']);
+        requireRegion('merchant-batches.detail.overview-card', '.batch-overview-card');
+        requireMetricCount('merchant-batches.detail.summary-cards', '.batch-detail-shell .summary-metric-card .metric-item', 3);
+        requireActionGroup('merchant-batches.detail-hero-actions', '.batch-detail-shell .hero-actions', { minItems: 3, maxItems: 4, maxTopDelta: 10, maxSpreadRatio: 3.5 });
+        requireActionGroup('merchant-batches.detail-batch-row-actions', '.batches-panel .icon-actions', { minItems: 3, maxItems: 3, maxTopDelta: 10, maxSpreadRatio: 2.4 });
+        requireActionGroup('merchant-batches.detail-card-toolbar', '.cards-panel .panel-actions', { minItems: 2, maxItems: 3, maxTopDelta: 10, maxSpreadRatio: 3.8 });
+      } else {
+        requireOrder('merchant-batches.list.regions', ['.kami-batches-page .yz-panel-header', '.kami-batches-page .yz-filter-strip', '.kami-batches-page .overview-strip', '.kami-batches-page .spec-section']);
+        requireMetricCount('merchant-batches.list.overview-cards', '.overview-strip .summary-metric-card', 4);
+        requireActionGroup('merchant-batches.list-toolbar-actions', '.kami-batches-page .yz-panel-header .panel-actions', { minItems: 1, maxItems: 2, maxTopDelta: 10, maxSpreadRatio: 3.8 });
+        if (firstVisible('.spec-section .row-actions')) {
+          requireActionGroup('merchant-batches.spec-row-actions', '.spec-section .row-actions', { minItems: 4, maxItems: 4, maxTopDelta: 10, maxSpreadRatio: 2.8 });
+        }
+      }
+    }
+
+    if (path.includes('/admin/kamis/batches')) {
+      const inDetail = Boolean(firstVisible('.batch-detail-shell'));
+      if (inDetail) {
+        requireOrder('admin-batches.detail.regions', ['.batch-detail-shell', '.batches-panel', '.cards-panel']);
+        requireMetricCount('admin-batches.detail.summary-cards', '.batch-detail-shell .summary-metric-card .metric-item', 3);
+        requireActionGroup('admin-batches.detail-hero-actions', '.batch-detail-shell .hero-actions', { minItems: 4, maxItems: 4, maxTopDelta: 10, maxSpreadRatio: 3.5 });
+        requireActionGroup('admin-batches.detail-batch-row-actions', '.batches-panel .icon-actions', { minItems: 3, maxItems: 3, maxTopDelta: 10, maxSpreadRatio: 2.4 });
+      } else {
+        requireOrder('admin-batches.list.regions', ['.kami-batches-page .yz-panel-header', '.kami-batches-page .yz-filter-strip', '.kami-batches-page .overview-strip', '.kami-batches-page .spec-section']);
+        requireMetricCount('admin-batches.list.overview-cards', '.overview-strip .overview-item', 4);
+      }
+    }
+
+    return mismatches;
+  };
+  const pageContractMismatches = evaluatePageContracts();
   const tableColumnMismatches = [];
   if (window.location.pathname.includes('/merchant/batches')) {
-    const expectedHeaders = ['规格', '类型', '策略数', '批次', '总数/已用/剩余', '状态', '用途备注', '操作'];
-    const firstTableHeaders = tableHeaders[0] || [];
-    const missing = expectedHeaders.filter((label) => !firstTableHeaders.includes(label));
-    const extra = firstTableHeaders.filter((label) => !expectedHeaders.includes(label));
-    if (missing.length || extra.length) {
-      tableColumnMismatches.push({
-        baselineRoute: '/admin/kamis/batches',
-        missing,
-        extra,
-      });
+    const inMerchantBatchDetail = Boolean(document.querySelector('.batch-detail-shell'));
+    const expectedMerchantBatchListHeaders = ['规格', '类型', '策略数', '批次', '总数/已用/剩余', '状态', '用途备注', '操作'];
+    const expectedMerchantBatchDetailHeaders = ['批次名称', '类型', '权益', '剩余权益', '卡密有效期', '机器码限制', '总数/已用/剩余', '状态', '创建时间', '操作'];
+    const compareHeaders = (contract, expectedHeaders, actualHeaders) => {
+      const missing = expectedHeaders.filter((label) => !actualHeaders.includes(label));
+      const extra = actualHeaders.filter((label) => !expectedHeaders.includes(label));
+      if (missing.length || extra.length) {
+        tableColumnMismatches.push({
+          contract,
+          baselineRoute: '/admin/kamis/batches',
+          missing,
+          extra,
+        });
+      }
+    };
+    if (inMerchantBatchDetail) {
+      const detailHeaders = tableHeaders.find((headers) => headers.includes('批次名称')) || tableHeaders[0] || [];
+      compareHeaders('merchant-batches.detail.table-columns', expectedMerchantBatchDetailHeaders, detailHeaders);
+    } else {
+      compareHeaders('merchant-batches.list.table-columns', expectedMerchantBatchListHeaders, tableHeaders[0] || []);
     }
   }
   const detailPanelMismatches = [];
@@ -634,6 +756,7 @@ async function evaluateLayout(cdp, sessionId) {
     horizontalOverflow,
     overwideCards,
     action_groups: actionGroups,
+    pageContractMismatches,
     duplicatedControls,
     headerOcclusions,
     tableColumnMismatches,
@@ -767,6 +890,10 @@ async function sweepPage(cdp, payload, routeCase, viewport) {
             detailSummaryMismatches: [
               ...(layout.detailSummaryMismatches || []),
               ...(detailLayout.detailSummaryMismatches || []),
+            ],
+            pageContractMismatches: [
+              ...(layout.pageContractMismatches || []),
+              ...(detailLayout.pageContractMismatches || []),
             ],
             detailSummaryRect: detailLayout.detailSummaryRect || layout.detailSummaryRect || null,
             merchantBatchBatchRowActionsRect: detailLayout.merchantBatchBatchRowActionsRect || layout.merchantBatchBatchRowActionsRect || null,

@@ -476,15 +476,6 @@
           <div class="panel-actions">
             <el-button :icon="Download" @click="handleDetailExport">导出</el-button>
             <el-button
-              v-if="viewMode === 'batch'"
-              type="primary"
-              :icon="Plus"
-              :disabled="!currentBatch?.can_append"
-              @click="showAppendDialog(currentBatch)"
-            >
-              追加卡密
-            </el-button>
-            <el-button
               type="danger"
               plain
               :disabled="!merchantBatchPermissions.deleteDetailKamis || selectedDetailKamis.length === 0"
@@ -492,6 +483,15 @@
               @click="handleDeleteSelectedDetail"
             >
               删除选中
+            </el-button>
+            <el-button
+              v-if="viewMode === 'batch'"
+              type="primary"
+              :icon="Plus"
+              :disabled="!currentBatch?.can_append"
+              @click="showAppendDialog(currentBatch)"
+            >
+              追加卡密
             </el-button>
           </div>
         </div>

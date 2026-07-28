@@ -1422,6 +1422,9 @@ def evaluate_browser_result(result):
     table_column_mismatches = layout.get("table_column_mismatches")
     if table_column_mismatches is None:
         table_column_mismatches = layout.get("tableColumnMismatches")
+    page_contract_mismatches = layout.get("page_contract_mismatches")
+    if page_contract_mismatches is None:
+        page_contract_mismatches = layout.get("pageContractMismatches")
     detail_panel_mismatches = layout.get("detail_panel_mismatches")
     if detail_panel_mismatches is None:
         detail_panel_mismatches = layout.get("detailPanelMismatches")
@@ -1449,13 +1452,15 @@ def evaluate_browser_result(result):
     if header_occlusions:
         findings.append(_finding("P2", route, viewport, "Header/title occlusion detected"))
     if table_column_mismatches:
-        findings.append(_finding("P2", route, viewport, "Admin/merchant table parity mismatch"))
+        findings.append(_finding("P1", route, viewport, "Admin/merchant table parity mismatch"))
+    if page_contract_mismatches:
+        findings.append(_finding("P1", route, viewport, "Page contract mismatch detected"))
     if detail_panel_mismatches and route.startswith("/merchant/") and route.endswith("/batches"):
-        findings.append(_finding("P2", route, viewport, "Admin/merchant detail panel parity mismatch"))
+        findings.append(_finding("P1", route, viewport, "Admin/merchant detail panel parity mismatch"))
     if detail_summary_mismatches and route.startswith("/merchant/") and route.endswith("/batches"):
-        findings.append(_finding("P2", route, viewport, "Admin/merchant detail summary parity mismatch"))
+        findings.append(_finding("P1", route, viewport, "Admin/merchant detail summary parity mismatch"))
     if split_workbench_detected and route.startswith("/merchant/") and route.endswith("/batches"):
-        findings.append(_finding("P2", route, viewport, "Merchant batch page uses split workbench layout"))
+        findings.append(_finding("P1", route, viewport, "Merchant batch page uses split workbench layout"))
     if merchant_batch_detail_opened_as_drawer is True and route.startswith("/merchant/") and route.endswith("/batches"):
         findings.append(_finding("P1", route, viewport, "Merchant batch detail opened as drawer instead of standalone detail page"))
     if merchant_batch_detail_url_has_batch_no is False and route.startswith("/merchant/") and route.endswith("/batches"):
@@ -1466,7 +1471,7 @@ def evaluate_browser_result(result):
         if group.get("wrapped"):
             findings.append(
                 _finding(
-                    "P2",
+                    "P1",
                     route,
                     viewport,
                     "Action button group wraps across rows",
@@ -1479,7 +1484,7 @@ def evaluate_browser_result(result):
         if button_count >= 2 and (max_gap >= 40 or (button_count <= 4 and spread_ratio >= 1.4)):
             findings.append(
                 _finding(
-                    "P2",
+                    "P1",
                     route,
                     viewport,
                     "Action button group is overly dispersed",
