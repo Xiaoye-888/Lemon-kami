@@ -327,6 +327,42 @@ async function evaluateLayout(cdp, sessionId) {
     .filter(({ el, rect }) => /card|panel|el-card/.test(el.className || '') && rect.width > viewportWidth * 0.92)
     .slice(0, 5)
     .map(({ el, rect }) => ({ className: String(el.className), width: Math.round(rect.width) }));
+  const actionGroups = Array.from(document.querySelectorAll('.row-actions, .table-actions, .action-group, [data-qa-action-group]'))
+    .map((group) => {
+      const groupRect = group.getBoundingClientRect();
+      if (groupRect.width <= 0 || groupRect.height <= 0 || groupRect.bottom < 0 || groupRect.top > viewportHeight) {
+        return null;
+      }
+      const items = Array.from(group.querySelectorAll('button, a, [role="button"], .el-button'))
+        .map((el) => ({ el, rect: el.getBoundingClientRect(), text: (el.innerText || el.textContent || '').trim() }))
+        .filter(({ rect }) => rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.top <= viewportHeight);
+      if (items.length < 2) {
+        return null;
+      }
+      const sortedItems = [...items].sort((left, right) => left.rect.left - right.rect.left);
+      const totalItemWidth = sortedItems.reduce((sum, item) => sum + item.rect.width, 0);
+      const gaps = sortedItems.slice(1).map((item, index) => Math.max(0, item.rect.left - sortedItems[index].rect.right));
+      const maxGap = gaps.length ? Math.max(...gaps) : 0;
+      const leftPadding = Math.max(0, sortedItems[0].rect.left - groupRect.left);
+      const rightPadding = Math.max(0, groupRect.right - sortedItems[sortedItems.length - 1].rect.right);
+      return {
+        selector: String(group.className || group.getAttribute('data-qa-action-group') || group.tagName).trim().slice(0, 80),
+        button_count: sortedItems.length,
+        left: Math.round(groupRect.left),
+        top: Math.round(groupRect.top),
+        width: Math.round(groupRect.width),
+        height: Math.round(groupRect.height),
+        group_width: Math.round(groupRect.width),
+        content_width: Math.round(totalItemWidth),
+        max_gap: Math.round(maxGap),
+        left_padding: Math.round(leftPadding),
+        right_padding: Math.round(rightPadding),
+        spread_ratio: Number((groupRect.width / Math.max(totalItemWidth, 1)).toFixed(2)),
+        buttons: sortedItems.slice(0, 6).map((item) => item.text).filter(Boolean),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 8);
   const visibleArea = rects.reduce((sum, { rect }) => {
     const w = Math.max(0, Math.min(rect.right, viewportWidth) - Math.max(rect.left, 0));
     const h = Math.max(0, Math.min(rect.bottom, viewportHeight) - Math.max(rect.top, 0));
@@ -339,6 +375,7 @@ async function evaluateLayout(cdp, sessionId) {
     bodyTextSample: (body.innerText || '').trim().slice(0, 300),
     horizontalOverflow,
     overwideCards,
+    action_groups: actionGroups,
     largeBlankRatio: Number(largeBlankRatio.toFixed(2)),
     toastText: Array.from(document.querySelectorAll('.el-message, .el-notification')).map((el) => el.innerText.trim()).filter(Boolean),
   };

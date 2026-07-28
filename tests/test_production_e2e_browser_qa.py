@@ -6,6 +6,7 @@ import requests
 import sys
 from datetime import datetime
 from pathlib import Path
+from PIL import Image, ImageDraw
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -860,6 +861,7 @@ def test_browser_result_evaluation_flags_layout_and_runtime_failures():
         ({"layout": {"horizontal_overflow": True}}, "P2", "Horizontal overflow detected"),
         ({"layout": {"large_blank_ratio": 0.72}}, "P2", "Large blank page area detected"),
         ({"layout": {"overwide_cards": [".card"]}}, "P2", "Overwide cards detected"),
+        ({"layout": {"action_groups": [{"button_count": 3, "max_gap": 84, "spread_ratio": 1.8}]}}, "P2", "Action button group is overly dispersed"),
     ]
 
     for patch, severity, message in cases:
@@ -962,6 +964,85 @@ def test_browser_result_evaluation_accepts_cdp_layout_keys():
         "Large blank page area detected",
         "Overwide cards detected",
     ]
+
+
+def _draw_action_group_screenshot(path, button_shift=0):
+    image = Image.new("RGBA", (220, 100), (248, 250, 252, 255))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((20, 26, 200, 74), fill=(255, 255, 255, 255), outline=(219, 234, 254, 255))
+    for left, right, color in (
+        (32 + button_shift, 72 + button_shift, (37, 99, 235, 255)),
+        (84 + button_shift, 138 + button_shift, (37, 99, 235, 255)),
+        (150 + button_shift, 188 + button_shift, (239, 68, 68, 255)),
+    ):
+        draw.rounded_rectangle((left, 38, right, 60), radius=4, fill=color)
+    image.save(path)
+
+
+def test_visual_regression_accepts_matching_action_group_crop(tmp_path, monkeypatch):
+    qa = load_qa_module()
+    baseline_dir = tmp_path / "baselines"
+    baseline_dir.mkdir()
+    monkeypatch.setattr(qa, "VISUAL_BASELINE_DIR", baseline_dir)
+
+    screenshot_path = tmp_path / "merchant-apps.png"
+    _draw_action_group_screenshot(screenshot_path)
+    group = {"button_count": 3, "left": 20, "top": 26, "width": 180, "height": 48, "max_gap": 12}
+    baseline_crop, _ = qa._crop_visual_target(screenshot_path, group, 12)
+    baseline_crop.save(baseline_dir / "merchant-apps-row-actions.desktop.png")
+
+    results = qa.run_visual_regression(
+        [
+            {
+                "role": "merchant",
+                "route": "/merchant/apps",
+                "viewport": "desktop",
+                "screenshot": str(screenshot_path),
+                "layout": {"action_groups": [group]},
+            }
+        ],
+        tmp_path,
+    )
+
+    assert results["checks"] == 1
+    assert results["findings"] == []
+    assert (tmp_path / "visual-regression" / "merchant-apps-row-actions.desktop.actual.png").exists()
+    assert results["comparisons"][0]["mean_diff"] == 0
+    assert results["comparisons"][0]["changed_ratio"] == 0
+
+
+def test_visual_regression_flags_changed_action_group_crop(tmp_path, monkeypatch):
+    qa = load_qa_module()
+    baseline_dir = tmp_path / "baselines"
+    baseline_dir.mkdir()
+    monkeypatch.setattr(qa, "VISUAL_BASELINE_DIR", baseline_dir)
+
+    baseline_source = tmp_path / "baseline-source.png"
+    screenshot_path = tmp_path / "merchant-apps.png"
+    group = {"button_count": 3, "left": 20, "top": 26, "width": 180, "height": 48, "max_gap": 12}
+    _draw_action_group_screenshot(baseline_source)
+    _draw_action_group_screenshot(screenshot_path, button_shift=28)
+    baseline_crop, _ = qa._crop_visual_target(baseline_source, group, 12)
+    baseline_crop.save(baseline_dir / "merchant-apps-row-actions.desktop.png")
+
+    results = qa.run_visual_regression(
+        [
+            {
+                "role": "merchant",
+                "route": "/merchant/apps",
+                "viewport": "desktop",
+                "screenshot": str(screenshot_path),
+                "layout": {"action_groups": [group]},
+            }
+        ],
+        tmp_path,
+    )
+
+    assert [finding["message"] for finding in results["findings"]] == [
+        "Visual regression diff exceeded threshold"
+    ]
+    assert results["findings"][0]["role"] == "merchant"
+    assert (tmp_path / "visual-regression" / "merchant-apps-row-actions.desktop.diff.png").exists()
 
 
 def test_load_payment_snapshot_reads_runtime_restore_values_and_reports_redact_payment_fields():
