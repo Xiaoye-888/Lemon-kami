@@ -604,12 +604,17 @@ def _merchant_spec_stats(session: Session, spec_id: int, user_id: int) -> dict:
     kamis = session.exec(
         select(Kami).where(Kami.spec_id == spec_id, Kami.created_by_user_id == user_id)
     ).all()
+    codes = [kami.kami_code for kami in kamis if kami.kami_code]
+    bindings = []
+    if codes:
+        bindings = session.exec(select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code.in_(codes))).all()
     return {
         "batch_count": len({batch.id for batch in batch_count}),
         "total_count": len(kamis),
         "unused_count": len([kami for kami in kamis if _enum_value(kami.status) == "unused"]),
         "active_count": len([kami for kami in kamis if _enum_value(kami.status) == "active"]),
         "frozen_count": len([kami for kami in kamis if _enum_value(kami.status) == "frozen"]),
+        "device_bound_count": len({binding.kami_code for binding in bindings if binding.kami_code}),
     }
 
 
@@ -627,6 +632,7 @@ def _merchant_spec_payload(spec: KamiSpec, *, user: EndUser, is_editable: bool, 
             "unused_count": 0,
             "active_count": 0,
             "frozen_count": 0,
+            "device_bound_count": 0,
         }
     )
     if stats:

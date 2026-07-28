@@ -120,6 +120,7 @@
                   <span class="stat-inline">未用 {{ row.unused_count || 0 }}</span>
                   <span class="stat-inline">激活 {{ row.active_count || 0 }}</span>
                   <span class="stat-inline">冻结 {{ row.frozen_count || 0 }}</span>
+                  <span class="stat-inline">绑 {{ row.device_bound_count || 0 }}</span>
                 </template>
               </el-table-column>
               <el-table-column prop="status" label="状态" width="90">
@@ -176,6 +177,7 @@
                   <span class="stat-inline">未用 {{ row.unused_count || 0 }}</span>
                   <span class="stat-inline">激活 {{ row.active_count || 0 }}</span>
                   <span class="stat-inline">冻结 {{ row.frozen_count || 0 }}</span>
+                  <span class="stat-inline">绑 {{ row.device_bound_count || 0 }}</span>
                 </template>
               </el-table-column>
               <el-table-column prop="status" label="状态" width="90">
@@ -285,6 +287,7 @@
                       <span class="count-pill">未 {{ row.stats.unused_count || 0 }}</span>
                       <span class="count-pill">激活 {{ row.stats.active_count || 0 }}</span>
                       <span class="count-pill">冻 {{ row.stats.frozen_count || 0 }}</span>
+                      <span class="count-pill">绑 {{ row.stats.device_bound_count || 0 }}</span>
                     </div>
                   </template>
                 </el-table-column>
