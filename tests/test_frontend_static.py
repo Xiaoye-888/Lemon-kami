@@ -459,6 +459,24 @@ def test_merchant_batches_exposes_grouped_specs_and_beijing_time_rendering():
     assert "编辑模式仅允许调整规格分组、状态、排序和备注" in source
 
 
+def test_merchant_batches_loads_apps_from_paginated_response_and_keeps_quota_optional():
+    source = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+    load_apps = source.split("async function loadApps()", 1)[1].split("async function hydrateRouteDetail()", 1)[0]
+    load_all = source.split("async function loadAll()", 1)[1].split("async function handleAppChange()", 1)[0]
+
+    assert "apps.value = responseItems(res)" in load_apps
+    assert "apps.value = res.data || []" not in load_apps
+    assert "if (routeAppId) {" in load_apps
+    assert "apps.value.some((app) => app.app_id === routeAppId)" not in load_apps
+    assert "async function loadQuotaSafely()" in source
+    assert "await Promise.all([loadQuotaSafely(), loadApps()])" in load_all
+    assert "await loadQuota()" not in load_all
+    assert "const routeAppId = route.query.app_id ? String(route.query.app_id) : ''" in load_all
+    assert load_all.count("queryParams.app_id = routeAppId") >= 2
+    assert load_all.index("queryParams.app_id = routeAppId") < load_all.index("await Promise.all([loadQuotaSafely(), loadApps()])")
+    assert load_all.rindex("queryParams.app_id = routeAppId") < load_all.index("await loadSpecs()")
+
+
 def test_main_layout_imports_every_menu_icon_it_uses():
     source = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
     import_match = re.search(
@@ -870,6 +888,22 @@ def test_merchant_batch_spec_detail_top_summary_matches_admin_three_card_layout(
         "grid-template-columns: repeat(auto-fit",
     ):
         assert forbidden not in merchant_batches
+
+
+def test_merchant_batch_row_actions_stay_single_line_and_match_admin_spacing():
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+    admin_batches = (PROJECT_ROOT / "admin/src/views/KamiBatches.vue").read_text(encoding="utf-8")
+
+    assert ".row-actions {\n  display: flex;" in merchant_batches
+    assert "flex-wrap: nowrap;" in merchant_batches
+    assert ".row-actions,\n.icon-actions" not in merchant_batches
+    assert ".row-actions :deep(.el-button)" in merchant_batches
+    assert "margin-left: 0;" in merchant_batches
+    assert "border-radius: 8px;" in merchant_batches
+    assert "font-weight: 600;" in merchant_batches
+
+    assert "flex-wrap: nowrap;" in admin_batches
+    assert "Action button group wraps across rows" not in merchant_batches
 
 
 def test_merchant_batch_generation_dialog_exposes_admin_grade_code_controls_and_quota_semantics():

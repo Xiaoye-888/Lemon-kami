@@ -62,6 +62,19 @@ VISUAL_REGRESSION_TARGETS = [
         "role": "merchant",
         "route": "/merchant/batches",
         "viewport": "desktop",
+        "label": "merchant-batches-spec-row-actions",
+        "baseline": "merchant-batches-spec-row-actions.desktop.png",
+        "screenshot_key": "screenshot",
+        "crop_kind": "rect",
+        "crop_key": "merchantBatchSpecRowActionsRect",
+        "crop_padding": 12,
+        "max_mean_diff": 8.0,
+        "max_changed_ratio": 0.04,
+    },
+    {
+        "role": "merchant",
+        "route": "/merchant/batches",
+        "viewport": "desktop",
         "label": "merchant-batches-detail-summary",
         "baseline": "merchant-batches-detail-summary.desktop.png",
         "screenshot_key": "detailScreenshot",
@@ -149,10 +162,20 @@ class QAConfig:
     admin_username: str
     admin_password: str
     confirmation: str
+    api_base_url: str | None = None
+    browser_base_url: str | None = None
+
+    def __post_init__(self):
+        if not self.api_base_url:
+            self.api_base_url = self.base_url
+        if not self.browser_base_url:
+            self.browser_base_url = self.base_url
 
     @classmethod
     def from_env(cls, require_confirmation=True):
         base_url = os.environ.get("LEMON_QA_BASE_URL", "")
+        api_base_url = os.environ.get("LEMON_QA_API_BASE_URL", "") or base_url
+        browser_base_url = os.environ.get("LEMON_QA_BROWSER_BASE_URL", "") or base_url
         admin_username = os.environ.get("LEMON_QA_ADMIN_USERNAME", "")
         admin_password = os.environ.get("LEMON_QA_ADMIN_PASSWORD", "")
         confirmation = os.environ.get("LEMON_QA_CONFIRM_PRODUCTION", "")
@@ -160,6 +183,10 @@ class QAConfig:
         errors = []
         if not (base_url.startswith("http://") or base_url.startswith("https://")):
             errors.append("LEMON_QA_BASE_URL must start with http:// or https://")
+        if not (api_base_url.startswith("http://") or api_base_url.startswith("https://")):
+            errors.append("LEMON_QA_API_BASE_URL must start with http:// or https://")
+        if not (browser_base_url.startswith("http://") or browser_base_url.startswith("https://")):
+            errors.append("LEMON_QA_BROWSER_BASE_URL must start with http:// or https://")
         if not admin_username.strip():
             errors.append("LEMON_QA_ADMIN_USERNAME must be non-empty")
         if not admin_password:
@@ -174,6 +201,8 @@ class QAConfig:
             admin_username=admin_username,
             admin_password=admin_password,
             confirmation=confirmation,
+            api_base_url=api_base_url,
+            browser_base_url=browser_base_url,
         )
 
 
@@ -402,7 +431,13 @@ def browser_routes():
     }
 
 
-def run_browser_sweep(base_url: str, artifact_dir: Path, admin_session: dict, merchant_session: dict) -> list[dict[str, Any]]:
+def run_browser_sweep(
+    base_url: str,
+    artifact_dir: Path,
+    admin_session: dict,
+    merchant_session: dict,
+    context: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     helper = Path(__file__).resolve().with_name("browser_cdp_sweep.mjs")
     if not helper.exists():
         raise QASafetyError(f"Browser CDP helper is missing: {helper}")
@@ -416,6 +451,7 @@ def run_browser_sweep(base_url: str, artifact_dir: Path, admin_session: dict, me
             "admin": admin_session,
             "merchant": merchant_session,
         },
+        "context": context or {},
     }
     raw_payload = json.dumps(payload, ensure_ascii=True)
     try:
@@ -947,6 +983,32 @@ def create_self_spec(_merchant: MerchantContext, _app_id: str):
     )
 
 
+def create_merchant_ui_seed_spec(merchant: MerchantContext, app_id: str, prefix: str):
+    validate_run_prefix(prefix)
+    payload = {
+        "spec_group": "custom",
+        "kami_type": "points",
+        "points_amount": 10,
+        "points_valid_days": 30,
+        "machine_bind_mode": "one_card_one_device",
+        "authorization_owner": "device",
+        "user_bind_mode": "none",
+        "status": 1,
+        "sort_order": 9000,
+        "remark": f"{prefix}browser UI seed spec",
+    }
+    response = merchant.client.json("POST", f"/api/v1/merchant/apps/{app_id}/specs", json=payload)
+    data = _payload_data(response)
+    spec_id = data.get("id") or data.get("spec_id")
+    if not spec_id:
+        raise QASafetyError("Merchant browser UI seed spec creation response missing spec id")
+    return SpecDescriptor(
+        spec_id=int(spec_id),
+        issue_payload={"spec_id": int(spec_id)},
+        source="self_owned_ui_seed",
+    )
+
+
 def _issue_payload_from_spec(spec: SpecDescriptor, prefix: str, count=2):
     payload = {
         "spec_id": spec.spec_id,
@@ -956,7 +1018,7 @@ def _issue_payload_from_spec(spec: SpecDescriptor, prefix: str, count=2):
         "code_length": 12,
         "charset": "upper_numeric",
     }
-    if spec.source == "admin_authorized":
+    if spec.spec_id is not None:
         return payload
     payload.update(spec.issue_payload)
     return payload
@@ -1378,6 +1440,16 @@ def evaluate_browser_result(result):
     for group in action_groups or []:
         if not isinstance(group, dict):
             continue
+        if group.get("wrapped"):
+            findings.append(
+                _finding(
+                    "P2",
+                    route,
+                    viewport,
+                    "Action button group wraps across rows",
+                )
+            )
+            break
         button_count = int(group.get("button_count") or 0)
         max_gap = int(group.get("max_gap") or 0)
         spread_ratio = float(group.get("spread_ratio") or 0)
@@ -1483,6 +1555,28 @@ def _visual_finding(target, message, detail=None):
     return finding
 
 
+def _blocking_visual_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    blocking_messages = {
+        "Visual regression target layout region is missing",
+        "Visual regression target action group is missing",
+        "Visual regression screenshot is missing",
+        "Visual regression baseline is missing",
+        "Visual regression diff exceeded threshold",
+        "Visual regression check failed",
+    }
+    return [
+        finding for finding in findings
+        if finding.get("message") in blocking_messages
+    ]
+
+
+def _blocking_browser_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        finding for finding in findings
+        if str(finding.get("severity") or "").upper() in {"P0", "P1"}
+    ]
+
+
 def run_visual_regression(browser_results, artifact_dir):
     results_by_key = {
         (result.get("role"), result.get("route"), result.get("viewport")): result
@@ -1516,7 +1610,11 @@ def run_visual_regression(browser_results, artifact_dir):
         }
         comparisons.append(comparison)
         if not group:
-            findings.append(_visual_finding(target, missing_crop_message))
+            diagnostics = layout.get("merchantBatchDiagnostics")
+            detail = None
+            if diagnostics:
+                detail = f"crop_key={target.get('crop_key')}; diagnostics={json.dumps(redact(diagnostics), ensure_ascii=True, sort_keys=True)}"
+            findings.append(_visual_finding(target, missing_crop_message, detail))
             continue
 
         screenshot_key = target.get("screenshot_key", "screenshot")
@@ -1674,6 +1772,7 @@ PRODUCT_BROWSER_MESSAGES = {
     "Large blank page area detected",
     "Overwide cards detected",
     "Action button group is overly dispersed",
+    "Action button group wraps across rows",
     "Admin/merchant detail summary parity mismatch",
     "Visual regression baseline is missing",
     "Visual regression check failed",
@@ -1690,6 +1789,7 @@ ENGINEERING_BROWSER_MESSAGES = {
     "HTTP errors detected",
     "Route document returned bad status",
     "Action button group is overly dispersed",
+    "Action button group wraps across rows",
     "Admin/merchant detail summary parity mismatch",
     "Visual regression baseline is missing",
     "Visual regression check failed",
@@ -2023,7 +2123,7 @@ def _required_openapi_routes():
 
 
 def run_preflight(config: QAConfig):
-    public = APIClient(config.base_url)
+    public = APIClient(config.api_base_url)
     health = public.json("GET", "/health")
     cdp = _check_node_cdp_capability()
     routes = _require_preflight_routes(public)
@@ -2071,8 +2171,8 @@ def run_production_flow(config: QAConfig):
     run_id = prefix.rstrip("_")
     artifact_dir = _artifact_dir_for_run(run_id)
     report = QAReport(run_id=run_id, artifact_dir=artifact_dir)
-    admin_auth = login(config.base_url, config.admin_username, config.admin_password)
-    admin = APIClient(config.base_url, admin_auth)
+    admin_auth = login(config.api_base_url, config.admin_username, config.admin_password)
+    admin = APIClient(config.api_base_url, admin_auth)
     payment_snapshot = load_payment_snapshot(admin)
     merchant = None
     payment_restore_status = {"restored": False}
@@ -2081,11 +2181,16 @@ def run_production_flow(config: QAConfig):
     browser_results = []
     browser_findings = []
     flow_summaries = {
-        "deployment_health": {"base_url": config.base_url, "health": "checked"},
+        "deployment_health": {
+            "base_url": config.base_url,
+            "api_base_url": config.api_base_url,
+            "browser_base_url": config.browser_base_url,
+            "health": "checked",
+        },
     }
     try:
         temp_payment = ensure_temporary_payment_config(admin, prefix) or {}
-        merchant = register_merchant(config.base_url, prefix)
+        merchant = register_merchant(config.api_base_url, prefix)
         before_recharge = get_issue_quota_balance(merchant)
         order = submit_recharge_order(
             merchant,
@@ -2116,7 +2221,7 @@ def run_production_flow(config: QAConfig):
         assert_quota_delta(before_self_issue, after_self_issue, -self_issue_cost, "self-owned issue debit")
         self_cards = fetch_batch_cards(merchant, self_batch)
         self_verify = verify_one_card(
-            config.base_url,
+            config.api_base_url,
             self_app.app_id,
             self_batch.codes[0],
             app_secret=self_app.app_secret,
@@ -2124,6 +2229,20 @@ def run_production_flow(config: QAConfig):
         ) if self_batch.codes else {"success": False, "card_code": None}
         self_flow_summary = _report_flow_summary(self_batch, self_spec, self_cards, self_verify)
         flow_summaries["self_owned"] = self_flow_summary
+
+        ui_seed_spec = create_merchant_ui_seed_spec(merchant, self_app.app_id, prefix)
+        before_ui_seed_issue = get_issue_quota_balance(merchant)
+        ui_seed_batch = issue_batch(merchant, self_app.app_id, ui_seed_spec, prefix)
+        after_ui_seed_issue = get_issue_quota_balance(merchant)
+        ui_seed_issue_cost = int(ui_seed_batch.preview.get("total_cost") or ui_seed_batch.count)
+        assert_quota_delta(before_ui_seed_issue, after_ui_seed_issue, -ui_seed_issue_cost, "browser UI seed issue debit")
+        ui_seed_cards = fetch_batch_cards(merchant, ui_seed_batch)
+        flow_summaries["browser_ui_seed"] = _report_flow_summary(
+            ui_seed_batch,
+            ui_seed_spec,
+            ui_seed_cards,
+            {"success": True, "purpose": "browser-visible batch page seed"},
+        )
 
         admin_app, admin_spec = create_admin_app_and_spec(admin, prefix)
         authorize_app_to_merchant(admin, merchant.user_id, admin_app.app_id)
@@ -2139,7 +2258,7 @@ def run_production_flow(config: QAConfig):
         )
         authorized_cards = fetch_batch_cards(merchant, authorized_batch)
         authorized_verify = verify_one_card(
-            config.base_url,
+            config.api_base_url,
             admin_app.app_id,
             authorized_batch.codes[0],
             app_secret=admin_app.app_secret,
@@ -2151,10 +2270,11 @@ def run_production_flow(config: QAConfig):
         boundaries = verify_permission_boundaries(admin, merchant, prefix)
         flow_summaries["permission_boundaries"] = boundaries
         browser_results = run_browser_sweep(
-            config.base_url,
+            config.browser_base_url,
             artifact_dir,
             admin_auth.as_browser_storage(),
             merchant.auth.as_browser_storage(),
+            context={"merchantBatchAppId": self_app.app_id},
         )
         for result in browser_results:
             for finding in evaluate_browser_result(result):
@@ -2169,6 +2289,12 @@ def run_production_flow(config: QAConfig):
             "findings": browser_findings,
         }
         flow_summaries["visual_regression"] = visual_regression
+        blocking_visual = _blocking_visual_findings(visual_regression["findings"])
+        if blocking_visual:
+            raise QASafetyError(f"Blocking visual regression findings detected: {len(blocking_visual)}")
+        blocking_browser = _blocking_browser_findings(browser_findings)
+        if blocking_browser:
+            raise QASafetyError(f"Blocking browser findings detected: {len(blocking_browser)}")
     except Exception as error:
         flow_error = error
         flow_summaries["flow_error"] = sanitize_report_string(str(error))
@@ -2196,6 +2322,8 @@ def run_production_flow(config: QAConfig):
             report.add_section("Recharge Flow", [flow_summaries["recharge"]])
         if flow_summaries.get("self_owned"):
             report.add_section("Self Owned Flow", [flow_summaries["self_owned"]])
+        if flow_summaries.get("browser_ui_seed"):
+            report.add_section("Browser UI Seed Flow", [flow_summaries["browser_ui_seed"]])
         if flow_summaries.get("authorized"):
             report.add_section("Authorized Flow", [flow_summaries["authorized"]])
         if flow_summaries.get("permission_boundaries"):
@@ -2238,8 +2366,8 @@ def main(argv=None):
     if args.cleanup_prefix:
         prefix = validate_run_prefix(args.cleanup_prefix)
         config = QAConfig.from_env(require_confirmation=True)
-        admin_auth = login(config.base_url, config.admin_username, config.admin_password)
-        admin = APIClient(config.base_url, admin_auth)
+        admin_auth = login(config.api_base_url, config.admin_username, config.admin_password)
+        admin = APIClient(config.api_base_url, admin_auth)
         result = cleanup_run(admin, prefix)
         print(_format_report_line({"cleanup": result}))
         return 0
