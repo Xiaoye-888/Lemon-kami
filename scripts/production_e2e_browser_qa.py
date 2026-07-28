@@ -84,6 +84,19 @@ VISUAL_REGRESSION_TARGETS = [
         "max_mean_diff": 12.0,
         "max_changed_ratio": 0.08,
     },
+    {
+        "role": "merchant",
+        "route": "/merchant/batches",
+        "viewport": "desktop",
+        "label": "merchant-batches-batch-row-actions",
+        "baseline": "merchant-batches-batch-row-actions.desktop.png",
+        "screenshot_key": "detailScreenshot",
+        "crop_kind": "rect",
+        "crop_key": "merchantBatchBatchRowActionsRect",
+        "crop_padding": 12,
+        "max_mean_diff": 8.0,
+        "max_changed_ratio": 0.04,
+    },
 ]
 RUN_PREFIX_RE = re.compile(r"^E2E_UI_QA_\d{8}_\d{6}_[A-Za-z0-9]{6,16}_$")
 FORBIDDEN_REPORT_PATTERNS = tuple(
@@ -1418,6 +1431,12 @@ def evaluate_browser_result(result):
     split_workbench_detected = layout.get("split_workbench_detected")
     if split_workbench_detected is None:
         split_workbench_detected = layout.get("splitWorkbenchDetected")
+    merchant_batch_detail_opened_as_drawer = layout.get("merchant_batch_detail_opened_as_drawer")
+    if merchant_batch_detail_opened_as_drawer is None:
+        merchant_batch_detail_opened_as_drawer = layout.get("merchantBatchDetailOpenedAsDrawer")
+    merchant_batch_detail_url_has_batch_no = layout.get("merchant_batch_detail_url_has_batch_no")
+    if merchant_batch_detail_url_has_batch_no is None:
+        merchant_batch_detail_url_has_batch_no = layout.get("merchantBatchDetailUrlHasBatchNo")
 
     if horizontal_overflow:
         findings.append(_finding("P2", route, viewport, "Horizontal overflow detected"))
@@ -1437,6 +1456,10 @@ def evaluate_browser_result(result):
         findings.append(_finding("P2", route, viewport, "Admin/merchant detail summary parity mismatch"))
     if split_workbench_detected and route.startswith("/merchant/") and route.endswith("/batches"):
         findings.append(_finding("P2", route, viewport, "Merchant batch page uses split workbench layout"))
+    if merchant_batch_detail_opened_as_drawer is True and route.startswith("/merchant/") and route.endswith("/batches"):
+        findings.append(_finding("P1", route, viewport, "Merchant batch detail opened as drawer instead of standalone detail page"))
+    if merchant_batch_detail_url_has_batch_no is False and route.startswith("/merchant/") and route.endswith("/batches"):
+        findings.append(_finding("P1", route, viewport, "Merchant batch detail route did not retain batch_no context"))
     for group in action_groups or []:
         if not isinstance(group, dict):
             continue

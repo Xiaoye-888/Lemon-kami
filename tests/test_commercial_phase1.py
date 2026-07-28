@@ -806,6 +806,141 @@ def test_merchant_authorized_app_issue_requires_existing_spec_and_hides_secrets(
         fastapi_app.dependency_overrides.clear()
 
 
+def test_merchant_authorized_app_batches_are_issuer_scoped_not_synced_from_admin():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="authorized-batch-issuer", password_hash=hash_password("secret123"), status=1)
+        app = App(
+            app_id="app_authorized_batch_scope",
+            name="Authorized Batch Scope",
+            app_secret="secret-authorized-scope",
+            rsa_public_key="public-authorized-scope",
+            rsa_private_key="private-authorized-scope",
+            created_by="admin",
+        )
+        session.add_all([merchant, app])
+        session.commit()
+        session.refresh(merchant)
+        spec = KamiSpec(
+            app_id=app.app_id,
+            spec_key="points-100-shared",
+            spec_name="Shared 100 Points",
+            spec_group="common",
+            kami_type="points",
+            points_amount=100,
+            status=1,
+        )
+        session.add_all(
+            [
+                spec,
+                UserAppAuthorization(
+                    app_id=app.app_id,
+                    user_id=merchant.id,
+                    username=merchant.username,
+                    granted_by="admin",
+                ),
+                UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=10),
+            ]
+        )
+        session.commit()
+        session.refresh(spec)
+        admin_batch = KamiBatch(
+            spec_id=spec.id,
+            app_id=app.app_id,
+            batch_no="ADMIN-SHOULD-NOT-SYNC",
+            kami_type="points",
+            points_amount=100,
+            status=1,
+        )
+        session.add(admin_batch)
+        session.commit()
+        session.refresh(admin_batch)
+        session.add(
+            Kami(
+                spec_id=spec.id,
+                app_id=app.app_id,
+                kami_code="ADMIN-SCOPE-001",
+                kami_type="points",
+                status="unused",
+                batch_no=admin_batch.batch_no,
+                points_amount=100,
+            )
+        )
+        session.commit()
+        token = routes_user.create_user_access_token(merchant)
+        spec_id = spec.id
+        admin_batch_id = admin_batch.id
+
+    try:
+        empty_spec_batches = client.get(
+            f"/api/v1/merchant/kami-specs/{spec_id}/batches",
+            headers=auth_headers(token),
+        )
+        assert empty_spec_batches.status_code == 200
+        assert empty_spec_batches.json()["items"] == []
+
+        empty_app_batches = client.get(
+            "/api/v1/merchant/apps/app_authorized_batch_scope/batches",
+            headers=auth_headers(token),
+        )
+        assert empty_app_batches.status_code == 200
+        assert empty_app_batches.json()["items"] == []
+
+        hidden_admin_batch = client.get(
+            f"/api/v1/merchant/batches/{admin_batch_id}/kamis",
+            headers=auth_headers(token),
+        )
+        assert hidden_admin_batch.status_code == 404
+
+        issue_response = client.post(
+            "/api/v1/merchant/apps/app_authorized_batch_scope/kamis/batch",
+            headers=auth_headers(token),
+            json={"spec_id": spec_id, "count": 2, "batch_no": "MERCHANT-ONLY-BATCH", "code_length": 8},
+        )
+        assert issue_response.status_code == 200
+
+        spec_batches = client.get(
+            f"/api/v1/merchant/kami-specs/{spec_id}/batches",
+            headers=auth_headers(token),
+        )
+        assert spec_batches.status_code == 200
+        spec_items = spec_batches.json()["items"]
+        assert [item["batch_no"] for item in spec_items] == ["MERCHANT-ONLY-BATCH"]
+        assert spec_items[0]["source"] == "admin_authorized"
+        assert spec_items[0]["batch_source"] == "merchant_issued"
+        assert spec_items[0]["can_edit"] is True
+        assert spec_items[0]["can_append"] is True
+
+        app_batches = client.get(
+            "/api/v1/merchant/apps/app_authorized_batch_scope/batches",
+            headers=auth_headers(token),
+        )
+        assert app_batches.status_code == 200
+        app_items = app_batches.json()["items"]
+        assert [item["batch_no"] for item in app_items] == ["MERCHANT-ONLY-BATCH"]
+
+        visible_cards = client.get(
+            f"/api/v1/merchant/batches/{app_items[0]['id']}/kamis",
+            headers=auth_headers(token),
+        )
+        assert visible_cards.status_code == 200
+        assert visible_cards.json()["total"] == 2
+
+        still_hidden_admin_batch = client.get(
+            f"/api/v1/merchant/batches/{admin_batch_id}/kamis",
+            headers=auth_headers(token),
+        )
+        assert still_hidden_admin_batch.status_code == 404
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_merchant_issue_batch_persists_admin_grade_code_generation_options():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

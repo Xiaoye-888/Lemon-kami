@@ -1082,6 +1082,9 @@ def test_browser_cdp_helper_exports_detail_summary_rect_and_mismatch_checks():
     assert "max_top_delta" in helper
     assert "wrapped" in helper
     assert "merchantBatchSpecRowActionsRect" in helper
+    assert "merchantBatchBatchRowActionsRect" in helper
+    assert "merchantBatchDetailOpenedAsDrawer" in helper
+    assert "merchantBatchDetailUrlHasBatchNo" in helper
     assert "merchantBatchDiagnostics" in helper
     assert "routeWithContext" in helper
     assert "merchantBatchAppId" in helper
@@ -1121,17 +1124,54 @@ def test_browser_result_evaluation_accepts_cdp_layout_keys():
 def test_visual_regression_targets_cover_merchant_batch_row_actions():
     qa = load_qa_module()
 
-    target = next(
+    spec_target = next(
         target for target in qa.VISUAL_REGRESSION_TARGETS if target["label"] == "merchant-batches-spec-row-actions"
     )
+    batch_target = next(
+        target for target in qa.VISUAL_REGRESSION_TARGETS if target["label"] == "merchant-batches-batch-row-actions"
+    )
 
-    assert target["role"] == "merchant"
-    assert target["route"] == "/merchant/batches"
-    assert target["viewport"] == "desktop"
-    assert target["screenshot_key"] == "screenshot"
-    assert target["crop_kind"] == "rect"
-    assert target["crop_key"] == "merchantBatchSpecRowActionsRect"
-    assert target["baseline"] == "merchant-batches-spec-row-actions.desktop.png"
+    assert spec_target["role"] == "merchant"
+    assert spec_target["route"] == "/merchant/batches"
+    assert spec_target["viewport"] == "desktop"
+    assert spec_target["screenshot_key"] == "screenshot"
+    assert spec_target["crop_kind"] == "rect"
+    assert spec_target["crop_key"] == "merchantBatchSpecRowActionsRect"
+    assert spec_target["baseline"] == "merchant-batches-spec-row-actions.desktop.png"
+
+    assert batch_target["role"] == "merchant"
+    assert batch_target["route"] == "/merchant/batches"
+    assert batch_target["viewport"] == "desktop"
+    assert batch_target["screenshot_key"] == "detailScreenshot"
+    assert batch_target["crop_kind"] == "rect"
+    assert batch_target["crop_key"] == "merchantBatchBatchRowActionsRect"
+    assert batch_target["baseline"] == "merchant-batches-batch-row-actions.desktop.png"
+
+
+def test_browser_result_evaluation_blocks_merchant_batch_drawer_detail_regression():
+    qa = load_qa_module()
+
+    findings = qa.evaluate_browser_result(
+        {
+            "role": "merchant",
+            "route": "/merchant/batches",
+            "viewport": "desktop",
+            "console_errors": [],
+            "exceptions": [],
+            "network_failures": [],
+            "bodyTextLength": 1200,
+            "layout": {
+                "merchantBatchDetailOpenedAsDrawer": True,
+                "merchantBatchDetailUrlHasBatchNo": False,
+            },
+        }
+    )
+
+    assert [finding["message"] for finding in findings] == [
+        "Merchant batch detail opened as drawer instead of standalone detail page",
+        "Merchant batch detail route did not retain batch_no context",
+    ]
+    assert {finding["severity"] for finding in findings} == {"P1"}
 
 
 def test_blocking_visual_findings_include_missing_targets_and_diffs():

@@ -352,34 +352,40 @@
       <div class="batch-detail-shell">
         <section class="batch-overview-card">
           <div class="batch-overview-main">
-            <h2>{{ selectedSpec?.spec_name || '规格详情' }}</h2>
+            <h2>{{ currentDetailTitle }}</h2>
             <div class="hero-tags">
-              <el-tag type="primary" effect="dark" round>{{ getTypeText(selectedSpec?.kami_type) }}</el-tag>
-              <el-tag type="info" effect="dark" round>{{ getValidityText(selectedSpec) }}</el-tag>
-              <el-tag v-if="selectedSpec?.is_editable" type="success" effect="dark" round>自建规格可编辑</el-tag>
-              <el-tag v-else type="info" effect="dark" round>授权规格只读</el-tag>
-              <el-tag effect="dark" round>{{ selectedSpec?.source === 'self_owned' ? '自建应用' : '授权应用' }}</el-tag>
+              <el-tag type="primary" effect="dark" round>{{ getTypeText(currentDetailType) }}</el-tag>
+              <el-tag type="info" effect="dark" round>{{ getValidityText(currentDetailTarget) }}</el-tag>
+              <el-tag v-if="viewMode === 'spec' && selectedSpec?.is_editable" type="success" effect="dark" round>自建规格可编辑</el-tag>
+              <el-tag v-else-if="viewMode === 'spec'" type="info" effect="dark" round>授权规格只读</el-tag>
+              <el-tag effect="dark" round>{{ currentDetailTarget?.source === 'self_owned' ? '自建应用' : '授权应用' }}</el-tag>
             </div>
           </div>
           <div class="hero-actions">
-            <el-button :icon="ArrowLeft" @click="backFromDetail">返回批次管理</el-button>
-            <el-button :icon="EditPen" :disabled="!selectedSpec?.is_editable" @click="handleEditSpecGroup(selectedSpec)">编辑规格</el-button>
-            <el-button type="danger" plain :icon="Delete" :disabled="!canDeleteSpecGroup(selectedSpec)" @click="handleDeleteSpecGroup(selectedSpec)">删除规格</el-button>
-            <el-button type="primary" :icon="Plus" :disabled="!merchantBatchPermissions.generateBatch" @click="showGenerateForGroup(selectedSpec)">生成卡密</el-button>
+            <el-button :icon="ArrowLeft" @click="backFromDetail">{{ viewMode === 'batch' && currentSpec ? '返回规格' : '返回批次管理' }}</el-button>
+            <template v-if="viewMode === 'spec'">
+              <el-button :icon="EditPen" :disabled="!selectedSpec?.is_editable" @click="handleEditSpecGroup(selectedSpec)">编辑规格</el-button>
+              <el-button type="danger" plain :icon="Delete" :disabled="!canDeleteSpecGroup(selectedSpec)" @click="handleDeleteSpecGroup(selectedSpec)">删除规格</el-button>
+              <el-button type="primary" :icon="Plus" :disabled="!merchantBatchPermissions.generateBatch" @click="showGenerateForGroup(selectedSpec)">生成卡密</el-button>
+            </template>
+            <template v-else>
+              <el-button :icon="EditPen" :disabled="!currentBatch?.can_edit" @click="showBatchDialog(currentBatch)">编辑批次</el-button>
+              <el-button type="danger" plain :icon="Delete" :disabled="!currentBatch?.can_delete" @click="deleteBatch(currentBatch)">删除批次</el-button>
+            </template>
           </div>
         </section>
 
         <section class="summary-metric-card">
           <div class="metric-item">
-            <strong class="metric-value is-primary">{{ selectedSpec?.total_count || 0 }}</strong>
+            <strong class="metric-value is-primary">{{ currentDetailTarget?.total_count || 0 }}</strong>
             <span>总数</span>
           </div>
           <div class="metric-item">
-            <strong class="metric-value is-green">{{ selectedSpec?.unused_count || 0 }}</strong>
+            <strong class="metric-value is-green">{{ currentDetailTarget?.unused_count || 0 }}</strong>
             <span>未使用</span>
           </div>
           <div class="metric-item">
-            <strong class="metric-value is-amber">{{ usedCount(selectedSpec) }}</strong>
+            <strong class="metric-value is-amber">{{ usedCount(currentDetailTarget) }}</strong>
             <span>已使用</span>
           </div>
         </section>
@@ -400,7 +406,7 @@
         <el-table :data="specBatches" v-loading="loading" class="yz-clean-table" row-key="id">
           <el-table-column label="批次名称" min-width="180">
             <template #default="{ row }">
-              <button type="button" class="batch-title-link" @click="openBatchDrawer(row)">
+              <button type="button" class="batch-title-link" @click="openBatchDetail(row)">
                 {{ row.batch_no }}
               </button>
             </template>
@@ -447,13 +453,13 @@
             <template #default="{ row }">
               <div class="icon-actions">
                 <el-tooltip content="查看卡密" placement="top">
-                  <el-button class="icon-action info" :icon="View" @click="openBatchDrawer(row)" />
+                  <el-button class="icon-action info" :icon="View" @click="openBatchDetail(row)" />
                 </el-tooltip>
                 <el-tooltip content="编辑批次" placement="top">
-                  <el-button class="icon-action subtle" :icon="EditPen" :disabled="!row.can_manage" @click="showBatchDialog(row)" />
+                  <el-button class="icon-action subtle" :icon="EditPen" :disabled="!row.can_edit" @click="showBatchDialog(row)" />
                 </el-tooltip>
                 <el-tooltip content="删除空批次" placement="top">
-                  <el-button class="icon-action danger" :icon="Delete" :disabled="!row.can_manage || (row.count || 0) > 0" @click="deleteBatch(row)" />
+                  <el-button class="icon-action danger" :icon="Delete" :disabled="!row.can_delete" @click="deleteBatch(row)" />
                 </el-tooltip>
               </div>
             </template>
@@ -469,6 +475,15 @@
           </div>
           <div class="panel-actions">
             <el-button :icon="Download" @click="handleDetailExport">导出</el-button>
+            <el-button
+              v-if="viewMode === 'batch'"
+              type="primary"
+              :icon="Plus"
+              :disabled="!currentBatch?.can_append"
+              @click="showAppendDialog(currentBatch)"
+            >
+              追加卡密
+            </el-button>
             <el-button
               type="danger"
               plain
@@ -1007,19 +1022,6 @@
       </template>
     </el-dialog>
 
-    <el-drawer
-      v-model="batchDrawerVisible"
-      :title="selectedBatch ? `批次卡密 - ${selectedBatch.batch_no}` : '批次卡密'"
-      size="720px"
-    >
-      <el-table :data="batchKamis.items" border stripe>
-        <el-table-column prop="kami_code" label="卡密" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="status" label="状态" width="90" />
-        <el-table-column prop="created_at" label="创建时间" width="170">
-          <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
-        </el-table-column>
-      </el-table>
-    </el-drawer>
   </div>
 </template>
 
@@ -1051,6 +1053,7 @@ import {
   getMerchantApps,
   exportMerchantKamis,
   getMerchantBatchKamis,
+  getMerchantBatches,
   getMerchantQuotas,
   getMerchantSpecBatches,
   getMerchantSpecKamis,
@@ -1077,7 +1080,6 @@ const specKamis = ref({ items: [], total: 0 })
 const detailKamis = ref([])
 const selectedDetailKamis = ref([])
 const detailTotal = ref(0)
-const batchKamis = ref({ items: [], total: 0 })
 const selectedBatch = ref(null)
 const viewMode = ref('list')
 const activeTab = ref('batches')
@@ -1087,7 +1089,6 @@ const specDialogVisible = ref(false)
 const generateDialogVisible = ref(false)
 const batchDialogVisible = ref(false)
 const appendDialogVisible = ref(false)
-const batchDrawerVisible = ref(false)
 const editingSpec = ref(null)
 const editingBatch = ref(null)
 const savingBatch = ref(false)
@@ -1214,6 +1215,25 @@ const specOverview = computed(() => ({
   total: specGroups.value.reduce((sum, row) => sum + (row.total_count || 0), 0),
   unused: specGroups.value.reduce((sum, row) => sum + (row.unused_count || 0), 0)
 }))
+const currentSpec = computed(() => {
+  if (!selectedSpec.value) return null
+  return specRows.value.find((item) => item.id === selectedSpec.value.id) || selectedSpec.value
+})
+const currentBatch = computed(() => {
+  if (!selectedBatch.value) return null
+  return (
+    specBatches.value.find((item) => item.id === selectedBatch.value.id) ||
+    specBatches.value.find((item) => item.batch_no === selectedBatch.value.batch_no) ||
+    selectedBatch.value
+  )
+})
+const currentDetailTarget = computed(() => (viewMode.value === 'spec' ? currentSpec.value : currentBatch.value))
+const currentDetailType = computed(() => currentDetailTarget.value?.kami_type || '')
+const currentDetailTitle = computed(() => (
+  viewMode.value === 'spec'
+    ? currentSpec.value?.spec_name || '-'
+    : currentBatch.value?.batch_no || '-'
+))
 const merchantBatchPermissions = computed(() => ({
   createSpec: canManageSelectedApp.value,
   editSpec: canManageSelectedApp.value,
@@ -1225,7 +1245,6 @@ const merchantBatchPermissions = computed(() => ({
   deleteDetailKamis: false
 }))
 const editingBatchHasCards = computed(() => (editingBatch.value?.count || 0) > 0)
-const currentDetailType = computed(() => selectedSpec.value?.kami_type || '')
 const charsetOptions = [
   { label: '大写字母 + 数字', value: 'upper_numeric', sample: 'A1' },
   { label: '纯数字', value: 'numeric', sample: '1' },
@@ -1577,11 +1596,29 @@ async function loadApps() {
 async function hydrateRouteDetail() {
   if (!queryParams.app_id || viewMode.value !== 'list') return
   const routeSpecId = route.query.spec_id ? Number(route.query.spec_id) : null
-  if (!routeSpecId) return
-  const spec = specRows.value.find((item) => item.id === routeSpecId)
-  if (spec) {
-    await openSpecGroup(spec, false)
+  if (routeSpecId) {
+    const spec = specRows.value.find((item) => item.id === routeSpecId)
+    if (spec) {
+      await openSpecGroup(spec, false)
+    }
+    return
   }
+  if (route.query.batch_no) {
+    const batch = await findBatchByNo(String(route.query.batch_no))
+    if (batch) await openBatchDetail(batch, false)
+  }
+}
+
+async function findBatchByNo(batchNo) {
+  const res = await getMerchantBatches(queryParams.app_id)
+  const batches = responseItems(res)
+  const batch = batches.find((item) => item.batch_no === batchNo)
+  const spec = batch?.spec_id ? specRows.value.find((item) => item.id === batch.spec_id) : null
+  if (spec) {
+    selectedSpec.value = spec
+    await loadSpecBatches()
+  }
+  return batch
 }
 
 async function loadQuota() {
@@ -1636,7 +1673,7 @@ function resetDetailState() {
 }
 
 async function loadDetailKamis() {
-  if (!selectedSpec.value?.id) {
+  if (!currentDetailTarget.value) {
     detailKamis.value = []
     detailTotal.value = 0
     return
@@ -1650,7 +1687,9 @@ async function loadDetailKamis() {
     if (detailQuery.batch_no) params.batch_no = detailQuery.batch_no
     if (detailQuery.status) params.status = detailQuery.status
     if (detailQuery.keyword.trim()) params.keyword = detailQuery.keyword.trim()
-    const res = await getMerchantSpecKamis(selectedSpec.value.id, params)
+    const res = viewMode.value === 'batch'
+      ? await getMerchantBatchKamis(selectedBatch.value.id, params)
+      : await getMerchantSpecKamis(selectedSpec.value.id, params)
     const payload = responsePayload(res)
     detailKamis.value = payload.items || []
     detailTotal.value = payload.total || 0
@@ -1867,16 +1906,21 @@ async function showGenerateForGroup(row) {
 }
 
 const handleDetailExport = async () => {
-  if (!selectedSpec.value?.id) return
+  if (!currentDetailTarget.value?.app_id) return
   const params = {
-    app_id: selectedSpec.value.app_id,
-    spec_id: selectedSpec.value.id
+    app_id: currentDetailTarget.value.app_id
   }
-  if (detailQuery.batch_no) params.batch_no = detailQuery.batch_no
+  if (viewMode.value === 'batch') {
+    params.batch_no = currentBatch.value?.batch_no
+  } else {
+    params.spec_id = selectedSpec.value.id
+    if (detailQuery.batch_no) params.batch_no = detailQuery.batch_no
+  }
   if (detailQuery.status) params.status = detailQuery.status
   if (detailQuery.keyword.trim()) params.keyword = detailQuery.keyword.trim()
   const response = await exportMerchantKamis(params)
-  downloadBlob(response, `merchant-kamis-${selectedSpec.value.app_id}-spec-${selectedSpec.value.id}.csv`)
+  const suffix = viewMode.value === 'batch' ? `batch-${currentBatch.value?.batch_no || 'detail'}` : `spec-${selectedSpec.value.id}`
+  downloadBlob(response, `merchant-kamis-${currentDetailTarget.value.app_id}-${suffix}.csv`)
 }
 
 const handleDeleteSelectedDetail = async () => {
@@ -1969,6 +2013,10 @@ function getTimeCardValidity(row) {
 }
 
 async function backFromDetail() {
+  if (viewMode.value === 'batch' && currentSpec.value) {
+    await openSpecGroup(currentSpec.value)
+    return
+  }
   viewMode.value = 'list'
   selectedSpec.value = null
   selectedBatch.value = null
@@ -1999,11 +2047,22 @@ async function handleIssue() {
   }
 }
 
-async function openBatchDrawer(row) {
+async function openBatchDetail(row, updateRoute = true) {
+  if (!row) return
   selectedBatch.value = row
-  const res = await getMerchantBatchKamis(row.id)
-  batchKamis.value = responsePayload(res)
-  batchDrawerVisible.value = true
+  const spec = row.spec_id ? specRows.value.find((item) => item.id === row.spec_id) : null
+  if (spec) {
+    selectedSpec.value = spec
+    if (!specBatches.value.some((item) => item.id === row.id || item.batch_no === row.batch_no)) {
+      await loadSpecBatches()
+    }
+  }
+  viewMode.value = 'batch'
+  resetDetailState()
+  if (updateRoute) {
+    router.replace({ path: '/merchant/batches', query: { app_id: queryParams.app_id, batch_no: row.batch_no } })
+  }
+  await loadDetailKamis()
 }
 
 function showBatchDialog(row) {
@@ -2032,7 +2091,7 @@ async function handleSaveBatch() {
 }
 
 function showAppendDialog(row) {
-  if (!row?.can_manage) return
+  if (!row?.can_append) return
   selectedBatch.value = row
   resetAppendForm(row)
   appendDialogVisible.value = true
@@ -2154,12 +2213,19 @@ onMounted(loadAll)
 .panel-actions,
 .section-actions,
 .hero-actions,
-.hero-tags,
-.icon-actions {
+.hero-tags {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.icon-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  flex-wrap: nowrap;
 }
 
 .row-actions {
@@ -2173,6 +2239,29 @@ onMounted(loadAll)
   margin-left: 0;
   border-radius: 8px;
   font-weight: 600;
+}
+
+.icon-action {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
+.icon-action.info {
+  border-color: #06b6d4;
+  color: #0891b2;
+}
+
+.icon-action.subtle {
+  border-color: #94a3b8;
+  color: #475569;
+}
+
+.icon-action.danger {
+  border-color: #ef4444;
+  color: #ef4444;
 }
 
 .yz-filter-strip {

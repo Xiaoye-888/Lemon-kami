@@ -703,7 +703,7 @@ def test_merchant_batches_exposes_spec_first_workbench_and_scoped_apis():
         "specRows",
         "specDialogVisible",
         "generateDialogVisible",
-        "batchDrawerVisible",
+        "openBatchDetail",
         "loadSpecBatches",
         "loadSpecKamis",
         "showGenerateForGroup",
@@ -835,7 +835,7 @@ def test_merchant_batch_spec_detail_matches_admin_card_panel_contract():
         "formatOptionalTime",
         "exportMerchantKamis(params)",
         "getMerchantSpecKamis(selectedSpec.value.id, params)",
-        "getMerchantBatchKamis(row.id)",
+        "getMerchantBatchKamis(selectedBatch.value.id, params)",
     ):
         assert token in merchant_batches
 
@@ -862,11 +862,15 @@ def test_merchant_batch_spec_detail_top_summary_matches_admin_three_card_layout(
 
     assert summary_block.count('<div class="metric-item">') == 3
     for token in (
-        "selectedSpec?.total_count || 0",
-        "selectedSpec?.unused_count || 0",
-        "usedCount(selectedSpec)",
+        "currentDetailTarget?.total_count || 0",
+        "currentDetailTarget?.unused_count || 0",
+        "usedCount(currentDetailTarget)",
+        "currentDetailTitle",
+        "currentBatch",
+        "currentDetailTarget",
+        "viewMode === 'batch' && currentSpec",
     ):
-        assert token in summary_block
+        assert token in merchant_batches
 
     for token in (
         "grid-template-columns: minmax(0, 1fr) 420px;",
@@ -878,6 +882,9 @@ def test_merchant_batch_spec_detail_top_summary_matches_admin_three_card_layout(
     for forbidden in (
         "selectedSpec?.created_at",
         "selectedSpec?.updated_at",
+        "selectedSpec?.total_count || 0",
+        "selectedSpec?.unused_count || 0",
+        "usedCount(selectedSpec)",
         "创建时间",
         "更新时间",
         "is-time",
@@ -894,16 +901,59 @@ def test_merchant_batch_row_actions_stay_single_line_and_match_admin_spacing():
     merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
     admin_batches = (PROJECT_ROOT / "admin/src/views/KamiBatches.vue").read_text(encoding="utf-8")
 
+    icon_block = merchant_batches.split(".icon-actions {", 1)[1].split("}", 1)[0]
+
     assert ".row-actions {\n  display: flex;" in merchant_batches
     assert "flex-wrap: nowrap;" in merchant_batches
     assert ".row-actions,\n.icon-actions" not in merchant_batches
+    assert "display: flex;" in icon_block
+    assert "flex-wrap: nowrap;" in icon_block
+    assert "flex-wrap: wrap;" not in icon_block
     assert ".row-actions :deep(.el-button)" in merchant_batches
     assert "margin-left: 0;" in merchant_batches
     assert "border-radius: 8px;" in merchant_batches
     assert "font-weight: 600;" in merchant_batches
+    for token in (
+        ".icon-action {",
+        "width: 36px;",
+        "height: 36px;",
+        "padding: 0;",
+        ".icon-action.info",
+        ".icon-action.subtle",
+        ".icon-action.danger",
+    ):
+        assert token in merchant_batches
 
     assert "flex-wrap: nowrap;" in admin_batches
     assert "Action button group wraps across rows" not in merchant_batches
+
+
+def test_merchant_batch_list_opens_admin_isomorphic_batch_detail_not_drawer():
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+
+    assert "openBatchDrawer" not in merchant_batches
+    assert "batchDrawerVisible" not in merchant_batches
+    assert "<el-drawer" not in merchant_batches
+    assert 'class="batch-title-link" @click="openBatchDetail(row)"' in merchant_batches
+    assert 'class="icon-action info" :icon="View" @click="openBatchDetail(row)"' in merchant_batches
+    assert "viewMode.value = 'batch'" in merchant_batches
+    assert "batch_no: row.batch_no" in merchant_batches
+    assert "route.query.batch_no" in merchant_batches
+    assert "getMerchantBatchKamis(selectedBatch.value.id, params)" in merchant_batches
+
+
+def test_merchant_batch_detail_cards_panel_exposes_append_action_like_admin():
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+
+    cards_header = merchant_batches.split('<section class="yz-admin-panel cards-panel">', 1)[1].split(
+        '<div class="yz-filter-strip">',
+        1,
+    )[0]
+
+    assert 'v-if="viewMode === \'batch\'"' in cards_header
+    assert ':disabled="!currentBatch?.can_append"' in cards_header
+    assert '@click="showAppendDialog(currentBatch)"' in cards_header
+    assert "追加卡密" in cards_header
 
 
 def test_merchant_batch_generation_dialog_exposes_admin_grade_code_controls_and_quota_semantics():

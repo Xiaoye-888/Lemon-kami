@@ -683,8 +683,9 @@ def _merchant_batch_payload(
 ) -> dict:
     app = app or session.exec(select(App).where(App.app_id == batch.app_id)).first()
     spec = spec or (session.get(KamiSpec, batch.spec_id) if batch.spec_id else None)
-    is_owned = bool(app and _app_is_owned_by_user(app, current_user))
     stats = stats or batch_stats_payload(session, batch, created_by_user_id=current_user.id)
+    has_user_cards = _merchant_batch_has_user_cards(session, batch, current_user.id, stats=stats)
+    is_owned_app = bool(app and _app_is_owned_by_user(app, current_user))
     count = stats.get("total_count", 0)
     payload = {
         "id": batch.id,
@@ -712,21 +713,42 @@ def _merchant_batch_payload(
         "count": count,
         "stats": stats,
         **_batch_cost_snapshot(session, batch, current_user, count),
-        "can_manage": is_owned,
-        "source": "self_owned" if is_owned else "admin_authorized",
+        "can_manage": has_user_cards,
+        "source": "self_owned" if is_owned_app else "admin_authorized",
+        "batch_source": "merchant_issued" if has_user_cards else "admin_managed",
         "created_at": to_api_beijing_iso(batch.created_at, naive="civil") if batch.created_at else None,
         "updated_at": to_api_beijing_iso(batch.updated_at, naive="civil") if batch.updated_at else None,
     }
     capabilities = {
         "can_view": True,
-        "can_manage": is_owned,
-        "can_edit": is_owned,
-        "can_append": is_owned,
-        "can_delete": is_owned and count == 0,
+        "can_manage": has_user_cards,
+        "can_edit": has_user_cards,
+        "can_append": has_user_cards,
+        "can_delete": has_user_cards and count == 0,
     }
     payload["capabilities"] = capabilities
     payload.update(capabilities)
     return payload
+
+
+def _merchant_batch_has_user_cards(
+    session: Session,
+    batch: KamiBatch,
+    user_id: int,
+    *,
+    stats: Optional[dict] = None,
+) -> bool:
+    if stats is not None and int(stats.get("total_count", 0) or 0) > 0:
+        return True
+    return session.exec(
+        select(Kami.id)
+        .where(
+            Kami.app_id == batch.app_id,
+            Kami.batch_no == batch.batch_no,
+            Kami.created_by_user_id == user_id,
+        )
+        .limit(1)
+    ).first() is not None
 
 
 def _get_visible_merchant_batch_or_404(
@@ -738,7 +760,9 @@ def _get_visible_merchant_batch_or_404(
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     app = _get_visible_app_or_404(session, current_user, batch.app_id)
-    return batch, app, _app_is_owned_by_user(app, current_user)
+    if not _merchant_batch_has_user_cards(session, batch, current_user.id):
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return batch, app, True
 
 
 def _batch_cost_snapshot(session: Session, batch: KamiBatch, user: EndUser, fallback_count: int) -> dict:
@@ -1447,7 +1471,10 @@ async def list_merchant_spec_batches(
     ).all()
     items = []
     for batch in batches:
-        items.append(_merchant_batch_payload(session, batch, current_user, spec=spec))
+        stats = batch_stats_payload(session, batch, created_by_user_id=current_user.id)
+        if not _merchant_batch_has_user_cards(session, batch, current_user.id, stats=stats):
+            continue
+        items.append(_merchant_batch_payload(session, batch, current_user, spec=spec, stats=stats))
     return {"success": True, "data": {"items": items, "total": len(items)}, "items": items}
 
 
@@ -1488,10 +1515,7 @@ async def list_merchant_batch_kamis(
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
-    batch = session.get(KamiBatch, batch_id)
-    if not batch:
-        raise HTTPException(status_code=404, detail="Batch not found")
-    _get_visible_app_or_404(session, current_user, batch.app_id)
+    batch, _app, _can_manage_batch = _get_visible_merchant_batch_or_404(session, current_user, batch_id)
     try:
         statement = merchant_kami_statement(
             session,
@@ -1985,7 +2009,10 @@ async def list_merchant_batches(
     ).all()
     result = []
     for batch in batches:
-        result.append(_merchant_batch_payload(session, batch, current_user))
+        stats = batch_stats_payload(session, batch, created_by_user_id=current_user.id)
+        if not _merchant_batch_has_user_cards(session, batch, current_user.id, stats=stats):
+            continue
+        result.append(_merchant_batch_payload(session, batch, current_user, stats=stats))
     return {"success": True, "data": result, "items": result}
 
 
@@ -1996,9 +2023,9 @@ async def update_merchant_batch(
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
-    batch, app, is_owned = _get_visible_merchant_batch_or_404(session, current_user, batch_id)
-    if not is_owned:
-        raise HTTPException(status_code=403, detail="Only self-owned apps can manage batches")
+    batch, app, can_manage_batch = _get_visible_merchant_batch_or_404(session, current_user, batch_id)
+    if not can_manage_batch:
+        raise HTTPException(status_code=403, detail="Only issuer-created batches can be managed")
 
     data = payload.model_dump(exclude_unset=True)
     if not data:
@@ -2077,9 +2104,9 @@ async def delete_merchant_batch(
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
-    batch, _app, is_owned = _get_visible_merchant_batch_or_404(session, current_user, batch_id)
-    if not is_owned:
-        raise HTTPException(status_code=403, detail="Only self-owned apps can manage batches")
+    batch, _app, can_manage_batch = _get_visible_merchant_batch_or_404(session, current_user, batch_id)
+    if not can_manage_batch:
+        raise HTTPException(status_code=403, detail="Only issuer-created batches can be managed")
     existing_kami = session.exec(
         select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
     ).first()
@@ -2098,9 +2125,9 @@ async def append_merchant_batch_kamis(
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
-    batch, app, is_owned = _get_visible_merchant_batch_or_404(session, current_user, batch_id)
-    if not is_owned:
-        raise HTTPException(status_code=403, detail="Only self-owned apps can manage batches")
+    batch, app, can_manage_batch = _get_visible_merchant_batch_or_404(session, current_user, batch_id)
+    if not can_manage_batch:
+        raise HTTPException(status_code=403, detail="Only issuer-created batches can be managed")
     if batch.status != 1:
         raise HTTPException(status_code=400, detail="Batch is disabled")
     spec = session.get(KamiSpec, batch.spec_id) if batch.spec_id else None

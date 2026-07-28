@@ -572,6 +572,20 @@ async function evaluateLayout(cdp, sessionId) {
     ? document.querySelector('.spec-section .row-actions')
     : null;
   const merchantBatchSpecRowActionsRect = rectFor(merchantBatchSpecRowActions);
+  const merchantBatchBatchRowActions = window.location.pathname.includes('/merchant/batches')
+    ? document.querySelector('.batches-panel .icon-actions')
+    : null;
+  const merchantBatchBatchRowActionsRect = rectFor(merchantBatchBatchRowActions);
+  const merchantBatchDrawerVisible = window.location.pathname.includes('/merchant/batches') && Array.from(document.querySelectorAll('.el-drawer'))
+    .some((el) => {
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    });
+  const merchantBatchUrlHasBatchNo = window.location.pathname.includes('/merchant/batches') && new URLSearchParams(window.location.search).has('batch_no');
+  const merchantBatchDetailAttempted = merchantBatchDrawerVisible || merchantBatchUrlHasBatchNo;
+  const merchantBatchDetailOpenedAsDrawer = merchantBatchDetailAttempted ? merchantBatchDrawerVisible : null;
+  const merchantBatchDetailUrlHasBatchNo = merchantBatchDetailAttempted ? merchantBatchUrlHasBatchNo : null;
   const merchantBatchDiagnostics = window.location.pathname.includes('/merchant/batches')
     ? {
       href: window.location.href,
@@ -627,6 +641,9 @@ async function evaluateLayout(cdp, sessionId) {
     detailSummaryMismatches,
     detailSummaryRect,
     merchantBatchSpecRowActionsRect,
+    merchantBatchBatchRowActionsRect,
+    merchantBatchDetailOpenedAsDrawer,
+    merchantBatchDetailUrlHasBatchNo,
     merchantBatchDiagnostics,
     splitWorkbenchDetected,
     largeBlankRatio: Number(largeBlankRatio.toFixed(2)),
@@ -752,6 +769,9 @@ async function sweepPage(cdp, payload, routeCase, viewport) {
               ...(detailLayout.detailSummaryMismatches || []),
             ],
             detailSummaryRect: detailLayout.detailSummaryRect || layout.detailSummaryRect || null,
+            merchantBatchBatchRowActionsRect: detailLayout.merchantBatchBatchRowActionsRect || layout.merchantBatchBatchRowActionsRect || null,
+            merchantBatchDetailOpenedAsDrawer: detailLayout.merchantBatchDetailOpenedAsDrawer ?? layout.merchantBatchDetailOpenedAsDrawer ?? null,
+            merchantBatchDetailUrlHasBatchNo: detailLayout.merchantBatchDetailUrlHasBatchNo ?? layout.merchantBatchDetailUrlHasBatchNo ?? null,
           };
           const detailScreenshotName = `${routeCase.role}-${viewport.name}-${slugFor(routeCase.route)}-detail.png`;
           detailScreenshotPath = path.join(payload.artifactDir, "screenshots", detailScreenshotName);
