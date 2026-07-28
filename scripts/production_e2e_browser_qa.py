@@ -1332,6 +1332,9 @@ def evaluate_browser_result(result):
     table_column_mismatches = layout.get("table_column_mismatches")
     if table_column_mismatches is None:
         table_column_mismatches = layout.get("tableColumnMismatches")
+    detail_panel_mismatches = layout.get("detail_panel_mismatches")
+    if detail_panel_mismatches is None:
+        detail_panel_mismatches = layout.get("detailPanelMismatches")
     split_workbench_detected = layout.get("split_workbench_detected")
     if split_workbench_detected is None:
         split_workbench_detected = layout.get("splitWorkbenchDetected")
@@ -1348,6 +1351,8 @@ def evaluate_browser_result(result):
         findings.append(_finding("P2", route, viewport, "Header/title occlusion detected"))
     if table_column_mismatches:
         findings.append(_finding("P2", route, viewport, "Admin/merchant table parity mismatch"))
+    if detail_panel_mismatches and route.startswith("/merchant/") and route.endswith("/batches"):
+        findings.append(_finding("P2", route, viewport, "Admin/merchant detail panel parity mismatch"))
     if split_workbench_detected and route.startswith("/merchant/") and route.endswith("/batches"):
         findings.append(_finding("P2", route, viewport, "Merchant batch page uses split workbench layout"))
     for group in action_groups or []:

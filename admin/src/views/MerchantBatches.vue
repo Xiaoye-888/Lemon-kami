@@ -362,7 +362,7 @@
             </div>
           </div>
           <div class="hero-actions">
-            <el-button :icon="Refresh" @click="backFromDetail">返回批次管理</el-button>
+            <el-button :icon="ArrowLeft" @click="backFromDetail">返回批次管理</el-button>
             <el-button :icon="EditPen" :disabled="!selectedSpec?.is_editable" @click="handleEditSpecGroup(selectedSpec)">编辑规格</el-button>
             <el-button type="danger" plain :icon="Delete" :disabled="!canDeleteSpecGroup(selectedSpec)" @click="handleDeleteSpecGroup(selectedSpec)">删除规格</el-button>
             <el-button type="primary" :icon="Plus" :disabled="!merchantBatchPermissions.generateBatch" @click="showGenerateForGroup(selectedSpec)">生成卡密</el-button>
@@ -477,20 +477,160 @@
         <div class="yz-panel-header compact">
           <div class="yz-panel-title">
             <el-icon><Key /></el-icon>
-            <span>卡密列表</span>
+            <span>{{ viewMode === 'spec' ? '规格卡密列表' : '批次卡密列表' }}</span>
           </div>
           <div class="panel-actions">
-            <el-button :icon="Refresh" @click="loadSpecKamis">刷新</el-button>
+            <el-button :icon="Download" @click="handleDetailExport">导出</el-button>
+            <el-button
+              type="danger"
+              plain
+              :disabled="!merchantBatchPermissions.deleteDetailKamis || selectedDetailKamis.length === 0"
+              :title="merchantBatchPermissions.deleteDetailKamis ? '' : '发卡用户无批量删除卡密权限'"
+              @click="handleDeleteSelectedDetail"
+            >
+              删除选中
+            </el-button>
           </div>
         </div>
-        <el-table :data="specKamis.items" v-loading="previewLoading" class="yz-clean-table" row-key="kami_code">
-          <el-table-column prop="kami_code" label="卡密" min-width="180" show-overflow-tooltip />
-          <el-table-column prop="batch_no" label="批次号" min-width="150" show-overflow-tooltip />
-          <el-table-column prop="status" label="状态" width="90" />
-          <el-table-column prop="created_at" label="创建时间" width="170">
-            <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
+
+        <div class="yz-filter-strip">
+          <el-select
+            v-if="viewMode === 'spec'"
+            v-model="detailQuery.batch_no"
+            placeholder="全部批次"
+            clearable
+            class="filter-control"
+            @change="loadDetailKamis"
+          >
+            <el-option v-for="batch in specBatches" :key="batch.batch_no" :label="batch.batch_no" :value="batch.batch_no" />
+          </el-select>
+          <el-select v-model="detailQuery.status" placeholder="全部状态" clearable class="filter-control" @change="loadDetailKamis">
+            <el-option label="未使用" value="unused" />
+            <el-option label="已使用" value="active" />
+            <el-option label="已过期" value="expired" />
+            <el-option label="已冻结" value="frozen" />
+          </el-select>
+          <el-input v-model="detailQuery.keyword" placeholder="搜索卡密/用户" clearable class="search-control" @keyup.enter="loadDetailKamis" />
+          <el-button type="primary" :icon="Search" @click="loadDetailKamis" />
+          <el-button :icon="Refresh" @click="resetDetailFilters">重置</el-button>
+        </div>
+
+        <el-table
+          :data="detailKamis"
+          v-loading="detailLoading"
+          row-key="kami_code"
+          class="yz-clean-table detail-table"
+          @selection-change="selectedDetailKamis = $event"
+        >
+          <el-table-column type="selection" width="48" />
+          <el-table-column label="卡密" min-width="220">
+            <template #default="{ row }">
+              <div class="code-cell">
+                <span class="mono-text">{{ row.kami_code }}</span>
+                <el-tooltip content="复制卡密" placement="top">
+                  <el-button :icon="DocumentCopy" size="small" circle @click="copyToClipboard(row.kami_code)" />
+                </el-tooltip>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="viewMode === 'spec'" label="批次" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.batch_no || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="状态" width="120">
+            <template #default="{ row }">
+              <el-tag :type="getKamiStatusType(row)" round>{{ getKamiStatusText(row) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="绑定关系" width="120">
+            <template #default="{ row }">{{ row.binding_relation || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="设备策略" width="130">
+            <template #default="{ row }">
+              {{ row.machine_bind_mode_text || getMachineBindModeText(row.machine_bind_mode, row.max_bind_devices) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="创建时间" width="180">
+            <template #default="{ row }">{{ row.created_at ? formatBeijingTime(row.created_at) : '-' }}</template>
+          </el-table-column>
+          <template v-if="currentDetailType === 'points'">
+            <el-table-column label="使用用户" min-width="130">
+              <template #default="{ row }">{{ getKamiUserText(row) }}</template>
+            </el-table-column>
+            <el-table-column label="积分面额" width="120">
+              <template #default="{ row }">{{ row.points_amount || 0 }}</template>
+            </el-table-column>
+            <el-table-column label="已兑换积分" width="130">
+              <template #default="{ row }">{{ getPointsRedeemed(row) }}</template>
+            </el-table-column>
+            <el-table-column label="剩余积分" width="120">
+              <template #default="{ row }">{{ getPointsRemaining(row) }}</template>
+            </el-table-column>
+            <el-table-column label="兑换时间" width="180">
+              <template #default="{ row }">{{ formatOptionalTime(row.redeemed_at) }}</template>
+            </el-table-column>
+            <el-table-column label="有效期" width="120">
+              <template #default="{ row }">{{ row.points_valid_days ? `${row.points_valid_days}天` : '永久' }}</template>
+            </el-table-column>
+          </template>
+          <template v-else-if="currentDetailType === 'times'">
+            <el-table-column label="使用用户" min-width="130">
+              <template #default="{ row }">{{ getKamiUserText(row) }}</template>
+            </el-table-column>
+            <el-table-column label="绑定设备" min-width="160" show-overflow-tooltip>
+              <template #default="{ row }">{{ getBoundDeviceText(row) }}</template>
+            </el-table-column>
+            <el-table-column label="每卡次数" width="120">
+              <template #default="{ row }">{{ row.times_total || 0 }}</template>
+            </el-table-column>
+            <el-table-column label="已核销次数" width="130">
+              <template #default="{ row }">{{ getTimesConsumed(row) }}</template>
+            </el-table-column>
+            <el-table-column label="剩余次数" width="120">
+              <template #default="{ row }">{{ row.times_remaining ?? 0 }}</template>
+            </el-table-column>
+            <el-table-column label="最近核销时间" width="180">
+              <template #default="{ row }">{{ formatOptionalTime(row.last_consume_at) }}</template>
+            </el-table-column>
+            <el-table-column label="兑换时间" width="180">
+              <template #default="{ row }">{{ formatOptionalTime(row.redeemed_at) }}</template>
+            </el-table-column>
+          </template>
+          <template v-else>
+            <el-table-column label="使用用户" min-width="130">
+              <template #default="{ row }">{{ getKamiUserText(row) }}</template>
+            </el-table-column>
+            <el-table-column label="有效期" width="180">
+              <template #default="{ row }">{{ getTimeCardValidity(row) }}</template>
+            </el-table-column>
+            <el-table-column label="机器码限制" width="170">
+              <template #default="{ row }">
+                {{ row.machine_bind_mode_text || getMachineBindModeText(row.machine_bind_mode, row.max_bind_devices) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="绑定设备" min-width="160" show-overflow-tooltip>
+              <template #default="{ row }">{{ getBoundDeviceText(row) }}</template>
+            </el-table-column>
+            <el-table-column label="兑换时间" width="180">
+              <template #default="{ row }">{{ formatOptionalTime(row.redeemed_at) }}</template>
+            </el-table-column>
+          </template>
+          <el-table-column label="备注" min-width="160">
+            <template #default="{ row }">{{ row.remark || '-' }}</template>
           </el-table-column>
         </el-table>
+
+        <div class="table-footer">
+          <span>共 {{ detailTotal }} 条</span>
+          <el-pagination
+            v-model:current-page="detailQuery.page"
+            v-model:page-size="detailQuery.page_size"
+            :total="detailTotal"
+            :page-sizes="[10, 20, 50, 100]"
+            layout="sizes, prev, pager, next"
+            @size-change="loadDetailKamis"
+            @current-change="loadDetailKamis"
+          />
+        </div>
       </section>
     </template>
 
@@ -899,7 +1039,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Box, Delete, EditPen, Key, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
+import { ArrowLeft, Box, Delete, DocumentCopy, Download, EditPen, Key, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
 import { formatBeijingTime } from '../utils/datetime'
 import {
   AUTHORIZATION_OWNER_OPTIONS,
@@ -908,15 +1048,20 @@ import {
   getAuthorizationOwnerText,
   getMachineBindModeText,
   getSpecGroupText,
+  getStatusText,
+  getStatusType,
   getTypeText,
   getUserBindModeText,
-  getValidityText
+  getValidityText,
+  isFixedTimeCard
 } from '../utils/kamiDisplay'
+import { copyTextToClipboard } from '../utils/clipboard'
 import {
   createMerchantAppSpec,
   deleteMerchantAppSpec,
   getMerchantAppSpecs,
   getMerchantApps,
+  exportMerchantKamis,
   getMerchantBatchKamis,
   getMerchantQuotas,
   getMerchantSpecBatches,
@@ -935,11 +1080,15 @@ const loading = ref(false)
 const savingSpec = ref(false)
 const issuing = ref(false)
 const previewLoading = ref(false)
+const detailLoading = ref(false)
 const apps = ref([])
 const specRows = ref([])
 const selectedSpec = ref(null)
 const specBatches = ref([])
 const specKamis = ref({ items: [], total: 0 })
+const detailKamis = ref([])
+const selectedDetailKamis = ref([])
+const detailTotal = ref(0)
 const batchKamis = ref({ items: [], total: 0 })
 const selectedBatch = ref(null)
 const viewMode = ref('list')
@@ -993,6 +1142,14 @@ const queryParams = reactive({
   app_id: '',
   kami_type: '',
   keyword: ''
+})
+
+const detailQuery = reactive({
+  batch_no: '',
+  status: '',
+  keyword: '',
+  page: 1,
+  page_size: 20
 })
 
 const specForm = reactive({
@@ -1076,9 +1233,11 @@ const merchantBatchPermissions = computed(() => ({
   editBatch: canManageSelectedApp.value,
   appendBatch: canManageSelectedApp.value,
   deleteBatch: canManageSelectedApp.value,
-  generateBatch: Boolean(selectedApp.value?.app_id && selectedSpec.value?.id)
+  generateBatch: Boolean(selectedApp.value?.app_id && selectedSpec.value?.id),
+  deleteDetailKamis: false
 }))
 const editingBatchHasCards = computed(() => (editingBatch.value?.count || 0) > 0)
+const currentDetailType = computed(() => selectedSpec.value?.kami_type || '')
 const charsetOptions = [
   { label: '大写字母 + 数字', value: 'upper_numeric', sample: 'A1' },
   { label: '纯数字', value: 'numeric', sample: '1' },
@@ -1458,11 +1617,14 @@ async function loadSpecs() {
     selectedSpec.value = null
     specBatches.value = []
     specKamis.value = { items: [], total: 0 }
+    detailKamis.value = []
+    detailTotal.value = 0
+    selectedDetailKamis.value = []
   } else if (selectedSpec.value) {
     const next = specRows.value.find((item) => item.id === selectedSpec.value.id)
     if (next) {
       selectedSpec.value = next
-      await Promise.all([loadSpecBatches(), loadSpecKamis(), loadIssuePreview()])
+      await Promise.all([loadSpecBatches(), loadDetailKamis(), loadIssuePreview()])
     }
   }
 }
@@ -1476,13 +1638,47 @@ async function loadSpecBatches() {
   specBatches.value = responseItems(res)
 }
 
-async function loadSpecKamis() {
+function resetDetailState() {
+  detailQuery.batch_no = ''
+  detailQuery.status = ''
+  detailQuery.keyword = ''
+  detailQuery.page = 1
+  detailQuery.page_size = 20
+  selectedDetailKamis.value = []
+}
+
+async function loadDetailKamis() {
   if (!selectedSpec.value?.id) {
-    specKamis.value = { items: [], total: 0 }
+    detailKamis.value = []
+    detailTotal.value = 0
     return
   }
-  const res = await getMerchantSpecKamis(selectedSpec.value.id)
-  specKamis.value = responsePayload(res)
+  detailLoading.value = true
+  try {
+    const params = {
+      page: detailQuery.page,
+      page_size: detailQuery.page_size
+    }
+    if (detailQuery.batch_no) params.batch_no = detailQuery.batch_no
+    if (detailQuery.status) params.status = detailQuery.status
+    if (detailQuery.keyword.trim()) params.keyword = detailQuery.keyword.trim()
+    const res = await getMerchantSpecKamis(selectedSpec.value.id, params)
+    const payload = responsePayload(res)
+    detailKamis.value = payload.items || []
+    detailTotal.value = payload.total || 0
+    selectedDetailKamis.value = []
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+async function loadSpecKamis() {
+  return loadDetailKamis()
+}
+
+async function resetDetailFilters() {
+  resetDetailState()
+  await loadDetailKamis()
 }
 
 async function loadIssuePreview() {
@@ -1520,6 +1716,10 @@ async function handleAppChange() {
   customExpanded.value = false
   specBatches.value = []
   specKamis.value = { items: [], total: 0 }
+  detailKamis.value = []
+  detailTotal.value = 0
+  selectedDetailKamis.value = []
+  resetDetailState()
   router.replace({ path: '/merchant/batches', query: queryParams.app_id ? { app_id: queryParams.app_id } : {} })
   await loadSpecs()
 }
@@ -1544,7 +1744,7 @@ async function selectSpec(row) {
   selectedSpec.value = row
   specGroupTab.value = row?.spec_group === 'common' ? 'common' : 'custom'
   activeTab.value = 'batches'
-  await Promise.all([loadSpecBatches(), loadSpecKamis(), loadIssuePreview()])
+  await Promise.all([loadSpecBatches(), loadDetailKamis(), loadIssuePreview()])
 }
 
 async function openSpecGroup(row, updateRoute = true) {
@@ -1554,6 +1754,7 @@ async function openSpecGroup(row, updateRoute = true) {
     return
   }
   viewMode.value = 'spec'
+  resetDetailState()
   await selectSpec(variant)
   if (updateRoute) {
     router.replace({ path: '/merchant/batches', query: { app_id: queryParams.app_id, spec_id: variant.id } })
@@ -1659,12 +1860,118 @@ async function showGenerateForGroup(row) {
   await openGenerateDialog(variant)
 }
 
+const handleDetailExport = async () => {
+  if (!selectedSpec.value?.id) return
+  const params = {
+    app_id: selectedSpec.value.app_id,
+    spec_id: selectedSpec.value.id
+  }
+  if (detailQuery.batch_no) params.batch_no = detailQuery.batch_no
+  if (detailQuery.status) params.status = detailQuery.status
+  if (detailQuery.keyword.trim()) params.keyword = detailQuery.keyword.trim()
+  const response = await exportMerchantKamis(params)
+  downloadBlob(response, `merchant-kamis-${selectedSpec.value.app_id}-spec-${selectedSpec.value.id}.csv`)
+}
+
+const handleDeleteSelectedDetail = async () => {
+  if (!merchantBatchPermissions.value.deleteDetailKamis) {
+    ElMessage.warning('发卡用户无批量删除卡密权限')
+    return
+  }
+  if (selectedDetailKamis.value.length === 0) return
+}
+
+function downloadBlob(response, filename) {
+  const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8' })
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  window.URL.revokeObjectURL(url)
+}
+
+async function copyToClipboard(text) {
+  try {
+    await copyTextToClipboard(text)
+    ElMessage.success('复制成功')
+  } catch {
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+function formatOptionalTime(value) {
+  return value ? formatBeijingTime(value) : '-'
+}
+
+function isKamiExpired(row) {
+  return row?.is_code_expired || row?.display_status === 'expired'
+}
+
+function getKamiStatusText(row) {
+  return isKamiExpired(row) ? '已过期' : getStatusText(row?.status)
+}
+
+function getKamiStatusType(row) {
+  return isKamiExpired(row) ? 'warning' : getStatusType(row?.status)
+}
+
+function getKamiUserText(row) {
+  return (
+    row?.redeemed_user?.username ||
+    row?.redeemed_user?.email ||
+    row?.redeemed_by_user_id ||
+    '-'
+  )
+}
+
+function getPointsRemaining(row) {
+  return row?.point_source_remaining ?? row?.points_remaining ?? row?.point_remaining_balance ?? row?.points_amount ?? 0
+}
+
+function getPointsRedeemed(row) {
+  return row?.point_source_redeemed ?? row?.points_redeemed ?? Math.max((row?.points_amount || 0) - getPointsRemaining(row), 0)
+}
+
+function getTimesConsumed(row) {
+  return Math.max((row?.times_total || 0) - (row?.times_remaining ?? 0), 0)
+}
+
+function isUserIdentityBindValue(value) {
+  if (!value || typeof value !== 'string') return false
+  const normalized = value.trim().toLowerCase()
+  return normalized.startsWith('user:') || normalized.startsWith('username:')
+}
+
+function getBoundDeviceText(row) {
+  const devices = Array.isArray(row?.bound_device_uuids) ? row.bound_device_uuids.filter(Boolean) : []
+  if (devices.length === 1) return devices[0]
+  if (devices.length > 1) return `${devices.length}台设备`
+  if (row?.bind_uuid && !isUserIdentityBindValue(row.bind_uuid)) return row.bind_uuid
+  if (row?.device_bind_count) return `${row.device_bind_count}台设备`
+  return '-'
+}
+
+function getTimeCardValidity(row) {
+  if (row?.expire_time) return formatBeijingTime(row.expire_time)
+  if (row?.code_expire_time) return formatBeijingTime(row.code_expire_time)
+  if (row?.code_valid_days) return `有效期 ${row.code_valid_days} 天`
+  if (isFixedTimeCard(row?.kami_type)) return getValidityText(row)
+  return getValidityText(row)
+}
+
 async function backFromDetail() {
   viewMode.value = 'list'
   selectedSpec.value = null
   selectedBatch.value = null
   specBatches.value = []
   specKamis.value = { items: [], total: 0 }
+  detailKamis.value = []
+  detailTotal.value = 0
+  selectedDetailKamis.value = []
+  resetDetailState()
   activeTab.value = 'batches'
   router.replace({ path: '/merchant/batches', query: queryParams.app_id ? { app_id: queryParams.app_id } : {} })
   await loadSpecs()
@@ -2073,6 +2380,32 @@ onMounted(loadAll)
   display: inline-flex;
 }
 
+.code-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mono-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  word-break: break-all;
+}
+
+.detail-table {
+  min-height: 360px;
+}
+
+.table-footer {
+  min-height: 72px;
+  padding: 16px 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+  color: #475569;
+}
+
 .spec-form,
 .batch-form {
   margin-top: 12px;
@@ -2129,6 +2462,10 @@ onMounted(loadAll)
   overflow: hidden;
 }
 
+.cards-panel :deep(.el-empty) {
+  min-height: 420px;
+}
+
 .el-table :deep(.cell) {
   line-height: 1.45;
 }
@@ -2165,6 +2502,11 @@ onMounted(loadAll)
   }
 
   .issue-preview {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .table-footer {
     flex-direction: column;
     align-items: flex-start;
   }

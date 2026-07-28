@@ -18,9 +18,17 @@ def merchant_kami_statement(
     keyword: Optional[str] = None,
     status: Optional[str] = None,
     batch_no: Optional[str] = None,
+    spec_id: Optional[int] = None,
 ):
     statement = select(Kami).where(Kami.created_by_user_id == user_id)
-    return _apply_kami_filters(statement, app_id=app_id, keyword=keyword, status=status, batch_no=batch_no)
+    return _apply_kami_filters(
+        statement,
+        app_id=app_id,
+        keyword=keyword,
+        status=status,
+        batch_no=batch_no,
+        spec_id=spec_id,
+    )
 
 
 def admin_kami_statement(
@@ -31,11 +39,19 @@ def admin_kami_statement(
     status: Optional[str] = None,
     batch_no: Optional[str] = None,
     created_by_user_id: Optional[int] = None,
+    spec_id: Optional[int] = None,
 ):
     statement = select(Kami)
     if created_by_user_id is not None:
         statement = statement.where(Kami.created_by_user_id == created_by_user_id)
-    return _apply_kami_filters(statement, app_id=app_id, keyword=keyword, status=status, batch_no=batch_no)
+    return _apply_kami_filters(
+        statement,
+        app_id=app_id,
+        keyword=keyword,
+        status=status,
+        batch_no=batch_no,
+        spec_id=spec_id,
+    )
 
 
 def kami_search_payload(session: Session, statement, *, page: int, page_size: int) -> dict:
@@ -105,11 +121,14 @@ def _apply_kami_filters(
     keyword: Optional[str],
     status: Optional[str],
     batch_no: Optional[str],
+    spec_id: Optional[int] = None,
 ):
     if app_id:
         statement = statement.where(Kami.app_id == app_id)
     if batch_no:
         statement = statement.where(Kami.batch_no == batch_no)
+    elif spec_id:
+        statement = statement.where(Kami.spec_id == spec_id)
     if status == "expired":
         statement = statement.where(
             Kami.status == KamiStatus.unused,

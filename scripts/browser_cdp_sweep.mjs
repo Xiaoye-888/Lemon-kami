@@ -430,6 +430,51 @@ async function evaluateLayout(cdp, sessionId) {
       });
     }
   }
+  const detailPanelMismatches = [];
+  if (window.location.pathname.includes('/merchant/batches')) {
+    const cardsPanel = document.querySelector('.cards-panel');
+    if (cardsPanel) {
+      const panelText = (cardsPanel.innerText || cardsPanel.textContent || '').replace(/\s+/g, ' ');
+      const panelLabels = Array.from(cardsPanel.querySelectorAll('button, .el-button, input, [placeholder], [title], .el-select, .el-input'))
+        .map((el) => (
+          el.getAttribute('placeholder') ||
+          el.getAttribute('title') ||
+          el.getAttribute('aria-label') ||
+          el.innerText ||
+          el.textContent ||
+          ''
+        ).trim())
+        .filter(Boolean)
+        .join(' ');
+      const detailText = [panelText, panelLabels].filter(Boolean).join(' ');
+      const detailHeaders = Array.from(cardsPanel.querySelectorAll('thead tr th .cell, thead tr th'))
+        .map((cell) => (cell.innerText || cell.textContent || '').trim())
+        .filter(Boolean);
+      const missing = [];
+      for (const label of ['导出', '删除选中', '全部批次', '全部状态', '搜索卡密/用户']) {
+        if (!detailText.includes(label)) {
+          missing.push(label);
+        }
+      }
+      if (!detailText.includes('规格卡密列表') && !detailText.includes('批次卡密列表')) {
+        missing.push('卡密面板标题');
+      }
+      if (!cardsPanel.querySelector('.el-table-column--selection, thead .el-checkbox, .el-checkbox__input')) {
+        missing.push('选择列');
+      }
+      for (const label of ['卡密', '批次', '状态', '绑定关系', '设备策略', '创建时间', '使用用户', '备注']) {
+        if (!detailHeaders.includes(label)) {
+          missing.push(label);
+        }
+      }
+      if (missing.length) {
+        detailPanelMismatches.push({
+          baselineRoute: '/admin/kamis/batches',
+          missing: Array.from(new Set(missing)),
+        });
+      }
+    }
+  }
   const splitWorkbenchDetected = Boolean(document.querySelector('.spec-workbench, .detail-panel'));
   const visibleArea = rects.reduce((sum, { rect }) => {
     const w = Math.max(0, Math.min(rect.right, viewportWidth) - Math.max(rect.left, 0));
@@ -447,6 +492,7 @@ async function evaluateLayout(cdp, sessionId) {
     duplicatedControls,
     headerOcclusions,
     tableColumnMismatches,
+    detailPanelMismatches,
     splitWorkbenchDetected,
     largeBlankRatio: Number(largeBlankRatio.toFixed(2)),
     toastText: Array.from(document.querySelectorAll('.el-message, .el-notification')).map((el) => el.innerText.trim()).filter(Boolean),
@@ -459,6 +505,28 @@ async function evaluateLayout(cdp, sessionId) {
 async function captureScreenshot(cdp, sessionId, screenshotPath) {
   const { data } = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }, sessionId);
   await fs.writeFile(screenshotPath, Buffer.from(data, "base64"));
+}
+
+async function openFirstBatchDetail(cdp, sessionId) {
+  const expression = `(() => {
+  const candidates = Array.from(document.querySelectorAll('button.batch-title-link, .batch-title-link'))
+    .filter((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+  const target = candidates[0];
+  if (!target) {
+    return false;
+  }
+  target.click();
+  return true;
+})()`;
+  const result = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
+  if (!result.result?.value) {
+    return null;
+  }
+  await sleep(1200);
+  return evaluateLayout(cdp, sessionId);
 }
 
 async function sweepPage(cdp, payload, routeCase, viewport) {
@@ -521,11 +589,28 @@ async function sweepPage(cdp, payload, routeCase, viewport) {
 
       const url = joinUrl(payload.baseUrl, routeCase.route);
       await waitForLoad(cdp, sessionId, url, pageState);
-      const layout = await evaluateLayout(cdp, sessionId);
+      let layout = await evaluateLayout(cdp, sessionId);
 
       const screenshotName = `${routeCase.role}-${viewport.name}-${slugFor(routeCase.route)}.png`;
       const screenshotPath = path.join(payload.artifactDir, "screenshots", screenshotName);
       await captureScreenshot(cdp, sessionId, screenshotPath);
+
+      let detailScreenshotPath = null;
+      if (routeCase.route.endsWith("/batches")) {
+        const detailLayout = await openFirstBatchDetail(cdp, sessionId);
+        if (detailLayout) {
+          layout = {
+            ...layout,
+            detailPanelMismatches: [
+              ...(layout.detailPanelMismatches || []),
+              ...(detailLayout.detailPanelMismatches || []),
+            ],
+          };
+          const detailScreenshotName = `${routeCase.role}-${viewport.name}-${slugFor(routeCase.route)}-detail.png`;
+          detailScreenshotPath = path.join(payload.artifactDir, "screenshots", detailScreenshotName);
+          await captureScreenshot(cdp, sessionId, detailScreenshotPath);
+        }
+      }
 
       return {
         role: routeCase.role,
@@ -541,6 +626,7 @@ async function sweepPage(cdp, payload, routeCase, viewport) {
         bodyTextLength: layout.bodyTextLength ?? 0,
         bodyTextSample: layout.bodyTextSample ?? "",
         layout,
+        detailScreenshot: detailScreenshotPath,
         toastText: layout.toastText ?? [],
       };
     } finally {

@@ -775,6 +775,53 @@ def test_merchant_batches_share_admin_workbench_contract_with_permission_clippin
     assert "授权应用只读" in merchant_batches
 
 
+def test_merchant_batch_spec_detail_matches_admin_card_panel_contract():
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+
+    for token in (
+        "ArrowLeft",
+        "DocumentCopy",
+        "Download",
+        "copyTextToClipboard",
+        "detailLoading",
+        "detailKamis",
+        "selectedDetailKamis",
+        "detailTotal",
+        "detailQuery",
+        "detailQuery.batch_no",
+        "detailQuery.status",
+        "detailQuery.keyword",
+        "handleDetailExport",
+        "handleDeleteSelectedDetail",
+        "resetDetailFilters",
+        "loadDetailKamis",
+        "getKamiStatusType",
+        "getKamiStatusText",
+        "getKamiUserText",
+        "getPointsRedeemed",
+        "getPointsRemaining",
+        "getTimesConsumed",
+        "getBoundDeviceText",
+        "getTimeCardValidity",
+        "formatOptionalTime",
+        "exportMerchantKamis(params)",
+        "getMerchantSpecKamis(selectedSpec.value.id, params)",
+        "getMerchantBatchKamis(row.id)",
+    ):
+        assert token in merchant_batches
+
+    assert 'el-table-column type="selection"' in merchant_batches
+    assert 'v-model="detailQuery.batch_no"' in merchant_batches
+    assert 'placeholder="全部批次"' in merchant_batches
+    assert 'placeholder="全部状态"' in merchant_batches
+    assert 'placeholder="搜索卡密/用户"' in merchant_batches
+    assert "规格卡密列表" in merchant_batches
+    assert "批次卡密列表" in merchant_batches
+    assert "删除选中" in merchant_batches
+    assert "发卡用户无批量删除卡密权限" in merchant_batches
+    assert "追加卡密" in merchant_batches
+
+
 def test_merchant_batch_generation_dialog_exposes_admin_grade_code_controls_and_quota_semantics():
     merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
 

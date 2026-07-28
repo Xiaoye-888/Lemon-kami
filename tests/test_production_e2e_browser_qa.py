@@ -905,6 +905,33 @@ def test_browser_result_evaluation_flags_admin_merchant_parity_and_repeated_cont
     assert "Merchant batch page uses split workbench layout" in messages
 
 
+def test_browser_result_evaluation_flags_merchant_detail_panel_parity_mismatch():
+    qa = load_qa_module()
+    result = {
+        "route": "/merchant/batches",
+        "viewport": "desktop",
+        "console_errors": [],
+        "exceptions": [],
+        "network_failures": [],
+        "bodyTextLength": 2000,
+        "layout": {
+            "horizontalOverflow": False,
+            "largeBlankRatio": 0.18,
+            "overwideCards": [],
+            "detailPanelMismatches": [
+                {
+                    "baselineRoute": "/admin/kamis/batches",
+                    "missing": ["导出", "删除选中", "选择列", "状态筛选"],
+                }
+            ],
+        },
+    }
+
+    messages = [finding["message"] for finding in qa.evaluate_browser_result(result)]
+
+    assert "Admin/merchant detail panel parity mismatch" in messages
+
+
 def test_browser_result_evaluation_flags_non_2xx_document_status_without_sparse_noise():
     qa = load_qa_module()
     result = {

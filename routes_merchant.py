@@ -1377,10 +1377,13 @@ async def export_merchant_kamis(
     keyword: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     batch_no: Optional[str] = Query(None),
+    spec_id: Optional[int] = Query(None),
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     try:
+        if spec_id is not None:
+            _get_visible_spec_or_404(session, current_user, spec_id)
         statement = merchant_kami_statement(
             session,
             user_id=current_user.id,
@@ -1388,6 +1391,7 @@ async def export_merchant_kamis(
             keyword=keyword,
             status=status,
             batch_no=batch_no,
+            spec_id=spec_id,
         )
         content = kami_csv(session, statement)
     except ValueError as error:
@@ -1405,12 +1409,15 @@ async def list_merchant_global_kamis(
     keyword: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     batch_no: Optional[str] = Query(None),
+    spec_id: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
     try:
+        if spec_id is not None:
+            _get_visible_spec_or_404(session, current_user, spec_id)
         statement = merchant_kami_statement(
             session,
             user_id=current_user.id,
@@ -1418,6 +1425,7 @@ async def list_merchant_global_kamis(
             keyword=keyword,
             status=status,
             batch_no=batch_no,
+            spec_id=spec_id,
         )
         payload = kami_search_payload(session, statement, page=page, page_size=page_size)
     except ValueError as error:

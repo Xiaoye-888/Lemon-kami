@@ -999,6 +999,100 @@ def test_merchant_batch_lists_expose_admin_grade_generation_policy_and_permissio
         fastapi_app.dependency_overrides.clear()
 
 
+def test_merchant_kami_list_and_export_can_be_scoped_to_spec_detail():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="export-scope-merchant", password_hash=hash_password("secret123"), status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        app = App(
+            app_id="app_export_scope",
+            name="Export Scope",
+            app_secret="secret-export-scope",
+            rsa_public_key="public-export-scope",
+            rsa_private_key="private-export-scope",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        spec_a = KamiSpec(
+            app_id=app.app_id,
+            spec_key="points-10-export",
+            spec_name="10积分",
+            spec_group="custom",
+            kami_type="points",
+            points_amount=10,
+            status=1,
+        )
+        spec_b = KamiSpec(
+            app_id=app.app_id,
+            spec_key="points-20-export",
+            spec_name="20积分",
+            spec_group="custom",
+            kami_type="points",
+            points_amount=20,
+            status=1,
+        )
+        session.add_all([app, spec_a, spec_b])
+        session.commit()
+        session.refresh(spec_a)
+        session.refresh(spec_b)
+        session.add_all(
+            [
+                Kami(
+                    spec_id=spec_a.id,
+                    app_id=app.app_id,
+                    kami_code="EXPORT-SPEC-A",
+                    kami_type="points",
+                    status="unused",
+                    batch_no="EXPORT-A",
+                    points_amount=10,
+                    created_by_user_id=merchant.id,
+                ),
+                Kami(
+                    spec_id=spec_b.id,
+                    app_id=app.app_id,
+                    kami_code="EXPORT-SPEC-B",
+                    kami_type="points",
+                    status="unused",
+                    batch_no="EXPORT-B",
+                    points_amount=20,
+                    created_by_user_id=merchant.id,
+                ),
+            ]
+        )
+        session.commit()
+        token = routes_user.create_user_access_token(merchant)
+        spec_id = spec_a.id
+
+    try:
+        list_response = client.get(
+            "/api/v1/merchant/kamis",
+            headers=auth_headers(token),
+            params={"app_id": "app_export_scope", "spec_id": spec_id},
+        )
+        assert list_response.status_code == 200
+        assert [item["kami_code"] for item in list_response.json()["data"]["items"]] == ["EXPORT-SPEC-A"]
+
+        export_response = client.get(
+            "/api/v1/merchant/kamis/export",
+            headers=auth_headers(token),
+            params={"app_id": "app_export_scope", "spec_id": spec_id},
+        )
+        assert export_response.status_code == 200
+        csv_text = export_response.content.decode("utf-8-sig")
+        assert "EXPORT-SPEC-A" in csv_text
+        assert "EXPORT-SPEC-B" not in csv_text
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_merchant_batch_update_append_and_delete_guard_follow_admin_grade_contract():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
