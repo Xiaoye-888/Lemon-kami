@@ -2563,6 +2563,11 @@ onMounted(loadAll)
 
 .hero-actions {
   justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+
+.hero-actions :deep(.el-button) {
+  white-space: nowrap;
 }
 
 .batches-panel,
@@ -2592,6 +2597,10 @@ onMounted(loadAll)
   .hero-actions,
   .panel-actions {
     justify-content: flex-start;
+  }
+
+  .hero-actions {
+    flex-wrap: wrap;
   }
 }
 

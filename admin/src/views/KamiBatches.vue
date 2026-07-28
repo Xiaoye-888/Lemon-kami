@@ -2050,6 +2050,15 @@ onMounted(loadApps)
   flex-wrap: wrap;
 }
 
+.hero-actions {
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+
+.hero-actions :deep(.el-button) {
+  white-space: nowrap;
+}
+
 .compact-actions {
   flex-wrap: nowrap;
   gap: 6px;
@@ -2336,6 +2345,10 @@ html.dark .overview-item {
   .summary-metric-card {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     padding: 24px 16px;
+  }
+
+  .hero-actions {
+    flex-wrap: wrap;
   }
 
   .dialog-tip {

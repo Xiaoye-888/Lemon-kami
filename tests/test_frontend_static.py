@@ -928,6 +928,20 @@ def test_merchant_batch_row_actions_stay_single_line_and_match_admin_spacing():
     assert "Action button group wraps across rows" not in merchant_batches
 
 
+def test_admin_and_merchant_batch_detail_hero_actions_do_not_wrap_on_desktop():
+    for source_path in (
+        PROJECT_ROOT / "admin/src/views/KamiBatches.vue",
+        PROJECT_ROOT / "admin/src/views/MerchantBatches.vue",
+    ):
+        source = source_path.read_text(encoding="utf-8")
+        assert ".hero-actions {" in source, f"{source_path.name} must define a dedicated hero-actions block"
+        hero_block = source.split(".hero-actions {", 1)[1].split("}", 1)[0]
+
+        assert "flex-wrap: nowrap;" in hero_block
+        assert "justify-content: flex-end;" in hero_block
+        assert "white-space: nowrap;" in source
+
+
 def test_merchant_batch_list_opens_admin_isomorphic_batch_detail_not_drawer():
     merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
 

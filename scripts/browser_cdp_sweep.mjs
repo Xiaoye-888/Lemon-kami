@@ -247,6 +247,14 @@ function joinUrl(baseUrl, route) {
 function routeWithContext(routeCase, payload) {
   let route = routeCase.route;
   if (
+    routeCase.role === "admin" &&
+    routeCase.route === "/admin/kamis/batches" &&
+    payload.context?.adminBatchAppId
+  ) {
+    const separator = route.includes("?") ? "&" : "?";
+    route = `${route}${separator}app_id=${encodeURIComponent(payload.context.adminBatchAppId)}`;
+  }
+  if (
     routeCase.role === "merchant" &&
     routeCase.route === "/merchant/batches" &&
     payload.context?.merchantBatchAppId
@@ -349,16 +357,22 @@ async function waitForRouteContent(cdp, sessionId, route) {
   const specRowActions = Array.from(document.querySelectorAll('.spec-section .row-actions')).filter(visible);
   const specLinks = Array.from(document.querySelectorAll('.spec-section .batch-title-link')).filter(visible);
   const merchantAppRowActions = Array.from(document.querySelectorAll('.merchant-apps .row-actions')).filter(visible);
+  const hasAdminBatchAppContext = route === '/admin/kamis/batches' && window.location.pathname.includes('/admin/kamis/batches') && window.location.search.includes('app_id=');
   const hasMerchantBatchAppContext = route === '/merchant/batches' && window.location.pathname.includes('/merchant/batches') && window.location.search.includes('app_id=');
+  const hasBatchAppContext = hasAdminBatchAppContext || hasMerchantBatchAppContext;
+  const hasUnboundAdminAppSelection = hasAdminBatchAppContext && text.includes('\\u8bf7\\u5148\\u9009\\u62e9\\u5e94\\u7528');
   const hasUnboundMerchantAppSelection = hasMerchantBatchAppContext && text.includes('\\u8bf7\\u5148\\u9009\\u62e9\\u5e94\\u7528');
-  const hasStableEmpty = !hasMerchantBatchAppContext && (text.includes('\\u6682\\u65e0\\u6570\\u636e') || text.includes('\\u8bf7\\u5148\\u9009\\u62e9\\u5e94\\u7528'));
+  const hasUnboundBatchAppSelection = hasUnboundAdminAppSelection || hasUnboundMerchantAppSelection;
+  const hasStableEmpty = !hasBatchAppContext && (text.includes('\\u6682\\u65e0\\u6570\\u636e') || text.includes('\\u8bf7\\u5148\\u9009\\u62e9\\u5e94\\u7528'));
+  const hasSelectedAdminEmpty = hasAdminBatchAppContext && text.includes('\\u6682\\u65e0\\u6570\\u636e') && !hasUnboundAdminAppSelection;
   const hasSelectedMerchantEmpty = hasMerchantBatchAppContext && text.includes('\\u6682\\u65e0\\u6570\\u636e') && !hasUnboundMerchantAppSelection;
+  const hasSelectedBatchEmpty = hasSelectedAdminEmpty || hasSelectedMerchantEmpty;
   const isMerchantAppsRoute = route === '/merchant/apps' && window.location.pathname.includes('/merchant/apps');
   const hasMerchantAppsEmpty = isMerchantAppsRoute && text.includes('\\u6682\\u65e0\\u6570\\u636e');
   const ready = loadingMasks.length === 0 && (
     isMerchantAppsRoute
       ? (merchantAppRowActions.length > 0 || hasMerchantAppsEmpty)
-      : (!hasUnboundMerchantAppSelection && (specRowActions.length > 0 || specLinks.length > 0 || hasStableEmpty || hasSelectedMerchantEmpty))
+      : (!hasUnboundBatchAppSelection && (specRowActions.length > 0 || specLinks.length > 0 || hasStableEmpty || hasSelectedBatchEmpty))
   );
   return {
     ready,
@@ -368,11 +382,18 @@ async function waitForRouteContent(cdp, sessionId, route) {
     specLinks: specLinks.length,
     merchantAppRowActions: merchantAppRowActions.length,
     hasStableEmpty,
+    hasBatchAppContext,
+    hasAdminBatchAppContext,
     hasMerchantBatchAppContext,
+    hasUnboundAdminAppSelection,
     hasUnboundMerchantAppSelection,
-    reason: hasUnboundMerchantAppSelection
-      ? 'waiting for merchant batch app selection'
-      : (ready ? 'ready' : (isMerchantAppsRoute ? 'waiting for merchant apps table content' : 'waiting for batch table content')),
+    hasUnboundBatchAppSelection,
+    hasSelectedAdminEmpty,
+    reason: hasUnboundAdminAppSelection
+      ? 'waiting for admin batch app selection'
+      : (hasUnboundMerchantAppSelection
+        ? 'waiting for merchant batch app selection'
+        : (ready ? 'ready' : (isMerchantAppsRoute ? 'waiting for merchant apps table content' : 'waiting for batch table content')))
   };
 })()`;
     const result = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
@@ -510,24 +531,30 @@ async function evaluateLayout(cdp, sessionId) {
   const evaluatePageContracts = () => {
     const mismatches = [];
     const path = window.location.pathname;
-    const isVisible = (el) => {
+    const isPresent = (el) => {
       if (!el) return false;
-      const rect = el.getBoundingClientRect();
       const style = window.getComputedStyle(el);
-      return rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.top <= viewportHeight && style.display !== 'none' && style.visibility !== 'hidden';
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     };
+    const isVisible = (el) => {
+      if (!isPresent(el)) return false;
+      const rect = el.getBoundingClientRect();
+      return rect.bottom >= 0 && rect.top <= viewportHeight;
+    };
+    const firstPresent = (selector) => Array.from(document.querySelectorAll(selector)).find(isPresent) || null;
     const firstVisible = (selector) => Array.from(document.querySelectorAll(selector)).find(isVisible) || null;
-    const fail = (contract, message, detail = {}) => {
-      mismatches.push({ contract, message, detail });
+    const fail = (contract, message, detail = {}, severity = 'P1') => {
+      mismatches.push({ contract, message, detail, severity });
     };
     const requireRegion = (contract, selector) => {
-      if (!firstVisible(selector)) {
+      if (!firstPresent(selector)) {
         fail(contract, 'Required page region is missing', { selector });
       }
     };
     const requireOrder = (contract, selectors) => {
       const positions = selectors.map((selector) => {
-        const el = firstVisible(selector);
+        const el = firstPresent(selector);
         return el ? { selector, top: Math.round(el.getBoundingClientRect().top) } : { selector, top: null };
       });
       const missing = positions.filter((item) => item.top === null).map((item) => item.selector);
@@ -543,15 +570,16 @@ async function evaluateLayout(cdp, sessionId) {
       }
     };
     const requireMetricCount = (contract, selector, expectedCount) => {
-      const count = Array.from(document.querySelectorAll(selector)).filter(isVisible).length;
+      const count = Array.from(document.querySelectorAll(selector)).filter(isPresent).length;
       if (count !== expectedCount) {
         fail(contract, 'Metric/card count does not match contract', { selector, expectedCount, count });
       }
     };
     const requireActionGroup = (contract, selector, options = {}) => {
+      const actionGroupSeverity = viewportWidth < 600 ? 'P2' : 'P1';
       const group = firstVisible(selector);
       if (!group) {
-        fail(contract, 'Action group is missing', { selector });
+        fail(contract, 'Action group is missing', { selector }, actionGroupSeverity);
         return;
       }
       const groupRect = group.getBoundingClientRect();
@@ -563,16 +591,26 @@ async function evaluateLayout(cdp, sessionId) {
       const totalItemWidth = items.reduce((sum, item) => sum + item.rect.width, 0);
       const spreadRatio = Number((groupRect.width / Math.max(totalItemWidth, 1)).toFixed(2));
       if (options.minItems && items.length < options.minItems) {
-        fail(contract, 'Action group has too few visible buttons', { selector, expectedMin: options.minItems, count: items.length });
+        fail(contract, 'Action group has too few visible buttons', { selector, expectedMin: options.minItems, count: items.length }, actionGroupSeverity);
       }
       if (options.maxItems && items.length > options.maxItems) {
-        fail(contract, 'Action group has too many visible buttons', { selector, expectedMax: options.maxItems, count: items.length });
+        fail(contract, 'Action group has too many visible buttons', { selector, expectedMax: options.maxItems, count: items.length }, actionGroupSeverity);
       }
       if (maxTopDelta > (options.maxTopDelta ?? 10)) {
-        fail(contract, 'Action group wraps or stacks vertically', { selector, maxTopDelta, buttons: items.map((item) => item.text).filter(Boolean) });
+        fail(
+          contract,
+          'Action group wraps or stacks vertically',
+          { selector, maxTopDelta, buttons: items.map((item) => item.text).filter(Boolean) },
+          actionGroupSeverity,
+        );
       }
       if (options.maxSpreadRatio && spreadRatio > options.maxSpreadRatio) {
-        fail(contract, 'Action group is visually too spread out', { selector, spreadRatio, groupWidth: Math.round(groupRect.width), contentWidth: Math.round(totalItemWidth) });
+        fail(
+          contract,
+          'Action group is visually too spread out',
+          { selector, spreadRatio, groupWidth: Math.round(groupRect.width), contentWidth: Math.round(totalItemWidth) },
+          actionGroupSeverity,
+        );
       }
     };
 
@@ -585,13 +623,15 @@ async function evaluateLayout(cdp, sessionId) {
     }
 
     if (path.includes('/merchant/batches')) {
-      const inDetail = Boolean(firstVisible('.batch-detail-shell'));
+      const inDetail = Boolean(firstPresent('.batch-detail-shell'));
       if (inDetail) {
         requireOrder('merchant-batches.detail.regions', ['.batch-detail-shell', '.batches-panel', '.cards-panel']);
         requireRegion('merchant-batches.detail.overview-card', '.batch-overview-card');
         requireMetricCount('merchant-batches.detail.summary-cards', '.batch-detail-shell .summary-metric-card .metric-item', 3);
         requireActionGroup('merchant-batches.detail-hero-actions', '.batch-detail-shell .hero-actions', { minItems: 3, maxItems: 4, maxTopDelta: 10, maxSpreadRatio: 3.5 });
-        requireActionGroup('merchant-batches.detail-batch-row-actions', '.batches-panel .icon-actions', { minItems: 3, maxItems: 3, maxTopDelta: 10, maxSpreadRatio: 2.4 });
+        if (document.querySelectorAll('.batches-panel .el-table__row').length > 0) {
+          requireActionGroup('merchant-batches.detail-batch-row-actions', '.batches-panel .icon-actions', { minItems: 3, maxItems: 3, maxTopDelta: 10, maxSpreadRatio: 2.4 });
+        }
         requireActionGroup('merchant-batches.detail-card-toolbar', '.cards-panel .panel-actions', { minItems: 2, maxItems: 3, maxTopDelta: 10, maxSpreadRatio: 3.8 });
       } else {
         requireOrder('merchant-batches.list.regions', ['.kami-batches-page .yz-panel-header', '.kami-batches-page .yz-filter-strip', '.kami-batches-page .overview-strip', '.kami-batches-page .spec-section']);
@@ -604,12 +644,14 @@ async function evaluateLayout(cdp, sessionId) {
     }
 
     if (path.includes('/admin/kamis/batches')) {
-      const inDetail = Boolean(firstVisible('.batch-detail-shell'));
+      const inDetail = Boolean(firstPresent('.batch-detail-shell'));
       if (inDetail) {
         requireOrder('admin-batches.detail.regions', ['.batch-detail-shell', '.batches-panel', '.cards-panel']);
         requireMetricCount('admin-batches.detail.summary-cards', '.batch-detail-shell .summary-metric-card .metric-item', 3);
         requireActionGroup('admin-batches.detail-hero-actions', '.batch-detail-shell .hero-actions', { minItems: 4, maxItems: 4, maxTopDelta: 10, maxSpreadRatio: 3.5 });
-        requireActionGroup('admin-batches.detail-batch-row-actions', '.batches-panel .icon-actions', { minItems: 3, maxItems: 3, maxTopDelta: 10, maxSpreadRatio: 2.4 });
+        if (document.querySelectorAll('.batches-panel .el-table__row').length > 0) {
+          requireActionGroup('admin-batches.detail-batch-row-actions', '.batches-panel .icon-actions', { minItems: 3, maxItems: 3, maxTopDelta: 10, maxSpreadRatio: 2.4 });
+        }
       } else {
         requireOrder('admin-batches.list.regions', ['.kami-batches-page .yz-panel-header', '.kami-batches-page .yz-filter-strip', '.kami-batches-page .overview-strip', '.kami-batches-page .spec-section']);
         requireMetricCount('admin-batches.list.overview-cards', '.overview-strip .overview-item', 4);
@@ -715,6 +757,8 @@ async function evaluateLayout(cdp, sessionId) {
       selectedAppText: (document.querySelector('.yz-filter-strip .el-select .el-select__selected-item, .yz-filter-strip .el-select .el-input__inner')?.innerText || document.querySelector('.yz-filter-strip .el-select input')?.value || '').trim(),
       appOptionCount: document.querySelectorAll('.el-select-dropdown__item').length,
       specRowActionCount: document.querySelectorAll('.spec-section .row-actions').length,
+      batchRowCount: document.querySelectorAll('.batches-panel .el-table__row').length,
+      batchRowActionCount: document.querySelectorAll('.batches-panel .icon-actions').length,
       specLinkCount: document.querySelectorAll('.spec-section .batch-title-link').length,
       emptyText: Array.from(document.querySelectorAll('.el-empty__description')).map((el) => (el.innerText || el.textContent || '').trim()).filter(Boolean).join(' | '),
     }

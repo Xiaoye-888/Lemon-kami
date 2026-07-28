@@ -1053,7 +1053,7 @@ def test_run_browser_sweep_timeout_raises_sanitized_error(monkeypatch, tmp_path)
         raise AssertionError("browser sweep timeout did not raise QASafetyError")
 
 
-def test_run_browser_sweep_passes_merchant_batch_app_context(monkeypatch, tmp_path):
+def test_run_browser_sweep_passes_batch_app_context(monkeypatch, tmp_path):
     qa = load_qa_module()
     captured = {}
 
@@ -1068,11 +1068,13 @@ def test_run_browser_sweep_passes_merchant_batch_app_context(monkeypatch, tmp_pa
         tmp_path,
         {"token": "admin-secret"},
         {"token": "merchant-secret"},
-        context={"merchantBatchAppId": "app_self"},
+        context={"adminBatchAppId": "app_admin", "merchantBatchAppId": "app_self"},
     )
 
     assert result == []
+    assert captured["payload"]["context"]["adminBatchAppId"] == "app_admin"
     assert captured["payload"]["context"]["merchantBatchAppId"] == "app_self"
+    assert captured["payload"]["routes"]["admin"].count("/admin/kamis/batches") == 1
     assert captured["payload"]["routes"]["merchant"].count("/merchant/batches") == 1
 
 
@@ -1109,18 +1111,47 @@ def test_browser_cdp_helper_exports_detail_summary_rect_and_mismatch_checks():
     assert "merchantBatchDetailOpenedAsDrawer" in helper
     assert "merchantBatchDetailUrlHasBatchNo" in helper
     assert "merchantBatchDiagnostics" in helper
+    assert "batchRowCount" in helper
+    assert "batchRowActionCount" in helper
     assert "routeWithContext" in helper
+    assert "adminBatchAppId" in helper
+    assert "encodeURIComponent(payload.context.adminBatchAppId)" in helper
     assert "merchantBatchAppId" in helper
     assert "encodeURIComponent(payload.context.merchantBatchAppId)" in helper
     assert "const hasMerchantBatchAppContext" in helper
     assert "const hasUnboundMerchantAppSelection" in helper
-    assert "hasStableEmpty = !hasMerchantBatchAppContext" in helper
     assert "waiting for merchant batch app selection" in helper
     assert ".batch-detail-shell .summary-metric-card" in helper
     assert "expectedMerchantBatchListHeaders" in helper
     assert "expectedMerchantBatchDetailHeaders" in helper
     assert "merchant-batches.list.table-columns" in helper
     assert "merchant-batches.detail.table-columns" in helper
+    assert "const isPresent =" in helper
+    assert "const firstPresent =" in helper
+    assert "filter(isPresent)" in helper
+    assert "firstPresent(selector)" in helper
+    assert "viewportWidth < 600 ? 'P2' : 'P1'" in helper
+    assert "const hasBatchAppContext" in helper
+    assert "const hasAdminBatchAppContext" in helper
+    assert "const hasUnboundAdminAppSelection" in helper
+    assert "const hasSelectedBatchEmpty" in helper
+    assert "hasStableEmpty = !hasBatchAppContext" in helper
+
+
+def test_browser_cdp_helper_downgrades_mobile_action_group_contract_severity():
+    helper = (ROOT / "scripts" / "browser_cdp_sweep.mjs").read_text(encoding="utf-8")
+
+    assert "const actionGroupSeverity = viewportWidth < 600 ? 'P2' : 'P1';" in helper
+    assert "actionGroupSeverity" in helper
+
+
+def test_browser_cdp_helper_waits_for_admin_batch_app_context():
+    helper = (ROOT / "scripts" / "browser_cdp_sweep.mjs").read_text(encoding="utf-8")
+
+    assert "const hasAdminBatchAppContext" in helper
+    assert "const hasUnboundAdminAppSelection" in helper
+    assert "hasStableEmpty = !hasBatchAppContext" in helper
+    assert "waiting for admin batch app selection" in helper
 
 
 def test_browser_result_evaluation_accepts_cdp_layout_keys():
@@ -1146,6 +1177,43 @@ def test_browser_result_evaluation_accepts_cdp_layout_keys():
         "Large blank page area detected",
         "Overwide cards detected",
     ]
+
+
+def test_browser_result_evaluation_preserves_page_contract_details():
+    qa = load_qa_module()
+    findings = qa.evaluate_browser_result(
+        {
+            "role": "merchant",
+            "route": "/merchant/batches",
+            "viewport": "desktop",
+            "console_errors": [],
+            "exceptions": [],
+            "network_failures": [],
+            "bodyTextLength": 1200,
+            "layout": {
+                "pageContractMismatches": [
+                    {
+                        "contract": "merchant-batches.detail-hero-actions",
+                        "message": "Action group wraps or stacks vertically",
+                        "detail": {
+                            "selector": ".batch-detail-shell .hero-actions",
+                            "maxTopDelta": 40,
+                            "buttons": [
+                                "杩斿洖鎵规绠＄悊",
+                                "缂栬緫瑙勬牸",
+                                "鍒犻櫎瑙勬牸",
+                                "鐢熸垚鍗″瘑",
+                            ],
+                        },
+                    }
+                ],
+            },
+        }
+    )
+
+    contract = next(finding for finding in findings if finding["message"] == "Page contract mismatch detected")
+    assert contract["severity"] == "P1"
+    assert contract["detail"]["contracts"][0]["contract"] == "merchant-batches.detail-hero-actions"
 
 
 def test_visual_regression_targets_cover_merchant_batch_row_actions():
@@ -1391,6 +1459,97 @@ def test_visual_regression_accepts_matching_detail_summary_crop(tmp_path, monkey
     assert (tmp_path / "visual-regression" / "merchant-batches-detail-summary.desktop.actual.png").exists()
     assert results["comparisons"][0]["crop_kind"] == "rect"
     assert results["comparisons"][0]["screenshot_key"] == "detailScreenshot"
+
+
+def test_visual_regression_ignores_detail_summary_metric_values(tmp_path, monkeypatch):
+    qa = load_qa_module()
+    baseline_dir = tmp_path / "baselines"
+    baseline_dir.mkdir()
+    monkeypatch.setattr(qa, "VISUAL_BASELINE_DIR", baseline_dir)
+    monkeypatch.setattr(
+        qa,
+        "VISUAL_REGRESSION_TARGETS",
+        [target for target in qa.VISUAL_REGRESSION_TARGETS if target["label"] == "merchant-batches-detail-summary"],
+    )
+
+    def draw_detail_summary(path, values):
+        image = Image.new("RGBA", (520, 180), (248, 250, 252, 255))
+        draw = ImageDraw.Draw(image)
+        draw.rounded_rectangle((18, 18, 502, 162), radius=12, fill=(255, 255, 255, 255), outline=(219, 234, 254, 255))
+        draw.rectangle((34, 38, 186, 134), fill=(248, 250, 252, 255), outline=(219, 234, 254, 255))
+        draw.rectangle((204, 38, 356, 134), fill=(248, 250, 252, 255), outline=(219, 234, 254, 255))
+        draw.rectangle((374, 38, 486, 134), fill=(248, 250, 252, 255), outline=(219, 234, 254, 255))
+        draw.text((52, 58), values[0], fill=(37, 99, 235, 255))
+        draw.text((222, 58), values[1], fill=(5, 150, 105, 255))
+        draw.text((392, 58), values[2], fill=(245, 158, 11, 255))
+        draw.text((44, 102), "total", fill=(71, 85, 105, 255))
+        draw.text((214, 102), "unused", fill=(71, 85, 105, 255))
+        draw.text((384, 102), "used", fill=(71, 85, 105, 255))
+        image.save(path)
+
+    baseline_source = tmp_path / "summary-baseline.png"
+    actual_source = tmp_path / "summary-actual.png"
+    draw_detail_summary(baseline_source, ("3", "0", "3"))
+    draw_detail_summary(actual_source, ("2", "2", "0"))
+
+    detail_rect = {"left": 18, "top": 18, "width": 484, "height": 144}
+    baseline_crop, _ = qa._crop_visual_target(baseline_source, detail_rect, 12)
+    baseline_crop.save(baseline_dir / "merchant-batches-detail-summary.desktop.png")
+
+    results = qa.run_visual_regression(
+        [
+            {
+                "role": "merchant",
+                "route": "/merchant/batches",
+                "viewport": "desktop",
+                "detailScreenshot": str(actual_source),
+                "layout": {"detailSummaryRect": detail_rect},
+            }
+        ],
+        tmp_path,
+    )
+
+    assert results["findings"] == []
+    assert (tmp_path / "visual-regression" / "merchant-batches-detail-summary.desktop.actual.png").exists()
+
+
+def test_visual_regression_skips_empty_merchant_batch_row_actions(tmp_path, monkeypatch):
+    qa = load_qa_module()
+    baseline_dir = tmp_path / "baselines"
+    baseline_dir.mkdir()
+    monkeypatch.setattr(qa, "VISUAL_BASELINE_DIR", baseline_dir)
+    monkeypatch.setattr(
+        qa,
+        "VISUAL_REGRESSION_TARGETS",
+        [target for target in qa.VISUAL_REGRESSION_TARGETS if target["label"] == "merchant-batches-batch-row-actions"],
+    )
+
+    screenshot_path = tmp_path / "merchant-batches-detail.png"
+    _draw_batch_row_actions_screenshot(screenshot_path)
+    row_rect = {"left": 18, "top": 20, "width": 384, "height": 72}
+    baseline_crop, _ = qa._crop_visual_target(screenshot_path, row_rect, 12)
+    baseline_crop.save(baseline_dir / "merchant-batches-batch-row-actions.desktop.png")
+
+    results = qa.run_visual_regression(
+        [
+            {
+                "role": "merchant",
+                "route": "/merchant/batches",
+                "viewport": "desktop",
+                "screenshot": str(screenshot_path),
+                "layout": {
+                    "merchantBatchDiagnostics": {
+                        "batchRowCount": 0,
+                        "emptyText": "暂无数据",
+                    },
+                },
+            }
+        ],
+        tmp_path,
+    )
+
+    assert results["findings"] == []
+    assert results["comparisons"] == []
 
 
 def test_visual_regression_accepts_matching_merchant_batch_row_actions_crop(tmp_path, monkeypatch):
@@ -1929,6 +2088,7 @@ def test_restore_payment_snapshot_restores_other_channel_deletes_temp_options_an
     delete_calls = [call for call in admin.calls if call["method"] == "DELETE"]
     assert [call["path"] for call in post_calls] == [
         "/api/v1/admin/commercial/payment-channels",
+        "/api/v1/admin/commercial/payment-channels",
         "/api/v1/admin/commercial/recharge-options",
     ]
     assert [call["path"] for call in delete_calls] == [
@@ -1939,7 +2099,10 @@ def test_restore_payment_snapshot_restores_other_channel_deletes_temp_options_an
         call["kwargs"]["params"] == {"confirm_text": "确认修改充值配置"} for call in delete_calls
     )
     payloads = [call["kwargs"]["json"] for call in post_calls]
-    assert payloads[0] == {
+    assert payloads[0]["display_name"] == prefix + "Temporary channel"
+    assert payloads[0]["enabled"] is False
+    assert payloads[0]["remark"] == prefix + "Temporary channel"
+    assert payloads[1] == {
         "channel": "other",
         "display_name": "Other production channel",
         "qr_code_url": dummy_qr_url,
@@ -1949,8 +2112,8 @@ def test_restore_payment_snapshot_restores_other_channel_deletes_temp_options_an
         "remark": "production channel",
         "confirm_text": "确认修改充值配置",
     }
-    assert payloads[1]["amount"] == 100
-    assert payloads[1]["enabled"] is False
+    assert payloads[2]["amount"] == 100
+    assert payloads[2]["enabled"] is False
     assert not any(payload.get("threshold_amount") == 200 for payload in payloads)
     assert not any(payload.get("channel") == "alipay" for payload in payloads)
     assert not any(payload.get("amount") == 992 for payload in payloads)
@@ -2125,7 +2288,7 @@ def test_restore_payment_snapshot_replays_colliding_temp_option_amount_from_snap
     assert delete_calls == []
 
 
-def test_restore_payment_snapshot_rejects_different_run_temporary_cleanup():
+def test_restore_payment_snapshot_cleans_foreign_temporary_cleanup():
     qa = load_qa_module()
     prefix = "E2E_UI_QA_20260726_030000_abc123_"
     snapshot = qa.PaymentSnapshot(channels=[], fixed_options=[], bonus_rules=[])
@@ -2148,13 +2311,12 @@ def test_restore_payment_snapshot_rejects_different_run_temporary_cleanup():
         ]
     )
 
-    try:
-        qa.restore_payment_snapshot(admin, snapshot, prefix)
-    except qa.QASafetyError as error:
-        assert "different-run temporary payment config" in str(error)
-        assert "E2E_UI_QA_not_valid_Temporary channel" not in str(error)
-    else:
-        raise AssertionError("restore allowed non-prefixed temporary cleanup")
+    qa.restore_payment_snapshot(admin, snapshot, prefix)
+
+    post_calls = [call for call in admin.calls if call["method"] == "POST"]
+    assert post_calls
+    assert post_calls[0]["path"] == "/api/v1/admin/commercial/payment-channels"
+    assert post_calls[0]["kwargs"]["json"]["enabled"] is False
 
 
 def test_quota_delta_assertion_matches_expected_credit_and_debit():
@@ -2667,7 +2829,7 @@ def test_run_production_flow_preserves_completed_sections_when_browser_sweep_fai
         ("app_self", "self_owned_ui_seed"),
         ("app_admin", "admin_authorized"),
     ]
-    assert browser_contexts == [{"merchantBatchAppId": "app_self"}]
+    assert browser_contexts == [{"adminBatchAppId": "app_admin", "merchantBatchAppId": "app_self"}]
     assert "## Deployment And Health" in content
     assert "## Browser Sweep" not in content
     assert "## Recharge Flow" in content

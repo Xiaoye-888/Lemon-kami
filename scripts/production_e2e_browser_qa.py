@@ -758,45 +758,58 @@ def _snapshot_keys(snapshot):
     }
 
 
+def _sanitize_payment_snapshot(snapshot: PaymentSnapshot) -> PaymentSnapshot:
+    return PaymentSnapshot(
+        channels=[dict(row) for row in snapshot.channels if isinstance(row, dict) and not _payment_row_mentions_qa_prefix(row)],
+        fixed_options=[dict(row) for row in snapshot.fixed_options if isinstance(row, dict) and not _payment_row_mentions_qa_prefix(row)],
+        bonus_rules=[dict(row) for row in snapshot.bonus_rules if isinstance(row, dict) and not _payment_row_mentions_qa_prefix(row)],
+    )
+
+
 def restore_payment_snapshot(admin: APIClient, snapshot: PaymentSnapshot, prefix: str) -> None:
     validate_run_prefix(prefix)
     current = load_payment_snapshot(admin)
-    keys = _snapshot_keys(snapshot)
-    restore_summary = {"fallback_disabled_recharge_options": []}
-
-    for group in (current.channels, current.fixed_options, current.bonus_rules):
-        for row in group:
-            if _payment_row_mentions_qa_prefix(row) and not _payment_row_owned_by_run(row, prefix):
-                raise QASafetyError("Refusing different-run temporary payment config cleanup")
-
-    for row in snapshot.channels:
-        payload = _channel_payload_from_row(row)
-        if payload:
-            _post_payment_channel(admin, payload)
-    for row in snapshot.fixed_options:
-        payload = _option_payload_from_row(row)
-        if payload:
-            _post_recharge_option(admin, payload)
+    clean_snapshot = _sanitize_payment_snapshot(snapshot)
+    restore_summary = {
+        "fallback_disabled_recharge_options": [],
+        "disabled_temp_channels": [],
+        "deleted_temp_recharge_options": [],
+        "deleted_temp_bonus_rules": [],
+    }
 
     for row in current.channels:
-        if row.get("channel") not in keys["channels"] and _payment_row_owned_by_run(row, prefix):
+        if _payment_row_mentions_qa_prefix(row):
             payload = _channel_payload_from_row(row, enabled=False)
             if payload:
                 _post_payment_channel(admin, payload)
+                restore_summary["disabled_temp_channels"].append(row.get("channel"))
+
     for row in current.fixed_options:
-        if row.get("amount") not in keys["fixed_options"] and _payment_row_owned_by_run(row, prefix):
+        if _payment_row_mentions_qa_prefix(row):
             option_id = row.get("id")
             if option_id is not None:
                 try:
                     _delete_recharge_option(admin, option_id)
+                    restore_summary["deleted_temp_recharge_options"].append(option_id)
                 except QASafetyError:
                     _disable_recharge_option(admin, row)
                     restore_summary["fallback_disabled_recharge_options"].append(option_id)
+
     for row in current.bonus_rules:
-        if row.get("id") not in keys["bonus_rules"] and _payment_row_owned_by_run(row, prefix):
+        if _payment_row_mentions_qa_prefix(row):
             rule_id = row.get("id")
             if rule_id is not None:
                 _delete_bonus_rule(admin, rule_id)
+                restore_summary["deleted_temp_bonus_rules"].append(rule_id)
+
+    for row in clean_snapshot.channels:
+        payload = _channel_payload_from_row(row)
+        if payload:
+            _post_payment_channel(admin, payload)
+    for row in clean_snapshot.fixed_options:
+        payload = _option_payload_from_row(row)
+        if payload:
+            _post_recharge_option(admin, payload)
     return {key: value for key, value in restore_summary.items() if value}
 
 
@@ -1370,13 +1383,16 @@ def redact(value):
     return value
 
 
-def _finding(severity, route, viewport, message):
-    return {
+def _finding(severity, route, viewport, message, detail=None):
+    finding = {
         "severity": severity,
         "route": route,
         "viewport": viewport,
         "message": message,
     }
+    if detail is not None:
+        finding["detail"] = detail
+    return finding
 
 
 def evaluate_browser_result(result):
@@ -1452,13 +1468,15 @@ def evaluate_browser_result(result):
     if header_occlusions:
         findings.append(_finding("P2", route, viewport, "Header/title occlusion detected"))
     if table_column_mismatches:
-        findings.append(_finding("P1", route, viewport, "Admin/merchant table parity mismatch"))
+        findings.append(_finding("P1", route, viewport, "Admin/merchant table parity mismatch", table_column_mismatches))
     if page_contract_mismatches:
-        findings.append(_finding("P1", route, viewport, "Page contract mismatch detected"))
+        contract_severities = [str(item.get("severity") or "P1").upper() for item in page_contract_mismatches if isinstance(item, dict)]
+        severity = "P1" if any(item in {"P0", "P1"} for item in contract_severities) else "P2"
+        findings.append(_finding(severity, route, viewport, "Page contract mismatch detected", {"contracts": page_contract_mismatches}))
     if detail_panel_mismatches and route.startswith("/merchant/") and route.endswith("/batches"):
-        findings.append(_finding("P1", route, viewport, "Admin/merchant detail panel parity mismatch"))
+        findings.append(_finding("P1", route, viewport, "Admin/merchant detail panel parity mismatch", detail_panel_mismatches))
     if detail_summary_mismatches and route.startswith("/merchant/") and route.endswith("/batches"):
-        findings.append(_finding("P1", route, viewport, "Admin/merchant detail summary parity mismatch"))
+        findings.append(_finding("P1", route, viewport, "Admin/merchant detail summary parity mismatch", detail_summary_mismatches))
     if split_workbench_detected and route.startswith("/merchant/") and route.endswith("/batches"):
         findings.append(_finding("P1", route, viewport, "Merchant batch page uses split workbench layout"))
     if merchant_batch_detail_opened_as_drawer is True and route.startswith("/merchant/") and route.endswith("/batches"):
@@ -1605,6 +1623,14 @@ def _blocking_browser_findings(findings: list[dict[str, Any]]) -> list[dict[str,
     ]
 
 
+def _should_skip_visual_target(target: dict[str, Any], layout: dict[str, Any]) -> bool:
+    if target.get("label") != "merchant-batches-batch-row-actions":
+        return False
+
+    diagnostics = layout.get("merchantBatchDiagnostics") or {}
+    return _safe_int(diagnostics.get("batchRowCount")) == 0
+
+
 def run_visual_regression(browser_results, artifact_dir):
     results_by_key = {
         (result.get("role"), result.get("route"), result.get("viewport")): result
@@ -1621,6 +1647,8 @@ def run_visual_regression(browser_results, artifact_dir):
         if not result:
             continue
         layout = result.get("layout") or {}
+        if _should_skip_visual_target(target, layout):
+            continue
         crop_kind = target.get("crop_kind", "action_group")
         if crop_kind == "rect":
             group = layout.get(target.get("crop_key", ""))
@@ -2302,7 +2330,7 @@ def run_production_flow(config: QAConfig):
             artifact_dir,
             admin_auth.as_browser_storage(),
             merchant.auth.as_browser_storage(),
-            context={"merchantBatchAppId": self_app.app_id},
+            context={"adminBatchAppId": admin_app.app_id, "merchantBatchAppId": self_app.app_id},
         )
         for result in browser_results:
             for finding in evaluate_browser_result(result):
