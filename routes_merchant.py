@@ -32,6 +32,16 @@ from interface_docs_service import (
     interface_payload as _interface_payload,
     load_json as _load_json,
 )
+from app_release_service import (
+    next_notice_revision,
+    normalize_notice_level,
+    normalize_notice_times,
+    normalize_update_platform,
+    normalize_update_status,
+    normalize_url_type,
+    notice_payload,
+    version_payload,
+)
 from kami_query_service import (
     batch_stats_payload,
     kami_csv,
@@ -115,6 +125,30 @@ class MerchantAppInterfaceConfigRequest(BaseModel):
     expires_at: Optional[datetime] = None
     config: Optional[dict[str, Any]] = None
     remark: Optional[str] = None
+
+
+class MerchantAppNoticeRequest(BaseModel):
+    title: str = PydanticField(..., min_length=1, max_length=128)
+    content: str = PydanticField(..., min_length=1)
+    level: str = "normal"
+    enabled: bool = True
+    popup: bool = False
+    show_once: bool = True
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
+
+
+class MerchantAppVersionRequest(BaseModel):
+    platform: str = "all"
+    version: str = PydanticField(..., min_length=1, max_length=64)
+    version_code: int = PydanticField(..., ge=1)
+    title: str = PydanticField("发现新版本", min_length=1, max_length=128)
+    notes: Optional[str] = None
+    force_update: bool = False
+    download_url: Optional[str] = None
+    url_type: str = "direct"
+    button_text: str = PydanticField("立即下载", min_length=1, max_length=64)
+    status: str = "draft"
 
 
 class MerchantSpecCreateRequest(BaseModel):
@@ -242,6 +276,16 @@ MERCHANT_INTERFACE_CONFIG_SCHEMAS: dict[str, list[dict[str, Any]]] = {
         {"key": "release_on_logout", "label": "退出自动释放", "type": "switch", "default": True},
         {"key": "heartbeat_timeout_seconds", "label": "心跳超时秒数", "type": "number", "min": 30, "max": 86400, "default": 180},
     ],
+    "sdk.notice": [
+        {"key": "allow_notice_read", "label": "允许公告读取", "type": "switch", "default": True},
+        {"key": "max_notice_length", "label": "公告最大长度", "type": "number", "min": 100, "max": 20000, "default": 5000},
+        {"key": "popup_enabled", "label": "允许弹窗公告", "type": "switch", "default": True},
+    ],
+    "sdk.update_check": [
+        {"key": "allow_update_check", "label": "允许版本检查", "type": "switch", "default": True},
+        {"key": "min_supported_version_code", "label": "最低支持版本编码", "type": "number", "min": 1, "max": 999999999, "default": 1},
+        {"key": "force_update_enabled", "label": "允许强制更新", "type": "switch", "default": True},
+    ],
     "sdk.report": [
         {"key": "allow_report", "label": "允许事件上报", "type": "switch", "default": True},
         {"key": "max_payload_kb", "label": "最大载荷 KB", "type": "number", "min": 1, "max": 1024, "default": 64},
@@ -359,6 +403,14 @@ def _merchant_app_interface_payload(interface: ApiInterface, config: Optional[Ap
         }
     )
     return payload
+
+
+def _validate_merchant_version_payload(payload: MerchantAppVersionRequest) -> None:
+    status = normalize_update_status(payload.status)
+    if payload.force_update and status == "published" and not payload.download_url:
+        raise HTTPException(status_code=400, detail="强制更新发布前必须填写下载地址")
+    if status == "published" and payload.download_url is not None and not payload.download_url.strip():
+        raise HTTPException(status_code=400, detail="下载地址不能为空")
 
 
 def _bool_value(value: Any) -> bool:
@@ -1663,6 +1715,223 @@ async def update_merchant_app_interface(
         "message": "interface updated",
         "data": _merchant_app_interface_payload(interface, config, app_id),
     }
+
+
+@router.get("/apps/{app_id}/notices", summary="List merchant app notices")
+async def list_merchant_app_notices(
+    app_id: str,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    _get_visible_app_or_404(session, current_user, app_id)
+    notices = session.exec(
+        select(AppNotice)
+        .where(AppNotice.app_id == app_id)
+        .order_by(AppNotice.updated_at.desc(), AppNotice.id.desc())
+    ).all()
+    return {"success": True, "data": {"total": len(notices), "items": [notice_payload(notice) for notice in notices]}}
+
+
+@router.post("/apps/{app_id}/notices", summary="Create merchant app notice")
+async def create_merchant_app_notice(
+    app_id: str,
+    payload: MerchantAppNoticeRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    _require_self_owned_app(session, current_user, app_id)
+    now = get_now_naive()
+    notice = AppNotice(
+        app_id=app_id,
+        title=payload.title.strip(),
+        content=payload.content.strip(),
+        level=normalize_notice_level(payload.level),
+        enabled=payload.enabled,
+        popup=payload.popup,
+        show_once=payload.show_once,
+        revision=next_notice_revision(session, app_id),
+        starts_at=payload.starts_at,
+        ends_at=payload.ends_at,
+        created_by=current_user.username,
+        created_at=now,
+        updated_at=now,
+    )
+    normalize_notice_times(notice)
+    if notice.ends_at and notice.starts_at and notice.ends_at < notice.starts_at:
+        raise HTTPException(status_code=400, detail="公告失效时间不能早于生效时间")
+    session.add(notice)
+    session.commit()
+    session.refresh(notice)
+    return {"success": True, "message": "公告已保存", "data": notice_payload(notice)}
+
+
+@router.put("/apps/{app_id}/notices/{notice_id}", summary="Update merchant app notice")
+async def update_merchant_app_notice(
+    app_id: str,
+    notice_id: int,
+    payload: MerchantAppNoticeRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    _require_self_owned_app(session, current_user, app_id)
+    notice = session.exec(select(AppNotice).where(AppNotice.id == notice_id, AppNotice.app_id == app_id)).first()
+    if not notice:
+        raise HTTPException(status_code=404, detail="公告不存在")
+    notice.title = payload.title.strip()
+    notice.content = payload.content.strip()
+    notice.level = normalize_notice_level(payload.level)
+    notice.enabled = payload.enabled
+    notice.popup = payload.popup
+    notice.show_once = payload.show_once
+    notice.starts_at = payload.starts_at
+    notice.ends_at = payload.ends_at
+    notice.revision = (notice.revision or 0) + 1
+    notice.updated_at = get_now_naive()
+    normalize_notice_times(notice)
+    if notice.ends_at and notice.starts_at and notice.ends_at < notice.starts_at:
+        raise HTTPException(status_code=400, detail="公告失效时间不能早于生效时间")
+    session.add(notice)
+    session.commit()
+    session.refresh(notice)
+    return {"success": True, "message": "公告已更新", "data": notice_payload(notice)}
+
+
+@router.delete("/apps/{app_id}/notices/{notice_id}", summary="Delete merchant app notice")
+async def delete_merchant_app_notice(
+    app_id: str,
+    notice_id: int,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    _require_self_owned_app(session, current_user, app_id)
+    notice = session.exec(select(AppNotice).where(AppNotice.id == notice_id, AppNotice.app_id == app_id)).first()
+    if not notice:
+        raise HTTPException(status_code=404, detail="公告不存在")
+    session.delete(notice)
+    session.commit()
+    return {"success": True, "message": "公告已删除"}
+
+
+@router.get("/apps/{app_id}/updates", summary="List merchant app versions")
+async def list_merchant_app_versions(
+    app_id: str,
+    platform: Optional[str] = Query(None),
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    _get_visible_app_or_404(session, current_user, app_id)
+    statement = select(AppVersion).where(AppVersion.app_id == app_id)
+    if platform:
+        statement = statement.where(AppVersion.platform == normalize_update_platform(platform))
+    versions = session.exec(
+        statement.order_by(AppVersion.version_code.desc(), AppVersion.updated_at.desc(), AppVersion.id.desc())
+    ).all()
+    return {"success": True, "data": {"total": len(versions), "items": [version_payload(version) for version in versions]}}
+
+
+@router.post("/apps/{app_id}/updates", summary="Create merchant app version")
+async def create_merchant_app_version(
+    app_id: str,
+    payload: MerchantAppVersionRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    _require_self_owned_app(session, current_user, app_id)
+    _validate_merchant_version_payload(payload)
+    platform = normalize_update_platform(payload.platform)
+    existing = session.exec(
+        select(AppVersion).where(
+            AppVersion.app_id == app_id,
+            AppVersion.platform == platform,
+            AppVersion.version_code == payload.version_code,
+        )
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="该平台版本编码已存在")
+    now = get_now_naive()
+    status = normalize_update_status(payload.status)
+    version = AppVersion(
+        app_id=app_id,
+        platform=platform,
+        version=payload.version.strip(),
+        version_code=payload.version_code,
+        title=payload.title.strip(),
+        notes=payload.notes,
+        force_update=payload.force_update,
+        download_url=payload.download_url.strip() if payload.download_url else None,
+        url_type=normalize_url_type(payload.url_type),
+        button_text=payload.button_text.strip() or "立即下载",
+        status=status,
+        created_by=current_user.username,
+        published_at=now if status == "published" else None,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(version)
+    session.commit()
+    session.refresh(version)
+    return {"success": True, "message": "版本更新已保存", "data": version_payload(version)}
+
+
+@router.put("/apps/{app_id}/updates/{version_id}", summary="Update merchant app version")
+async def update_merchant_app_version(
+    app_id: str,
+    version_id: int,
+    payload: MerchantAppVersionRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    _require_self_owned_app(session, current_user, app_id)
+    _validate_merchant_version_payload(payload)
+    version = session.exec(select(AppVersion).where(AppVersion.id == version_id, AppVersion.app_id == app_id)).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    platform = normalize_update_platform(payload.platform)
+    duplicate = session.exec(
+        select(AppVersion).where(
+            AppVersion.app_id == app_id,
+            AppVersion.platform == platform,
+            AppVersion.version_code == payload.version_code,
+            AppVersion.id != version_id,
+        )
+    ).first()
+    if duplicate:
+        raise HTTPException(status_code=400, detail="该平台版本编码已存在")
+    now = get_now_naive()
+    new_status = normalize_update_status(payload.status)
+    version.platform = platform
+    version.version = payload.version.strip()
+    version.version_code = payload.version_code
+    version.title = payload.title.strip()
+    version.notes = payload.notes
+    version.force_update = payload.force_update
+    version.download_url = payload.download_url.strip() if payload.download_url else None
+    version.url_type = normalize_url_type(payload.url_type)
+    version.button_text = payload.button_text.strip() or "立即下载"
+    if new_status == "published" and version.status != "published":
+        version.published_at = now
+    version.status = new_status
+    version.updated_at = now
+    session.add(version)
+    session.commit()
+    session.refresh(version)
+    return {"success": True, "message": "版本更新已保存", "data": version_payload(version)}
+
+
+@router.delete("/apps/{app_id}/updates/{version_id}", summary="Delete merchant app version")
+async def delete_merchant_app_version(
+    app_id: str,
+    version_id: int,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    _require_self_owned_app(session, current_user, app_id)
+    version = session.exec(select(AppVersion).where(AppVersion.id == version_id, AppVersion.app_id == app_id)).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    session.delete(version)
+    session.commit()
+    return {"success": True, "message": "版本已删除"}
 
 
 @router.get("/apps/{app_id}/specs", summary="List specs for a merchant app")

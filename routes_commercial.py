@@ -54,12 +54,14 @@ from issue_pricing_service import (
 )
 from models import (
     AdminAuditLog,
+    App,
     EndUser,
     IssueQuotaPricingRule,
     RechargeBonusRule,
     RechargeOrder,
     RechargeOrderStatus,
     RechargePaymentChannel,
+    UserAppAuthorization,
     UserQuotaAccount,
 )
 
@@ -182,6 +184,40 @@ def _merchant_user_payload(user: EndUser, account: Optional[UserQuotaAccount]) -
     }
 
 
+def _merchant_detail_app_payload(app: App, *, source: str, authorization: Optional[UserAppAuthorization] = None) -> dict:
+    return {
+        "app_id": app.app_id,
+        "name": app.name,
+        "source": source,
+        "status": app.status,
+        "created_by": app.created_by,
+        "owner_user_id": app.owner_user_id,
+        "authorization_id": authorization.id if authorization else None,
+        "authorized_at": (
+            to_api_beijing_iso(authorization.created_at, naive="civil")
+            if authorization and authorization.created_at
+            else None
+        ),
+        "can_view_kamis": True,
+        "can_generate_kamis": True,
+        "can_manage_batches": True,
+    }
+
+
+def _usage_user_payload(user: EndUser, app_name_by_id: dict[str, str]) -> dict:
+    return {
+        "id": user.id,
+        "app_id": user.app_id,
+        "app_name": app_name_by_id.get(user.app_id or "", user.app_id),
+        "username": user.username,
+        "email": user.email,
+        "phone": user.phone,
+        "status": user.status,
+        "created_at": to_api_beijing_iso(user.created_at, naive="civil"),
+        "last_login": to_api_beijing_iso(user.last_login, naive="civil") if user.last_login else None,
+    }
+
+
 @public_router.get("/payment-qrcodes/{filename}", summary="Get payment QR code")
 async def get_payment_qrcode(filename: str):
     try:
@@ -235,6 +271,65 @@ async def list_merchants(
                 _merchant_user_payload(user, account_map.get(user.id))
                 for user in merchants
             ],
+        },
+    }
+
+
+@router.get("/merchants/{merchant_id}/detail", summary="Get merchant/card issuer detail")
+async def get_merchant_detail(
+    merchant_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _require_admin(current_user)
+    merchant = session.get(EndUser, merchant_id)
+    if not merchant or merchant.app_id is not None:
+        raise HTTPException(status_code=404, detail="Merchant not found")
+
+    account = session.exec(select(UserQuotaAccount).where(UserQuotaAccount.user_id == merchant.id)).first()
+    self_apps = session.exec(
+        select(App)
+        .where((App.owner_user_id == merchant.id) | (App.created_by == merchant.username))
+        .order_by(App.id.desc())
+    ).all()
+    authorizations = session.exec(
+        select(UserAppAuthorization)
+        .where(UserAppAuthorization.user_id == merchant.id)
+        .order_by(UserAppAuthorization.id.desc())
+    ).all()
+    authorized_app_ids = [authorization.app_id for authorization in authorizations]
+    authorized_apps = session.exec(
+        select(App).where(App.app_id.in_(authorized_app_ids)).order_by(App.id.desc())
+    ).all() if authorized_app_ids else []
+    app_by_id = {app.app_id: app for app in authorized_apps}
+
+    visible_app_ids = sorted({app.app_id for app in self_apps}.union(authorized_app_ids))
+    usage_users = session.exec(
+        select(EndUser)
+        .where(EndUser.app_id.in_(visible_app_ids))
+        .order_by(EndUser.id.desc())
+    ).all() if visible_app_ids else []
+    visible_apps = {app.app_id: app.name for app in self_apps}
+    visible_apps.update({app.app_id: app.name for app in authorized_apps})
+
+    return {
+        "success": True,
+        "data": {
+            "profile": _merchant_user_payload(merchant, account),
+            "quota": {
+                "kami_issue_balance": account.kami_issue_balance if account else 0,
+                "total_kami_issue_granted": account.total_kami_issue_granted if account else 0,
+            },
+            "self_owned_apps": [
+                _merchant_detail_app_payload(app, source="self_owned")
+                for app in self_apps
+            ],
+            "authorized_apps": [
+                _merchant_detail_app_payload(app_by_id[authorization.app_id], source="admin_authorized", authorization=authorization)
+                for authorization in authorizations
+                if authorization.app_id in app_by_id
+            ],
+            "usage_users": [_usage_user_payload(user, visible_apps) for user in usage_users],
         },
     }
 

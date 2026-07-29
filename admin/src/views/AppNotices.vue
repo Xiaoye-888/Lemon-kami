@@ -106,11 +106,10 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import { getApps } from '../api/admin'
-import { createAppNotice, deleteAppNotice, getAppNotices, updateAppNotice } from '../api/appContent'
+import { createAppNotice, deleteAppNotice, getAppNotices, getContentApps, isMerchantContentRoute, updateAppNotice } from '../api/appContent'
 import { formatBeijingTime } from '../utils/datetime'
 
 const apps = ref([])
@@ -121,6 +120,8 @@ const saving = ref(false)
 const rowActionLoading = ref('')
 const dialogVisible = ref(false)
 const editingNotice = ref(null)
+const selectedApp = computed(() => apps.value.find((app) => app.app_id === selectedAppId.value) || null)
+const canManageSelectedApp = computed(() => !isMerchantContentRoute() || selectedApp.value?.is_owned === true)
 
 const form = reactive({
   title: '',
@@ -144,7 +145,7 @@ const resetForm = () => {
 }
 
 const loadApps = async () => {
-  const res = await getApps()
+  const res = await getContentApps()
   apps.value = res.data || []
   if (!selectedAppId.value && apps.value.length > 0) {
     selectedAppId.value = apps.value[0].app_id
@@ -169,12 +170,20 @@ const loadNotices = async () => {
 }
 
 const openCreate = () => {
+  if (!canManageSelectedApp.value) {
+    ElMessage.warning('授权应用公告仅可查看')
+    return
+  }
   editingNotice.value = null
   resetForm()
   dialogVisible.value = true
 }
 
 const openEdit = (row) => {
+  if (!canManageSelectedApp.value) {
+    ElMessage.warning('授权应用公告仅可查看')
+    return
+  }
   editingNotice.value = row
   form.title = row.title || ''
   form.content = row.content || ''
@@ -186,6 +195,7 @@ const openEdit = (row) => {
 }
 
 const saveNotice = async () => {
+  if (!canManageSelectedApp.value) return
   if (!form.title.trim() || !form.content.trim()) {
     ElMessage.warning('请填写公告标题和内容')
     return
@@ -218,6 +228,10 @@ const saveNotice = async () => {
 }
 
 const deleteNotice = async (row) => {
+  if (!canManageSelectedApp.value) {
+    ElMessage.warning('授权应用公告仅可查看')
+    return
+  }
   const appId = selectedAppId.value
   if (!appId || rowActionLoading.value) return
 

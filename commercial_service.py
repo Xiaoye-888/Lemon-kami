@@ -68,6 +68,67 @@ def _enum_value(value):
     return value.value if hasattr(value, "value") else value
 
 
+QUOTA_TYPE_LABELS = {
+    "app_create": "应用创建额度",
+    "kami_issue": "发卡额度",
+    "recharge": "充值额度",
+}
+
+QUOTA_TRANSACTION_TYPE_LABELS = {
+    "grant": "入账",
+    "consume": "扣减",
+    "adjust": "调整",
+    "expire": "过期",
+    "refund": "退回",
+}
+
+
+def _short_quota_transaction_no(transaction_id: Optional[str]) -> str:
+    if not transaction_id:
+        return "-"
+    normalized = transaction_id.replace("_", "").replace("-", "").upper()
+    return f"UQ-{normalized[-8:]}" if len(normalized) >= 8 else normalized
+
+
+def _quota_transaction_display(item: UserQuotaTransaction) -> dict:
+    quota_type = _enum_value(item.quota_type)
+    transaction_type = _enum_value(item.transaction_type)
+    direction = QUOTA_TRANSACTION_TYPE_LABELS.get(transaction_type, transaction_type or "-")
+    if item.amount > 0 and transaction_type in {"adjust", "refund"}:
+        direction = f"{direction}入账"
+    elif item.amount < 0 and transaction_type in {"adjust", "expire"}:
+        direction = f"{direction}扣减"
+
+    biz_id = item.biz_id or ""
+    scene = "额度调整"
+    subject = item.remark or "手动处理"
+    if biz_id.startswith("recharge_order:"):
+        order_no = biz_id.split(":", 1)[1]
+        scene = "充值入账"
+        subject = f"充值订单 {order_no}"
+    elif biz_id.startswith("kami_issue:"):
+        parts = biz_id.split(":")
+        batch_no = parts[2] if len(parts) > 2 else ""
+        scene = "生成卡密"
+        subject = f"卡密批次 {batch_no}" if batch_no else "卡密批次"
+    elif transaction_type == "grant":
+        scene = "管理员发放"
+    elif transaction_type == "consume":
+        scene = "额度扣减"
+    elif transaction_type == "expire":
+        scene = "额度过期"
+    elif transaction_type == "refund":
+        scene = "额度退回"
+
+    return {
+        "short_transaction_no": _short_quota_transaction_no(item.transaction_id),
+        "display_scene": scene,
+        "display_direction": direction,
+        "display_quota_type": QUOTA_TYPE_LABELS.get(quota_type, quota_type or "-"),
+        "display_subject": subject,
+    }
+
+
 def normalize_recharge_mode(value: str | RechargeMode | None) -> RechargeMode:
     if isinstance(value, RechargeMode):
         return value
@@ -958,6 +1019,7 @@ def user_quota_transactions_payload(
                 "remark": item.remark,
                 "metadata": item.metadata_json,
                 "created_at": to_api_beijing_iso(item.created_at, naive="civil") if item.created_at else None,
+                **_quota_transaction_display(item),
             }
             for item in items
         ],

@@ -31,6 +31,8 @@ def test_page_contract_registry_covers_primary_admin_and_merchant_surfaces():
         "merchant.orders",
         "merchant.transactions",
         "merchant.apps",
+        "merchant.notices",
+        "merchant.versions",
         "merchant.batches.list",
         "merchant.batches.detail",
         "merchant.cards",
@@ -39,6 +41,7 @@ def test_page_contract_registry_covers_primary_admin_and_merchant_surfaces():
         "admin.batches.list",
         "admin.batches.detail",
         "admin.merchants",
+        "admin.merchants.detail",
         "admin.recharge_orders",
         "admin.devices",
     }.issubset(contract_ids)
@@ -84,6 +87,7 @@ def test_page_contracts_pin_role_permission_boundaries_to_existing_tests():
     required_boundaries = {
         "merchant_self_owned_app",
         "merchant_authorized_app",
+        "merchant_app_content_management",
         "merchant_authorized_batches_not_synced",
         "merchant_device_scope",
         "application_user_cannot_manage_quota",

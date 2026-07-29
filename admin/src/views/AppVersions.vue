@@ -418,8 +418,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import { getApps } from '../api/admin'
-import { createAppVersion, deleteAppVersion, getAppVersions, updateAppVersion } from '../api/appContent'
+import { createAppVersion, deleteAppVersion, getAppVersions, getContentApps, isMerchantContentRoute, updateAppVersion } from '../api/appContent'
 import { formatBeijingTime } from '../utils/datetime'
 
 const WINDOWS_PLATFORM = 'windows'
@@ -452,6 +451,7 @@ const form = reactive({
 
 const selectedApp = computed(() => apps.value.find((app) => app.app_id === selectedAppId.value) || null)
 const selectedAppName = computed(() => selectedApp.value?.name || '应用')
+const canManageSelectedApp = computed(() => !isMerchantContentRoute() || selectedApp.value?.is_owned === true)
 
 const sortedVersions = computed(() => [...versions.value].sort((left, right) => {
   const codeDiff = Number(right.version_code || 0) - Number(left.version_code || 0)
@@ -607,7 +607,7 @@ const applyVersionToForm = (row) => {
 }
 
 const loadApps = async () => {
-  const res = await getApps()
+  const res = await getContentApps()
   apps.value = res.data || []
   if (!selectedAppId.value && apps.value.length > 0) {
     selectedAppId.value = apps.value[0].app_id
@@ -641,6 +641,10 @@ const selectVersion = (row) => {
 
 const openCreate = () => {
   if (rowActionLoading.value) return
+  if (!canManageSelectedApp.value) {
+    ElMessage.warning('授权应用版本仅可查看')
+    return
+  }
   editingVersion.value = null
   selectedVersion.value = null
   resetForm()
@@ -649,6 +653,10 @@ const openCreate = () => {
 
 const openEdit = (row) => {
   if (rowActionLoading.value) return
+  if (!canManageSelectedApp.value) {
+    ElMessage.warning('授权应用版本仅可查看')
+    return
+  }
   createDialogVisible.value = false
   editingVersion.value = row
   selectedVersion.value = row
@@ -746,6 +754,7 @@ async function confirmDialogPublish(payload) {
 
 async function saveVersion(statusOverride) {
   if (rowActionLoading.value) return
+  if (!canManageSelectedApp.value) return
 
   const payload = versionPayloadFromForm(statusOverride)
   if (!payload.version || !payload.title) {
@@ -784,6 +793,10 @@ async function saveVersion(statusOverride) {
 async function publishDraft(row) {
   const appId = selectedAppId.value
   if (!appId || rowActionLoading.value) return
+  if (!canManageSelectedApp.value) {
+    ElMessage.warning('授权应用版本仅可查看')
+    return
+  }
 
   rowActionLoading.value = `publish:${row.id}`
   const payload = versionPayloadFromVersion(row, 'published')
@@ -815,6 +828,10 @@ async function publishDraft(row) {
 async function archiveVersion(row) {
   const appId = selectedAppId.value
   if (!appId || rowActionLoading.value) return
+  if (!canManageSelectedApp.value) {
+    ElMessage.warning('授权应用版本仅可查看')
+    return
+  }
 
   rowActionLoading.value = `archive:${row.id}`
   const payload = versionPayloadFromVersion(row, 'archived')
@@ -845,6 +862,10 @@ async function archiveVersion(row) {
 async function deleteVersion(row) {
   const appId = selectedAppId.value
   if (!appId || rowActionLoading.value) return
+  if (!canManageSelectedApp.value) {
+    ElMessage.warning('授权应用版本仅可查看')
+    return
+  }
 
   rowActionLoading.value = `delete:${row.id}`
   try {

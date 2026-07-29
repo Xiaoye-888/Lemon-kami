@@ -28,12 +28,11 @@
         <el-table-column prop="created_at" label="创建时间" width="180">
           <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="300" fixed="right" align="left">
+        <el-table-column label="操作" width="260" fixed="right" align="left">
           <template #default="{ row }">
             <div class="row-actions">
               <el-button link type="primary" @click="openDetailDialog(row)">详情</el-button>
               <el-button link type="primary" @click="openInterfacesDialog(row)">接口列表</el-button>
-              <el-button link type="primary" @click="goBatches(row)">规格批次</el-button>
               <el-button v-if="row.is_owned" link type="primary" @click="showEditDialog(row)">改名</el-button>
               <el-button v-if="row.is_owned" link type="danger" @click="showDeleteDialog(row)">删除</el-button>
             </div>
@@ -71,7 +70,7 @@
       </div>
       <template #footer>
         <el-button @click="createResultVisible = false">关闭</el-button>
-        <el-button type="primary" @click="goBatches(createdApp)">配置规格</el-button>
+        <el-button type="primary" @click="goBatchWorkbench(createdApp)">批次管理</el-button>
       </template>
     </el-dialog>
 
@@ -99,16 +98,36 @@
         </div>
         <div class="credential-row">
           <span>App Secret</span>
-          <code>{{ detailApp.is_owned ? detailApp.app_secret : '授权应用不公开密钥' }}</code>
+          <div class="secret-inline">
+            <code>{{ maskedAppSecret }}</code>
+            <el-button
+              v-if="detailApp.is_owned && detailApp.app_secret"
+              link
+              type="primary"
+              :icon="DocumentCopy"
+              aria-label="复制 App Secret"
+              @click="copyAppSecret"
+            />
+          </div>
         </div>
         <div class="credential-row credential-row--public">
           <span>RSA 公钥</span>
-          <code>{{ detailApp.is_owned ? detailApp.rsa_public_key : '授权应用不公开密钥' }}</code>
+          <div class="secret-inline">
+            <code>{{ maskedRsaPublicKey }}</code>
+            <el-button
+              v-if="detailApp.is_owned && detailApp.rsa_public_key"
+              link
+              type="primary"
+              :icon="DocumentCopy"
+              aria-label="复制 RSA 公钥"
+              @click="copyRsaPublicKey"
+            />
+          </div>
         </div>
       </div>
       <template #footer>
         <el-button @click="detailDialogVisible = false">关闭</el-button>
-        <el-button type="primary" @click="goBatches(detailApp)">规格批次</el-button>
+        <el-button type="primary" @click="goBatchWorkbench(detailApp)">批次管理</el-button>
       </template>
     </el-dialog>
 
@@ -247,7 +266,9 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { DocumentCopy } from '@element-plus/icons-vue'
 import { formatBeijingTime } from '../utils/datetime'
+import { copyTextToClipboard } from '../utils/clipboard'
 import {
   createMerchantApp,
   deleteMerchantApp,
@@ -279,6 +300,14 @@ const currentApp = ref(null)
 const currentInterface = ref(null)
 const interfaceRows = ref([])
 const canEditCurrentAppInterfaces = computed(() => currentApp.value?.is_owned === true)
+const maskedAppSecret = computed(() => {
+  if (!detailApp.value) return '-'
+  return detailApp.value.is_owned && detailApp.value.app_secret ? '****************' : '授权应用不公开密钥'
+})
+const maskedRsaPublicKey = computed(() => {
+  if (!detailApp.value) return '-'
+  return detailApp.value.is_owned && detailApp.value.rsa_public_key ? '****************' : '授权应用不公开密钥'
+})
 const createForm = reactive({ name: '' })
 const editForm = reactive({ name: '' })
 const interfaceForm = reactive({
@@ -338,6 +367,16 @@ const interfaceConfigSchemas = {
   'sdk.device_limit': [
     { key: 'release_on_logout', label: '退出自动释放', type: 'switch', default: true },
     { key: 'heartbeat_timeout_seconds', label: '心跳超时秒数', type: 'number', min: 30, max: 86400, default: 180 }
+  ],
+  'sdk.notice': [
+    { key: 'allow_notice_read', label: '允许公告读取', type: 'switch', default: true },
+    { key: 'max_notice_length', label: '公告最大长度', type: 'number', min: 100, max: 20000, default: 5000 },
+    { key: 'popup_enabled', label: '允许弹窗公告', type: 'switch', default: true }
+  ],
+  'sdk.update_check': [
+    { key: 'allow_update_check', label: '允许版本检查', type: 'switch', default: true },
+    { key: 'min_supported_version_code', label: '最低支持版本编码', type: 'number', min: 1, max: 999999999, default: 1 },
+    { key: 'force_update_enabled', label: '允许强制更新', type: 'switch', default: true }
   ],
   'sdk.report': [
     { key: 'allow_report', label: '允许事件上报', type: 'switch', default: true },
@@ -480,11 +519,29 @@ function openInterfaceConfigDialog(row) {
   interfaceConfigDialogVisible.value = true
 }
 
-function goBatches(row) {
+function goBatchWorkbench(row) {
   if (!row?.app_id) return
   createResultVisible.value = false
   detailDialogVisible.value = false
   router.push({ path: '/merchant/batches', query: { app_id: row.app_id } })
+}
+
+async function copyAppSecret() {
+  if (!detailApp.value?.app_secret) {
+    ElMessage.warning('暂无 App Secret 可复制')
+    return
+  }
+  await copyTextToClipboard(detailApp.value.app_secret)
+  ElMessage.success('复制成功')
+}
+
+async function copyRsaPublicKey() {
+  if (!detailApp.value?.rsa_public_key) {
+    ElMessage.warning('暂无 RSA 公钥可复制')
+    return
+  }
+  await copyTextToClipboard(detailApp.value.rsa_public_key)
+  ElMessage.success('复制成功')
 }
 
 async function saveInterfaceConfig() {
@@ -567,6 +624,13 @@ onMounted(loadApps)
   align-items: start;
 }
 
+.secret-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .credential-row span {
   color: #64748b;
 }
@@ -575,6 +639,13 @@ onMounted(loadApps)
 .credential-row code {
   color: #0f172a;
   word-break: break-all;
+}
+
+.secret-inline code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .credential-row--public code {

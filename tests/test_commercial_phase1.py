@@ -267,6 +267,73 @@ def test_admin_application_users_and_commercial_merchants_are_listed_separately(
         fastapi_app.dependency_overrides.clear()
 
 
+def test_admin_commercial_merchant_detail_aggregates_apps_authorizations_and_usage_users():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="detail-merchant", password_hash=hash_password("secret123"), status=1)
+        other = EndUser(username="detail-other", password_hash=hash_password("secret123"), status=1)
+        session.add_all([merchant, other])
+        session.commit()
+        session.refresh(merchant)
+        self_app = App(
+            app_id="app_detail_self",
+            name="Detail Self",
+            app_secret="secret-self",
+            rsa_public_key="public-self",
+            rsa_private_key="private-self",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        authorized_app = App(
+            app_id="app_detail_authorized",
+            name="Detail Authorized",
+            app_secret="secret-authorized",
+            rsa_public_key="public-authorized",
+            rsa_private_key="private-authorized",
+            created_by="admin",
+        )
+        usage_user = EndUser(
+            app_id=self_app.app_id,
+            username="detail-usage",
+            password_hash=hash_password("secret123"),
+            status=1,
+        )
+        session.add_all([self_app, authorized_app, usage_user])
+        session.add(
+            UserAppAuthorization(
+                app_id=authorized_app.app_id,
+                user_id=merchant.id,
+                username=merchant.username,
+                granted_by="admin",
+            )
+        )
+        session.add(UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=9))
+        session.commit()
+        merchant_id = merchant.id
+
+    try:
+        response = client.get(f"/api/v1/admin/commercial/merchants/{merchant_id}/detail")
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["profile"]["username"] == "detail-merchant"
+        assert data["quota"]["kami_issue_balance"] == 9
+        assert [item["app_id"] for item in data["self_owned_apps"]] == ["app_detail_self"]
+        assert [item["app_id"] for item in data["authorized_apps"]] == ["app_detail_authorized"]
+        assert [item["username"] for item in data["usage_users"]] == ["detail-usage"]
+        assert data["self_owned_apps"][0]["can_generate_kamis"] is True
+        assert data["authorized_apps"][0]["can_manage_batches"] is True
+        assert "app_secret" not in response.text
+        assert "rsa_private_key" not in response.text
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_manual_recharge_order_review_credits_issue_quota_and_transactions(tmp_path, monkeypatch):
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
@@ -377,6 +444,11 @@ def test_manual_recharge_order_review_credits_issue_quota_and_transactions(tmp_p
         tx_item = tx_response.json()["data"]["items"][0]
         assert tx_item["transaction_type"] == "grant"
         assert tx_item["quota_type"] == "kami_issue"
+        assert tx_item["display_scene"] == "充值入账"
+        assert tx_item["display_direction"] == "入账"
+        assert tx_item["display_quota_type"] == "发卡额度"
+        assert tx_item["display_subject"].startswith("充值订单")
+        assert tx_item["short_transaction_no"].startswith("UQ-")
         assert tx_item["amount"] == 400
         assert tx_item["biz_id"] == f"recharge_order:{order_data['order_no']}"
 
@@ -1856,19 +1928,181 @@ def test_merchant_app_interfaces_expose_schema_driven_config_fields():
         assert "sdk.verify" in by_key
         assert "sdk.unbind" in by_key
         assert "sdk.device_limit" in by_key
+        assert "sdk.notice" in by_key
+        assert "sdk.update_check" in by_key
 
         redeem_schema = by_key["points.redeem"].get("config_schema") or []
         verify_schema = by_key["sdk.verify"].get("config_schema") or []
         unbind_schema = by_key["sdk.unbind"].get("config_schema") or []
+        notice_schema = by_key["sdk.notice"].get("config_schema") or []
+        update_schema = by_key["sdk.update_check"].get("config_schema") or []
 
         assert any(field["key"] == "allow_redeem" for field in redeem_schema)
         assert any(field["key"] == "bind_user_on_redeem" for field in redeem_schema)
         assert any(field["key"] == "signature_required" for field in verify_schema)
         assert any(field["key"] == "ip_lock_enabled" for field in verify_schema)
         assert any(field["key"] == "max_unbind_count" for field in unbind_schema)
+        assert any(field["key"] == "max_notice_length" for field in notice_schema)
+        assert any(field["key"] == "min_supported_version_code" for field in update_schema)
         assert by_key["points.redeem"]["config_schema"] != by_key["sdk.verify"]["config_schema"]
         assert "quota_limit" not in by_key["points.redeem"]
         assert "expires_at" not in by_key["points.redeem"]
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_notice_and_version_management_follows_app_ownership_boundaries():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="content-merchant", password_hash=hash_password("secret123"), status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        self_app = App(
+            app_id="app_content_self",
+            name="Content Self",
+            app_secret="secret-self",
+            rsa_public_key="public-self",
+            rsa_private_key="private-self",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        authorized_app = App(
+            app_id="app_content_authorized",
+            name="Content Authorized",
+            app_secret="secret-authorized",
+            rsa_public_key="public-authorized",
+            rsa_private_key="private-authorized",
+            created_by="admin",
+        )
+        session.add_all([self_app, authorized_app])
+        session.add(
+            UserAppAuthorization(
+                app_id=authorized_app.app_id,
+                user_id=merchant.id,
+                username=merchant.username,
+                granted_by="admin",
+            )
+        )
+        session.add(
+            AppNotice(
+                app_id=authorized_app.app_id,
+                title="授权应用公告",
+                content="只读公告",
+                created_by="admin",
+            )
+        )
+        session.commit()
+        token = routes_user.create_user_access_token(merchant)
+
+    try:
+        create_notice = client.post(
+            "/api/v1/merchant/apps/app_content_self/notices",
+            headers=auth_headers(token),
+            json={
+                "title": "自建公告",
+                "content": "公告内容",
+                "level": "normal",
+                "enabled": True,
+                "popup": False,
+                "show_once": True,
+            },
+        )
+        assert create_notice.status_code == 200
+        notice_id = create_notice.json()["data"]["id"]
+        assert create_notice.json()["data"]["revision"] == 1
+
+        list_notice = client.get(
+            "/api/v1/merchant/apps/app_content_self/notices",
+            headers=auth_headers(token),
+        )
+        assert list_notice.status_code == 200
+        assert list_notice.json()["data"]["items"][0]["title"] == "自建公告"
+
+        readonly_notice = client.get(
+            "/api/v1/merchant/apps/app_content_authorized/notices",
+            headers=auth_headers(token),
+        )
+        assert readonly_notice.status_code == 200
+        assert readonly_notice.json()["data"]["items"][0]["title"] == "授权应用公告"
+
+        forbidden_notice = client.post(
+            "/api/v1/merchant/apps/app_content_authorized/notices",
+            headers=auth_headers(token),
+            json={"title": "越权", "content": "不允许", "level": "normal"},
+        )
+        assert forbidden_notice.status_code == 403
+
+        update_notice = client.put(
+            f"/api/v1/merchant/apps/app_content_self/notices/{notice_id}",
+            headers=auth_headers(token),
+            json={
+                "title": "自建公告更新",
+                "content": "公告内容更新",
+                "level": "important",
+                "enabled": True,
+                "popup": True,
+                "show_once": False,
+            },
+        )
+        assert update_notice.status_code == 200
+        assert update_notice.json()["data"]["revision"] == 2
+
+        invalid_version = client.post(
+            "/api/v1/merchant/apps/app_content_self/updates",
+            headers=auth_headers(token),
+            json={
+                "platform": "windows",
+                "version": "2.0.0",
+                "version_code": 200,
+                "title": "强制更新",
+                "force_update": True,
+                "status": "published",
+            },
+        )
+        assert invalid_version.status_code == 400
+
+        create_version = client.post(
+            "/api/v1/merchant/apps/app_content_self/updates",
+            headers=auth_headers(token),
+            json={
+                "platform": "windows",
+                "version": "2.0.0",
+                "version_code": 200,
+                "title": "新版发布",
+                "notes": "更新说明",
+                "force_update": True,
+                "download_url": "https://example.com/v2.exe",
+                "status": "published",
+            },
+        )
+        assert create_version.status_code == 200
+        version_id = create_version.json()["data"]["id"]
+
+        versions = client.get(
+            "/api/v1/merchant/apps/app_content_self/updates",
+            headers=auth_headers(token),
+        )
+        assert versions.status_code == 200
+        assert versions.json()["data"]["items"][0]["version"] == "2.0.0"
+
+        delete_version = client.delete(
+            f"/api/v1/merchant/apps/app_content_self/updates/{version_id}",
+            headers=auth_headers(token),
+        )
+        assert delete_version.status_code == 200
+
+        delete_notice = client.delete(
+            f"/api/v1/merchant/apps/app_content_self/notices/{notice_id}",
+            headers=auth_headers(token),
+        )
+        assert delete_notice.status_code == 200
     finally:
         fastapi_app.dependency_overrides.clear()
 
