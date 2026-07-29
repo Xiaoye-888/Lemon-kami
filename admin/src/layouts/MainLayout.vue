@@ -180,6 +180,8 @@ const merchantMenuItems = [
   { index: '/merchant/orders', label: '我的订单', icon: Tickets },
   { index: '/merchant/transactions', label: '发卡额度流水', icon: Coin },
   { index: '/merchant/apps', label: '我的应用', icon: Setting },
+  { index: '/merchant/apps/notices', label: '公告管理', icon: Document },
+  { index: '/merchant/apps/versions', label: '版本更新', icon: Tickets },
   { index: '/merchant/batches', label: '批次管理', icon: Box },
   { index: '/merchant/cards', label: '我的卡密', icon: Key },
   { index: '/merchant/devices', label: '设备记录', icon: Monitor },

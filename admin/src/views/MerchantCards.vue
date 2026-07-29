@@ -3,6 +3,8 @@
     <div class="page-toolbar">
       <h2>我的卡密</h2>
       <div class="actions">
+        <el-button type="primary" :icon="VideoPlay" :disabled="!query.app_id" @click="openSdkTest">SDK 测试</el-button>
+        <el-button type="primary" :icon="Plus" :disabled="!query.app_id" @click="goGenerateKamis">生成卡密</el-button>
         <el-button :icon="Refresh" :loading="loading" @click="loadCards">刷新</el-button>
       </div>
     </div>
@@ -67,10 +69,12 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
-import { Download, Refresh, Search } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
+import { Download, Plus, Refresh, Search, VideoPlay } from '@element-plus/icons-vue'
 import { exportMerchantKamis, getMerchantApps, getMerchantKamis } from '../api/merchant'
 import { formatBeijingTime } from '../utils/datetime'
 
+const router = useRouter()
 const loading = ref(false)
 const exporting = ref(false)
 const apps = ref([])
@@ -137,6 +141,18 @@ async function handleExport() {
   } finally {
     exporting.value = false
   }
+}
+
+function openSdkTest() {
+  if (!query.app_id) return
+  const url = new URL(`${import.meta.env.BASE_URL}sdk/js_example.html`, window.location.origin)
+  url.searchParams.set('app_id', query.app_id)
+  window.open(url.toString(), '_blank', 'noopener,noreferrer')
+}
+
+function goGenerateKamis() {
+  if (!query.app_id) return
+  router.push({ path: '/merchant/batches', query: { app_id: query.app_id, action: 'generate' } })
 }
 
 function downloadBlob(data, filename) {

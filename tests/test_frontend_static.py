@@ -346,6 +346,38 @@ def test_application_menu_groups_info_notice_and_versions():
     assert "path: 'apps/versions'" in router
 
 
+def test_merchant_menu_exposes_notice_and_version_management_without_admin_core_config():
+    layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
+    router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")
+    app_content_api = (PROJECT_ROOT / "admin/src/api/appContent.js").read_text(encoding="utf-8")
+
+    merchant_menu = layout.split("const merchantMenuItems = [", 1)[1].split("const menuItems", 1)[0]
+    merchant_routes = router.split("const merchantChildren = [", 1)[1].split("]\n\nconst legacyAdminRedirects", 1)[0]
+
+    assert "index: '/merchant/apps/notices'" in merchant_menu
+    assert "label: '公告管理'" in merchant_menu
+    assert "index: '/merchant/apps/versions'" in merchant_menu
+    assert "label: '版本更新'" in merchant_menu
+    assert "path: 'apps/notices'" in merchant_routes
+    assert "path: 'apps/versions'" in merchant_routes
+    assert "AppNotices" in merchant_routes
+    assert "AppVersions" in merchant_routes
+
+    for core_admin_only in (
+        "/merchant/commercial/recharge-settings",
+        "/merchant/commercial/issue-pricing",
+        "充值配置",
+        "发卡额度配置",
+        "充值订单审核",
+    ):
+        assert core_admin_only not in merchant_menu
+
+    assert "isMerchantContentRoute" in app_content_api
+    assert "contentBasePath" in app_content_api
+    assert "`/merchant/apps/${appId}/notices`" in app_content_api
+    assert "`/merchant/apps/${appId}/updates`" in app_content_api
+
+
 def test_notice_and_version_pages_are_not_configured_in_app_interfaces():
     interfaces_source = (PROJECT_ROOT / "admin/src/views/AppInterfaces.vue").read_text(encoding="utf-8")
 
@@ -428,6 +460,25 @@ def test_merchant_apps_interface_management_is_read_only_for_authorized_apps():
     assert "v-if=\"canEditCurrentAppInterfaces\"" in source
     assert "授权应用只读" in source
     assert "授权应用不公开密钥" in source
+
+
+def test_merchant_transactions_show_business_semantics_instead_of_raw_ids():
+    merchant_transactions = (PROJECT_ROOT / "admin/src/views/MerchantTransactions.vue").read_text(encoding="utf-8")
+    admin_transactions = (PROJECT_ROOT / "admin/src/views/AdminQuotaTransactions.vue").read_text(encoding="utf-8")
+
+    for source in (merchant_transactions, admin_transactions):
+        assert 'label="业务场景"' in source
+        assert 'label="额度方向"' in source
+        assert 'label="额度变动"' in source
+        assert 'label="关联对象"' in source
+        assert "display_scene" in source
+        assert "display_direction" in source
+        assert "display_subject" in source
+        assert "openTransactionDetail" in source
+
+    merchant_table = merchant_transactions.split("<el-table", 1)[1].split("</el-table>", 1)[0]
+    for raw_column in ('label="流水号"', 'label="类型"', 'label="额度类型"', 'label="业务单号"'):
+        assert raw_column not in merchant_table
 
 
 def test_merchant_batches_exposes_grouped_specs_and_beijing_time_rendering():
@@ -639,14 +690,32 @@ def test_merchant_apps_expose_self_owned_actions_and_interface_management():
         assert token in merchant_apps
 
     assert 'v-if="row.is_owned"' in merchant_apps
-    assert 'label="操作" width="300" fixed="right" align="left"' in merchant_apps
+    assert 'label="操作" width="260" fixed="right" align="left"' in merchant_apps
     assert "接口列表" in merchant_apps
     assert "改名" in merchant_apps
     assert "删除" in merchant_apps
-    assert "规格批次" in merchant_apps
+    assert "规格批次" not in merchant_apps
+    assert "goBatches(row)" not in merchant_apps
     assert "display: inline-flex" in merchant_apps
     assert "justify-content: flex-start" in merchant_apps
     assert "white-space: nowrap" in merchant_apps
+
+
+def test_merchant_app_detail_masks_secret_and_public_key_with_copy_controls():
+    merchant_apps = (PROJECT_ROOT / "admin/src/views/MerchantApps.vue").read_text(encoding="utf-8")
+    detail_dialog = merchant_apps.split('v-model="detailDialogVisible"', 1)[1].split("</el-dialog>", 1)[0]
+
+    assert "maskedAppSecret" in merchant_apps
+    assert "maskedRsaPublicKey" in merchant_apps
+    assert "copyAppSecret" in merchant_apps
+    assert "copyRsaPublicKey" in merchant_apps
+    assert "copyTextToClipboard" in merchant_apps
+    assert 'aria-label="复制 App Secret"' in detail_dialog
+    assert 'aria-label="复制 RSA 公钥"' in detail_dialog
+    assert "{{ maskedAppSecret }}" in detail_dialog
+    assert "{{ maskedRsaPublicKey }}" in detail_dialog
+    assert "{{ detailApp.is_owned ? detailApp.app_secret" not in detail_dialog
+    assert "{{ detailApp.is_owned ? detailApp.rsa_public_key" not in detail_dialog
 
 
 def test_merchant_app_interface_config_uses_per_interface_schema_not_generic_quota_expiry():
@@ -662,6 +731,10 @@ def test_merchant_app_interface_config_uses_per_interface_schema_not_generic_quo
         "ip_lock_enabled",
         "heartbeat_timeout_seconds",
         "max_unbind_count",
+        "sdk.notice",
+        "sdk.update_check",
+        "max_notice_length",
+        "min_supported_version_code",
     ):
         assert token in merchant_apps
 
@@ -669,6 +742,8 @@ def test_merchant_app_interface_config_uses_per_interface_schema_not_generic_quo
     assert "签名校验" in merchant_apps
     assert "心跳超时秒数" in merchant_apps
     assert "最大解绑次数" in merchant_apps
+    assert "公告最大长度" in merchant_apps
+    assert "最低支持版本编码" in merchant_apps
 
     dialog_source = merchant_apps.split('v-model="interfaceConfigDialogVisible"', 1)[1].split("</el-dialog>", 1)[0]
     assert "额度限制" not in dialog_source
@@ -1254,6 +1329,10 @@ def test_phase2_merchant_card_search_export_and_batch_stats_are_visible():
     assert "/merchant/kamis/export" in merchant_api
     assert "exportMerchantKamis" in merchant_api
     assert "\u6279\u6b21\u53f7" in merchant_cards
+    assert "SDK 测试" in merchant_cards
+    assert "生成卡密" in merchant_cards
+    assert "openSdkTest" in merchant_cards
+    assert "goGenerateKamis" in merchant_cards
     assert "\u5bfc\u51fa" in merchant_cards
     assert "normalizedParams(false)" in merchant_cards
     assert "\u4f4e\u989d\u5ea6\u63d0\u9192" in merchant_batches
@@ -1262,6 +1341,25 @@ def test_phase2_merchant_card_search_export_and_batch_stats_are_visible():
     assert "active_count" in merchant_batches
     assert "device_bound_count" in merchant_batches
     assert "if (queryParams.keyword) params.keyword = queryParams.keyword" in admin_kamis
+
+
+def test_admin_merchants_username_drilldown_exposes_apps_users_and_quick_actions():
+    admin_merchants = (PROJECT_ROOT / "admin/src/views/AdminMerchants.vue").read_text(encoding="utf-8")
+    commercial_api = (PROJECT_ROOT / "admin/src/api/commercial.js").read_text(encoding="utf-8")
+
+    assert "getCommercialMerchantDetail" in commercial_api
+    assert "url: `/admin/commercial/merchants/${merchantId}/detail`" in commercial_api
+    assert "@click=\"openMerchantDetail(row)\"" in admin_merchants
+    assert "merchantDetailVisible" in admin_merchants
+    assert "merchantDetailTabs" in admin_merchants
+    assert "self_owned_apps" in admin_merchants
+    assert "authorized_apps" in admin_merchants
+    assert "usage_users" in admin_merchants
+    assert "openMerchantAppBatches" in admin_merchants
+    assert "openMerchantAppKamis" in admin_merchants
+    assert "生成卡密" in admin_merchants
+    assert "批次管理" in admin_merchants
+    assert "App Secret" not in admin_merchants
 
 
 def test_phase2_ops_center_has_safe_backup_and_cleanup_controls():

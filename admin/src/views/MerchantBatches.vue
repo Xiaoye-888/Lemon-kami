@@ -1609,6 +1609,27 @@ async function hydrateRouteDetail() {
   }
 }
 
+function findRouteGenerateTarget() {
+  const routeSpecId = route.query.spec_id ? Number(route.query.spec_id) : null
+  const groups = [...commonSpecs.value, ...customSpecs.value]
+  if (routeSpecId) {
+    return groups.find((group) => getSpecVariants(group).some((variant) => variant.id === routeSpecId)) || null
+  }
+  return groups.find((group) => Boolean(getDefaultVariant(group))) || null
+}
+
+async function hydrateRouteAction() {
+  if (route.query.action !== 'generate' || !queryParams.app_id || viewMode.value !== 'list') return
+  const target = findRouteGenerateTarget()
+  if (!target) {
+    ElMessage.warning('当前应用暂无可生成卡密的规格')
+  } else {
+    await showGenerateForGroup(target)
+  }
+  const { action, ...nextQuery } = route.query
+  router.replace({ path: '/merchant/batches', query: { ...nextQuery, app_id: queryParams.app_id } })
+}
+
 async function findBatchByNo(batchNo) {
   const res = await getMerchantBatches(queryParams.app_id)
   const batches = responseItems(res)
@@ -1748,6 +1769,7 @@ async function loadAll() {
       queryParams.app_id = routeAppId
     }
     await loadSpecs()
+    await hydrateRouteAction()
     await hydrateRouteDetail()
   } finally {
     loading.value = false

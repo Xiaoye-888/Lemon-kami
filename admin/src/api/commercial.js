@@ -89,6 +89,13 @@ export function getCommercialMerchants(params) {
   })
 }
 
+export function getCommercialMerchantDetail(merchantId) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/detail`,
+    method: 'get'
+  })
+}
+
 export function approveRechargeOrder(orderNo, data = {}) {
   return request({
     url: `/admin/commercial/recharge-orders/${orderNo}/approve`,

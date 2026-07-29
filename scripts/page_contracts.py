@@ -73,6 +73,8 @@ PAGE_CONTRACTS = [
                     "我的订单",
                     "发卡额度流水",
                     "我的应用",
+                    "公告管理",
+                    "版本更新",
                     "批次管理",
                     "我的卡密",
                     "设备记录",
@@ -184,7 +186,7 @@ PAGE_CONTRACTS = [
         "card_groups": [],
         "action_groups": [action_group("toolbar-actions", ("loadTransactions",))],
         "tables": [
-            table("transaction-columns", ("流水号", "类型", "额度类型", "变动", "变动后", "业务单号", "时间"))
+            table("transaction-columns", ("记录编号", "业务场景", "额度方向", "额度账户", "额度变动", "变动后", "关联对象", "时间", "操作"))
         ],
     },
     {
@@ -213,21 +215,75 @@ PAGE_CONTRACTS = [
             region("interface-config-dialog", 'v-model="interfaceConfigDialogVisible"'),
         ],
         "card_groups": [
-            card_group("detail-fields", ("detailApp.name", "detailApp.app_id", "detailApp.is_owned", "detailApp.status", "formatBeijingTime(detailApp.created_at)", "App Secret", "RSA 公钥")),
+            card_group("detail-fields", ("detailApp.name", "detailApp.app_id", "detailApp.is_owned", "detailApp.status", "formatBeijingTime(detailApp.created_at)", "maskedAppSecret", "maskedRsaPublicKey")),
             card_group("interface-config-schema", ("currentInterfaceSchema", "field.type === 'switch'", "field.type === 'number'", "canEditCurrentAppInterfaces")),
         ],
         "action_groups": [
             action_group("toolbar-actions", ("openCreateDialog", "loadApps")),
             action_group(
                 "row-actions",
-                ("openDetailDialog(row)", "openInterfacesDialog(row)", "goBatches(row)", "showEditDialog(row)", "showDeleteDialog(row)"),
+                ("openDetailDialog(row)", "openInterfacesDialog(row)", "showEditDialog(row)", "showDeleteDialog(row)"),
             ),
+            action_group("detail-secret-actions", ("copyAppSecret", "copyRsaPublicKey", "goBatchWorkbench(detailApp)")),
             action_group("create-dialog-actions", ("createDialogVisible = false", "handleCreateApp")),
             action_group("interface-config-actions", ("interfaceConfigDialogVisible = false", "saveInterfaceConfig")),
         ],
         "tables": [
             table("apps-columns", ("应用名称", "App ID", "来源", "状态", "创建时间", "操作")),
             table("interfaces-columns", ("接口名称", "接口标识", "路径", "状态", "配置", "操作")),
+        ],
+    },
+    {
+        "id": "merchant.notices",
+        "role": "merchant",
+        "route": "/merchant/apps/notices",
+        "source": "admin/src/views/AppNotices.vue",
+        "regions": [
+            region("card", 'class="page-card"'),
+            region("filters", 'class="filters"'),
+            region("notice-dialog", 'v-model="dialogVisible"'),
+        ],
+        "ordered_regions": [
+            region("card", 'class="page-card"'),
+            region("filters", 'class="filters"'),
+            region("notice-dialog", 'v-model="dialogVisible"'),
+        ],
+        "card_groups": [
+            card_group("merchant-route-guard", ("getContentApps", "isMerchantContentRoute", "canManageSelectedApp")),
+        ],
+        "action_groups": [
+            action_group("notice-actions", ("openCreate", "openEdit(row)", "deleteNotice(row)", "saveNotice")),
+        ],
+        "tables": [
+            table("notice-columns", ("ID", "公告标题", "公告内容", "级别", "状态", "启动弹窗", "只弹一次", "修订号", "更新时间", "操作"))
+        ],
+    },
+    {
+        "id": "merchant.versions",
+        "role": "merchant",
+        "route": "/merchant/apps/versions",
+        "source": "admin/src/views/AppVersions.vue",
+        "regions": [
+            region("header", 'class="page-header"'),
+            region("current-release", 'class="current-release"'),
+            region("workspace", 'class="workspace-grid"'),
+            region("release-form", 'class="release-form"'),
+        ],
+        "ordered_regions": [
+            region("header", 'class="page-header"'),
+            region("current-release", 'class="current-release"'),
+            region("workspace", 'class="workspace-grid"'),
+            region("release-form", 'class="release-form"'),
+        ],
+        "card_groups": [
+            card_group("merchant-route-guard", ("getContentApps", "isMerchantContentRoute", "canManageSelectedApp")),
+            card_group("windows-release-fields", ("WINDOWS_PLATFORM", "nextVersionCode", "confirmDialogPublish", "versionPayloadFromForm")),
+        ],
+        "action_groups": [
+            action_group("version-actions", ("openCreate", "openEdit(row)", "publishDraft(row)", "archiveVersion(row)", "deleteVersion(row)", "saveVersion")),
+        ],
+        "tables": [
+            table("version-columns", ("版本信息", "发布状态", "生效状态", "标题与说明", "发布时间", "操作"))
         ],
     },
     {
@@ -310,7 +366,10 @@ PAGE_CONTRACTS = [
             region("cards-table", "<el-table"),
         ],
         "card_groups": [],
-        "action_groups": [action_group("filter-actions", ("handleSearch", "handleReset", "handleExport"))],
+        "action_groups": [
+            action_group("toolbar-actions", ("openSdkTest", "goGenerateKamis", "loadCards")),
+            action_group("filter-actions", ("handleSearch", "handleReset", "handleExport")),
+        ],
         "tables": [
             table("cards-columns", ("卡密", "应用", "批次号", "类型", "状态", "绑定设备", "激活时间", "创建时间"))
         ],
@@ -432,6 +491,7 @@ PAGE_CONTRACTS = [
             region("merchant-table", "<el-table"),
             region("quota-dialog", 'v-model="quotaDialogVisible"'),
             region("app-auth-dialog", 'v-model="appAuthDialogVisible"'),
+            region("merchant-detail-drawer", 'v-model="merchantDetailVisible"'),
         ],
         "ordered_regions": [
             region("toolbar", 'class="page-toolbar"'),
@@ -439,16 +499,46 @@ PAGE_CONTRACTS = [
             region("merchant-table", "<el-table"),
             region("quota-dialog", 'v-model="quotaDialogVisible"'),
             region("app-auth-dialog", 'v-model="appAuthDialogVisible"'),
+            region("merchant-detail-drawer", 'v-model="merchantDetailVisible"'),
         ],
         "card_groups": [],
         "action_groups": [
-            action_group("row-actions", ("openQuotaDialog(row)", "openAppAuthDialog(row)")),
+            action_group("row-actions", ("openMerchantDetail(row)", "openQuotaDialog(row)", "openAppAuthDialog(row)")),
             action_group("quota-dialog-actions", ("quotaDialogVisible = false", "submitIssueQuotaGrant")),
             action_group("app-auth-dialog-actions", ("appAuthDialogVisible = false", "submitAppAuthorization")),
         ],
         "tables": [
             table("merchant-columns", ("ID", "用户名", "邮箱", "手机号", "发卡额度", "累计入账", "状态", "注册时间", "最近登录", "操作"))
         ],
+    },
+    {
+        "id": "admin.merchants.detail",
+        "role": "admin",
+        "route": "/admin/commercial/merchants/<id>/detail",
+        "source": "admin/src/views/AdminMerchants.vue",
+        "regions": [
+            region("detail-drawer", 'v-model="merchantDetailVisible"'),
+            region("detail-summary", 'class="merchant-detail-summary"'),
+            region("detail-tabs", 'class="merchant-detail-tabs"'),
+        ],
+        "ordered_regions": [
+            region("detail-drawer", 'v-model="merchantDetailVisible"'),
+            region("detail-summary", 'class="merchant-detail-summary"'),
+            region("detail-tabs", 'class="merchant-detail-tabs"'),
+        ],
+        "card_groups": [
+            card_group("detail-data", ("merchantDetail.profile", "merchantDetail.quota", "merchantDetail.self_owned_apps", "merchantDetail.usage_users", "merchantDetail.authorized_apps")),
+            card_group("detail-tab-order", ('name="self_owned_apps"', 'name="authorized_apps"', 'name="usage_users"')),
+        ],
+        "action_groups": [
+            action_group("app-quick-actions", ("openMerchantAppKamis(row)", "openMerchantAppBatches(row)")),
+        ],
+        "tables": [
+            table("self-owned-app-columns", ("应用名称", "App ID", "状态", "创建时间", "操作")),
+            table("authorized-app-columns", ("应用名称", "App ID", "授权人", "授权时间", "操作")),
+            table("usage-user-columns", ("用户名", "应用", "设备 UUID", "最近使用")),
+        ],
+        "forbidden_tokens": ["App Secret"],
     },
     {
         "id": "admin.recharge_orders",
@@ -526,6 +616,12 @@ ROLE_PERMISSION_CONTRACTS = [
             "test_merchant_authorized_app_issue_requires_existing_spec_and_hides_secrets",
             "test_merchant_app_detail_and_interface_management_follow_ownership_boundaries",
         ],
+    },
+    {
+        "id": "merchant_app_content_management",
+        "allowed": ["manage_self_owned_notices", "manage_self_owned_versions", "read_authorized_notices", "read_authorized_versions"],
+        "forbidden": ["manage_authorized_notices", "manage_authorized_versions", "merchant_access_to_admin_core_commercial_config"],
+        "tests": ["test_merchant_notice_and_version_management_follows_app_ownership_boundaries"],
     },
     {
         "id": "merchant_authorized_batches_not_synced",
