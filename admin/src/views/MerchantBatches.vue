@@ -796,7 +796,7 @@
           <el-input :model-value="selectedSpec ? `${selectedSpec.spec_name} · ${getValidityText(selectedSpec)}` : '-'" disabled />
         </el-form-item>
         <el-form-item label="批次号">
-          <el-input v-model="generateForm.batch_no" placeholder="可留空自动生成" />
+          <el-input v-model="generateForm.batch_no" placeholder="例如：150积分-20260714" />
         </el-form-item>
         <el-row :gutter="12">
           <el-col :xs="24" :sm="12">
@@ -1037,6 +1037,7 @@ import {
   USER_BIND_MODE_OPTIONS,
   getAuthorizationOwnerText,
   getMachineBindModeText,
+  getSpecBenefitText,
   getSpecGroupText,
   getStatusText,
   getStatusType,
@@ -1165,7 +1166,7 @@ const generateForm = reactive({
   code_length: 16,
   charset: 'upper_numeric',
   code_validity_mode: 'unlimited',
-  code_valid_days: 30
+  code_valid_days: 7
 })
 
 const batchForm = reactive({
@@ -1903,13 +1904,14 @@ async function openGenerateDialog(row) {
     return
   }
   await selectSpec(variant)
-  generateForm.batch_no = ''
+  const date = new Date().toISOString().slice(0, 10).replaceAll('-', '')
+  generateForm.batch_no = `${variant.spec_name || getSpecBenefitText(variant)}-${date}`.slice(0, 64)
   generateForm.count = 10
   generateForm.code_prefix = ''
   generateForm.code_length = 16
   generateForm.charset = 'upper_numeric'
   generateForm.code_validity_mode = 'unlimited'
-  generateForm.code_valid_days = 30
+  generateForm.code_valid_days = 7
   generateDialogVisible.value = true
   await loadIssuePreview()
 }

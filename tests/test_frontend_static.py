@@ -354,10 +354,22 @@ def test_merchant_menu_exposes_notice_and_version_management_without_admin_core_
     merchant_menu = layout.split("const merchantMenuItems = [", 1)[1].split("const menuItems", 1)[0]
     merchant_routes = router.split("const merchantChildren = [", 1)[1].split("]\n\nconst legacyAdminRedirects", 1)[0]
 
-    assert "index: '/merchant/apps/notices'" in merchant_menu
-    assert "label: '公告管理'" in merchant_menu
-    assert "index: '/merchant/apps/versions'" in merchant_menu
-    assert "label: '版本更新'" in merchant_menu
+    assert "label: '应用设置'" in merchant_menu
+    assert "label: '卡密管理'" in merchant_menu
+    app_settings_group = merchant_menu.split("label: '应用设置'", 1)[1].split("label: '卡密管理'", 1)[0]
+    assert "children: [" in app_settings_group
+    assert "index: '/merchant/apps'" in app_settings_group
+    assert "label: '我的应用'" in app_settings_group
+    assert "index: '/merchant/apps/notices'" in app_settings_group
+    assert "label: '公告管理'" in app_settings_group
+    assert "index: '/merchant/apps/versions'" in app_settings_group
+    assert "label: '版本更新'" in app_settings_group
+    kami_group = merchant_menu.split("label: '卡密管理'", 1)[1].split("index: '/merchant/devices'", 1)[0]
+    assert "children: [" in kami_group
+    assert "index: '/merchant/batches'" in kami_group
+    assert "label: '批次管理'" in kami_group
+    assert "index: '/merchant/cards'" in kami_group
+    assert "label: '我的卡密'" in kami_group
     assert "path: 'apps/notices'" in merchant_routes
     assert "path: 'apps/versions'" in merchant_routes
     assert "AppNotices" in merchant_routes
@@ -1066,6 +1078,31 @@ def test_merchant_batch_generation_dialog_exposes_admin_grade_code_controls_and_
     assert "当前发卡额度" in merchant_batches
 
 
+def test_merchant_batch_generation_defaults_match_admin_batch_number_logic():
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+    admin_batches = (PROJECT_ROOT / "admin/src/views/KamiBatches.vue").read_text(encoding="utf-8")
+
+    admin_generate_block = admin_batches.split("const showGenerateDialog = (row) => {", 1)[1].split(
+        "const showGenerateForGroup",
+        1,
+    )[0]
+    merchant_generate_block = merchant_batches.split("async function openGenerateDialog(row) {", 1)[1].split(
+        "function showGenerateDialog(row)",
+        1,
+    )[0]
+
+    assert "const date = new Date().toISOString().slice(0, 10).replaceAll('-', '')" in admin_generate_block
+    assert "generateForm.batch_no = `${row.spec_name || getSpecBenefitText(row)}-${date}`.slice(0, 64)" in admin_generate_block
+    assert "generateForm.code_valid_days = 7" in admin_generate_block
+
+    assert "const date = new Date().toISOString().slice(0, 10).replaceAll('-', '')" in merchant_generate_block
+    assert "generateForm.batch_no = `${variant.spec_name || getSpecBenefitText(variant)}-${date}`.slice(0, 64)" in merchant_generate_block
+    assert "generateForm.batch_no = ''" not in merchant_generate_block
+    assert "generateForm.code_valid_days = 7" in merchant_generate_block
+    assert 'placeholder="例如：150积分-20260714"' in merchant_batches
+    assert 'placeholder="可留空自动生成"' not in merchant_batches
+
+
 def test_commercial_ops_stability_controls_are_exposed():
     admin_orders = (PROJECT_ROOT / "admin/src/views/AdminRechargeOrders.vue").read_text(encoding="utf-8")
     admin_settings = (PROJECT_ROOT / "admin/src/views/AdminRechargeSettings.vue").read_text(encoding="utf-8")
@@ -1333,6 +1370,15 @@ def test_phase2_merchant_card_search_export_and_batch_stats_are_visible():
     assert "生成卡密" in merchant_cards
     assert "openSdkTest" in merchant_cards
     assert "goGenerateKamis" in merchant_cards
+    assert "generateDialogVisible" in merchant_cards
+    assert "loadBatchStats" in merchant_cards
+    assert "selectedBatch" in merchant_cards
+    assert "handleGenerate" in merchant_cards
+    assert "getMerchantBatches" in merchant_cards
+    assert "appendMerchantBatchKamis" in merchant_cards
+    assert "ElMessage.warning('请先选择应用')" in merchant_cards
+    assert "router.push({ path: '/merchant/batches'" not in merchant_cards
+    assert ':disabled="!query.app_id"' not in merchant_cards
     assert "\u5bfc\u51fa" in merchant_cards
     assert "normalizedParams(false)" in merchant_cards
     assert "\u4f4e\u989d\u5ea6\u63d0\u9192" in merchant_batches

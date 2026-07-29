@@ -1068,12 +1068,17 @@ def test_run_browser_sweep_passes_batch_app_context(monkeypatch, tmp_path):
         tmp_path,
         {"token": "admin-secret"},
         {"token": "merchant-secret"},
-        context={"adminBatchAppId": "app_admin", "merchantBatchAppId": "app_self"},
+        context={
+            "adminBatchAppId": "app_admin",
+            "merchantBatchAppId": "app_self",
+            "merchantCardsAppId": "app_self",
+        },
     )
 
     assert result == []
     assert captured["payload"]["context"]["adminBatchAppId"] == "app_admin"
     assert captured["payload"]["context"]["merchantBatchAppId"] == "app_self"
+    assert captured["payload"]["context"]["merchantCardsAppId"] == "app_self"
     assert captured["payload"]["routes"]["admin"].count("/admin/kamis/batches") == 1
     assert captured["payload"]["routes"]["merchant"].count("/merchant/batches") == 1
 
@@ -1099,9 +1104,12 @@ def test_browser_cdp_helper_exports_detail_summary_rect_and_mismatch_checks():
     assert "pageContractMismatches" in helper
     assert "evaluatePageContracts" in helper
     assert "merchant-apps.toolbar-actions" in helper
+    assert "merchant-cards.toolbar-actions" in helper
+    assert "merchant-cards.enabled-actions" in helper
     assert "merchant-batches.detail-card-toolbar" in helper
     assert ".el-loading-mask" in helper
     assert "waiting for batch table content" in helper
+    assert "waiting for merchant cards table content" in helper
     assert "detailSummaryMismatches" in helper
     assert "detailSummaryRect" in helper
     assert "max_top_delta" in helper
@@ -1118,6 +1126,8 @@ def test_browser_cdp_helper_exports_detail_summary_rect_and_mismatch_checks():
     assert "encodeURIComponent(payload.context.adminBatchAppId)" in helper
     assert "merchantBatchAppId" in helper
     assert "encodeURIComponent(payload.context.merchantBatchAppId)" in helper
+    assert "merchantCardsAppId" in helper
+    assert "encodeURIComponent(payload.context.merchantCardsAppId)" in helper
     assert "const hasMerchantBatchAppContext" in helper
     assert "const hasUnboundMerchantAppSelection" in helper
     assert "waiting for merchant batch app selection" in helper
@@ -2862,7 +2872,13 @@ def test_run_production_flow_preserves_completed_sections_when_browser_sweep_fai
         ("app_self", "self_owned_ui_seed"),
         ("app_admin", "admin_authorized"),
     ]
-    assert browser_contexts == [{"adminBatchAppId": "app_admin", "merchantBatchAppId": "app_self"}]
+    assert browser_contexts == [
+        {
+            "adminBatchAppId": "app_admin",
+            "merchantBatchAppId": "app_self",
+            "merchantCardsAppId": "app_self",
+        }
+    ]
     assert "## Deployment And Health" in content
     assert "## Browser Sweep" not in content
     assert "## Recharge Flow" in content

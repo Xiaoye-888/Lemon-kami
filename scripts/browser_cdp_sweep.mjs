@@ -262,6 +262,14 @@ function routeWithContext(routeCase, payload) {
     const separator = route.includes("?") ? "&" : "?";
     route = `${route}${separator}app_id=${encodeURIComponent(payload.context.merchantBatchAppId)}`;
   }
+  if (
+    routeCase.role === "merchant" &&
+    routeCase.route === "/merchant/cards" &&
+    payload.context?.merchantCardsAppId
+  ) {
+    const separator = route.includes("?") ? "&" : "?";
+    route = `${route}${separator}app_id=${encodeURIComponent(payload.context.merchantCardsAppId)}`;
+  }
   return route;
 }
 
@@ -335,7 +343,7 @@ async function waitForLoad(cdp, sessionId, routeUrl, pageState) {
 }
 
 async function waitForRouteContent(cdp, sessionId, route) {
-  if (!route.endsWith("/batches") && route !== "/merchant/apps") {
+  if (!route.endsWith("/batches") && route !== "/merchant/apps" && route !== "/merchant/cards") {
     return { ready: true, skipped: true };
   }
 
@@ -357,6 +365,8 @@ async function waitForRouteContent(cdp, sessionId, route) {
   const specRowActions = Array.from(document.querySelectorAll('.spec-section .row-actions')).filter(visible);
   const specLinks = Array.from(document.querySelectorAll('.spec-section .batch-title-link')).filter(visible);
   const merchantAppRowActions = Array.from(document.querySelectorAll('.merchant-apps .row-actions')).filter(visible);
+  const merchantCardsToolbar = Array.from(document.querySelectorAll('.merchant-cards-page .page-toolbar .actions')).filter(visible);
+  const merchantCardsRows = Array.from(document.querySelectorAll('.merchant-cards-page .el-table__row')).filter(visible);
   const hasAdminBatchAppContext = route === '/admin/kamis/batches' && window.location.pathname.includes('/admin/kamis/batches') && window.location.search.includes('app_id=');
   const hasMerchantBatchAppContext = route === '/merchant/batches' && window.location.pathname.includes('/merchant/batches') && window.location.search.includes('app_id=');
   const hasBatchAppContext = hasAdminBatchAppContext || hasMerchantBatchAppContext;
@@ -369,10 +379,14 @@ async function waitForRouteContent(cdp, sessionId, route) {
   const hasSelectedBatchEmpty = hasSelectedAdminEmpty || hasSelectedMerchantEmpty;
   const isMerchantAppsRoute = route === '/merchant/apps' && window.location.pathname.includes('/merchant/apps');
   const hasMerchantAppsEmpty = isMerchantAppsRoute && text.includes('\\u6682\\u65e0\\u6570\\u636e');
+  const isMerchantCardsRoute = route === '/merchant/cards' && window.location.pathname.includes('/merchant/cards');
+  const hasMerchantCardsEmpty = isMerchantCardsRoute && text.includes('\\u6682\\u65e0\\u6570\\u636e');
   const ready = loadingMasks.length === 0 && (
     isMerchantAppsRoute
       ? (merchantAppRowActions.length > 0 || hasMerchantAppsEmpty)
-      : (!hasUnboundBatchAppSelection && (specRowActions.length > 0 || specLinks.length > 0 || hasStableEmpty || hasSelectedBatchEmpty))
+      : (isMerchantCardsRoute
+        ? (merchantCardsToolbar.length > 0 && (merchantCardsRows.length > 0 || hasMerchantCardsEmpty || text.includes('\\u6211\\u7684\\u5361\\u5bc6')))
+        : (!hasUnboundBatchAppSelection && (specRowActions.length > 0 || specLinks.length > 0 || hasStableEmpty || hasSelectedBatchEmpty)))
   );
   return {
     ready,
@@ -381,6 +395,8 @@ async function waitForRouteContent(cdp, sessionId, route) {
     specRowActions: specRowActions.length,
     specLinks: specLinks.length,
     merchantAppRowActions: merchantAppRowActions.length,
+    merchantCardsToolbar: merchantCardsToolbar.length,
+    merchantCardsRows: merchantCardsRows.length,
     hasStableEmpty,
     hasBatchAppContext,
     hasAdminBatchAppContext,
@@ -393,7 +409,7 @@ async function waitForRouteContent(cdp, sessionId, route) {
       ? 'waiting for admin batch app selection'
       : (hasUnboundMerchantAppSelection
         ? 'waiting for merchant batch app selection'
-        : (ready ? 'ready' : (isMerchantAppsRoute ? 'waiting for merchant apps table content' : 'waiting for batch table content')))
+        : (ready ? 'ready' : (isMerchantAppsRoute ? 'waiting for merchant apps table content' : (isMerchantCardsRoute ? 'waiting for merchant cards table content' : 'waiting for batch table content'))))
   };
 })()`;
     const result = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
@@ -619,6 +635,18 @@ async function evaluateLayout(cdp, sessionId) {
       requireActionGroup('merchant-apps.toolbar-actions', '.merchant-apps .page-toolbar .actions', { minItems: 2, maxItems: 2, maxSpreadRatio: 2.5 });
       if (firstVisible('.merchant-apps .row-actions')) {
         requireActionGroup('merchant-apps.row-actions', '.merchant-apps .row-actions', { minItems: 3, maxItems: 5, maxTopDelta: 10, maxSpreadRatio: 2.8 });
+      }
+    }
+
+    if (path.includes('/merchant/cards')) {
+      requireOrder('merchant-cards.regions', ['.merchant-cards-page .page-toolbar', '.merchant-cards-page .filter-strip', '.merchant-cards-page .el-table']);
+      requireActionGroup('merchant-cards.toolbar-actions', '.merchant-cards-page .page-toolbar .actions', { minItems: 3, maxItems: 3, maxTopDelta: 10, maxSpreadRatio: 2.8 });
+      if (new URLSearchParams(window.location.search).has('app_id')) {
+        const disabledActions = Array.from(document.querySelectorAll('.merchant-cards-page .page-toolbar .actions button'))
+          .filter((button) => button.disabled && /(SDK|\\u751f\\u6210\\u5361\\u5bc6)/.test((button.innerText || button.textContent || '').trim()));
+        if (disabledActions.length) {
+          fail('merchant-cards.enabled-actions', 'Card generation actions are disabled despite app context', { buttons: disabledActions.map((button) => (button.innerText || button.textContent || '').trim()) }, actionGroupSeverity);
+        }
       }
     }
 

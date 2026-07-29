@@ -2338,7 +2338,11 @@ def run_production_flow(config: QAConfig):
             artifact_dir,
             admin_auth.as_browser_storage(),
             merchant.auth.as_browser_storage(),
-            context={"adminBatchAppId": admin_app.app_id, "merchantBatchAppId": self_app.app_id},
+            context={
+                "adminBatchAppId": admin_app.app_id,
+                "merchantBatchAppId": self_app.app_id,
+                "merchantCardsAppId": self_app.app_id,
+            },
         )
         for result in browser_results:
             for finding in evaluate_browser_result(result):

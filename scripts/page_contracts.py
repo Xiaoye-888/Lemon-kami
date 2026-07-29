@@ -72,9 +72,11 @@ PAGE_CONTRACTS = [
                     "充值发卡额度",
                     "我的订单",
                     "发卡额度流水",
+                    "应用设置",
                     "我的应用",
                     "公告管理",
                     "版本更新",
+                    "卡密管理",
                     "批次管理",
                     "我的卡密",
                     "设备记录",
@@ -359,6 +361,7 @@ PAGE_CONTRACTS = [
             region("toolbar", 'class="page-toolbar"'),
             region("filter-strip", 'class="filter-strip"'),
             region("cards-table", "<el-table"),
+            region("generate-dialog", 'v-model="generateDialogVisible"'),
         ],
         "ordered_regions": [
             region("toolbar", 'class="page-toolbar"'),
@@ -369,9 +372,15 @@ PAGE_CONTRACTS = [
         "action_groups": [
             action_group("toolbar-actions", ("openSdkTest", "goGenerateKamis", "loadCards")),
             action_group("filter-actions", ("handleSearch", "handleReset", "handleExport")),
+            action_group("generate-actions", ("loadBatchStats", "selectedBatch", "handleGenerate")),
         ],
         "tables": [
             table("cards-columns", ("卡密", "应用", "批次号", "类型", "状态", "绑定设备", "激活时间", "创建时间"))
+        ],
+        "forbidden_tokens": [
+            "router.push({ path: '/merchant/batches'",
+            "query: { app_id: query.app_id, action: 'generate' }",
+            ':disabled="!query.app_id"',
         ],
     },
     {
