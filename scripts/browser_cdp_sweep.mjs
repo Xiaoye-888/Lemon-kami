@@ -500,6 +500,9 @@ async function evaluateLayout(cdp, sessionId) {
   const controlCounts = new Map();
   Array.from(document.querySelectorAll('button, .el-button, .el-select, .el-input, .el-date-editor, [role="button"]'))
     .map((el) => {
+      if (el.closest('.el-table__body, tbody, .row-actions')) {
+        return null;
+      }
       const rect = el.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0 || rect.bottom < 0 || rect.top > viewportHeight) {
         return null;
@@ -524,7 +527,12 @@ async function evaluateLayout(cdp, sessionId) {
     .slice(0, 8)
     .map(([label, count]) => ({ label, count }));
   const headerBottom = (() => {
-    const fixedHeader = document.querySelector('.el-header, header, .app-header, .layout-header');
+    const fixedHeader = Array.from(document.querySelectorAll('.el-header, .app-header, .layout-header, header'))
+      .find((el) => {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return (style.position === 'fixed' || style.position === 'sticky') && rect.top <= 1 && rect.bottom > 0;
+      });
     if (!fixedHeader) return 0;
     const rect = fixedHeader.getBoundingClientRect();
     return rect.bottom > 0 ? rect.bottom : 0;

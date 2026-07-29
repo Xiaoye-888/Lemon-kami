@@ -1103,6 +1103,8 @@ def test_browser_cdp_helper_exports_detail_summary_rect_and_mismatch_checks():
     assert "waiting for merchant apps table content" in helper
     assert "const present = (el) =>" in helper
     assert "filter(present)" in helper
+    assert "el.closest('.el-table__body, tbody, .row-actions')" in helper
+    assert "style.position === 'fixed' || style.position === 'sticky'" in helper
     assert "pageContractMismatches" in helper
     assert "evaluatePageContracts" in helper
     assert "merchant-apps.toolbar-actions" in helper
