@@ -7,6 +7,14 @@ export function getMerchantMe() {
   })
 }
 
+export function updateMerchantMe(data) {
+  return request({
+    url: '/merchant/me',
+    method: 'put',
+    data
+  })
+}
+
 export function getMerchantQuotas() {
   return request({
     url: '/merchant/quotas',

@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,6 +56,7 @@ from models import (
     AuthorizationAccount,
     AuthorizationLot,
     AuthorizationTransaction,
+    AdminUser,
     AppAuthorization,
     App,
     AppInterfaceConfig,
@@ -77,6 +79,7 @@ from models import (
     RechargeOrderStatus,
     UserBindMode,
     UserAppAuthorization,
+    UserQuotaAccount,
     UserQuotaTransaction,
     UserQuotaTransactionType,
     UserQuotaType,
@@ -112,6 +115,12 @@ class RechargeOrderCreateRequest(RechargePreviewRequest):
 
 class MerchantOrderActionRequest(BaseModel):
     remark: Optional[str] = None
+
+
+class MerchantProfileUpdateRequest(BaseModel):
+    username: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
 
 
 class MerchantAppCreateRequest(BaseModel):
@@ -1041,6 +1050,78 @@ def _merchant_quota_response_payload(data: dict) -> dict:
     return {**data, "issue_card": issue_card}
 
 
+def _merchant_me_payload(user: EndUser) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "phone": user.phone,
+        "role": "merchant",
+        "status": user.status,
+        "created_at": to_api_beijing_iso(user.created_at, naive="civil"),
+        "last_login": to_api_beijing_iso(user.last_login, naive="civil")
+        if user.last_login
+        else None,
+    }
+
+
+def _normalize_optional_profile_text(value: Optional[str], field_name: str, max_length: int) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if len(normalized) > max_length:
+        raise HTTPException(status_code=400, detail=f"{field_name}长度不能超过 {max_length} 个字符")
+    return normalized
+
+
+def _sync_merchant_profile_relations(
+    session: Session,
+    user: EndUser,
+    old_username: str,
+    new_username: str,
+) -> None:
+    if user.id is None:
+        return
+
+    quota_account = session.exec(
+        select(UserQuotaAccount).where(UserQuotaAccount.user_id == user.id)
+    ).first()
+    if quota_account:
+        quota_account.username = new_username
+        session.add(quota_account)
+
+    for auth in session.exec(
+        select(UserAppAuthorization).where(UserAppAuthorization.user_id == user.id)
+    ).all():
+        auth.username = new_username
+        session.add(auth)
+
+    for auth_account in session.exec(
+        select(AuthorizationAccount).where(AuthorizationAccount.user_id == user.id)
+    ).all():
+        auth_account.username = new_username
+        session.add(auth_account)
+
+    for app in session.exec(
+        select(App).where(App.owner_user_id == user.id)
+    ).all():
+        app.created_by = new_username
+        session.add(app)
+
+    if old_username != new_username:
+        for app in session.exec(
+            select(App).where(App.created_by == old_username)
+        ).all():
+            app.created_by = new_username
+            session.add(app)
+
+
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+PHONE_RE = re.compile(r"^[0-9+\-\s()]{6,32}$")
+
+
 async def get_current_merchant(
     current_user: EndUser = Depends(routes_user.get_current_end_user),
 ) -> EndUser:
@@ -1055,18 +1136,55 @@ async def get_merchant_me(
 ):
     return {
         "success": True,
-        "data": {
-            "id": current_user.id,
-            "username": current_user.username,
-            "email": current_user.email,
-            "phone": current_user.phone,
-            "role": "merchant",
-            "status": current_user.status,
-            "created_at": to_api_beijing_iso(current_user.created_at, naive="civil"),
-            "last_login": to_api_beijing_iso(current_user.last_login, naive="civil")
-            if current_user.last_login
-            else None,
-        },
+        "data": _merchant_me_payload(current_user),
+    }
+
+
+@router.put("/me", summary="Update current merchant profile")
+async def update_merchant_me(
+    payload: MerchantProfileUpdateRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    new_username = (payload.username or "").strip()
+    if len(new_username) < 3 or len(new_username) > 64:
+        raise HTTPException(status_code=400, detail="用户名长度需为 3 到 64 位")
+    if re.search(r"\s", new_username):
+        raise HTTPException(status_code=400, detail="用户名不能包含空格")
+
+    new_email = _normalize_optional_profile_text(payload.email, "邮箱", 255)
+    if new_email and not EMAIL_RE.fullmatch(new_email):
+        raise HTTPException(status_code=400, detail="请输入有效邮箱")
+
+    new_phone = _normalize_optional_profile_text(payload.phone, "手机号", 32)
+    if new_phone and not PHONE_RE.fullmatch(new_phone):
+        raise HTTPException(status_code=400, detail="请输入有效手机号")
+
+    if new_username != current_user.username:
+        username_exists = session.exec(
+            select(EndUser).where(
+                EndUser.username == new_username,
+                EndUser.id != current_user.id,
+            )
+        ).first()
+        if username_exists:
+            raise HTTPException(status_code=400, detail="用户名已被占用")
+        admin_exists = session.exec(select(AdminUser).where(AdminUser.username == new_username)).first()
+        if admin_exists:
+            raise HTTPException(status_code=400, detail="用户名已被系统管理员占用")
+
+    old_username = current_user.username
+    current_user.username = new_username
+    current_user.email = new_email
+    current_user.phone = new_phone
+    session.add(current_user)
+    _sync_merchant_profile_relations(session, current_user, old_username, new_username)
+    session.commit()
+    session.refresh(current_user)
+    return {
+        "success": True,
+        "message": "账号资料已更新",
+        "data": _merchant_me_payload(current_user),
     }
 
 
@@ -2366,7 +2484,7 @@ async def delete_merchant_kamis(
             amount=refund_amount,
             operator=current_user.username,
             biz_id=f"kami_delete:{kami.kami_code}",
-            remark=f"Refund deleted kami {kami.kami_code}",
+            remark=f"删除卡密返还额度 {kami.kami_code}",
             metadata={
                 "app_id": kami.app_id,
                 "batch_no": kami.batch_no,

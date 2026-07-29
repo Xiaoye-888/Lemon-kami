@@ -111,6 +111,10 @@ def _quota_transaction_display(item: UserQuotaTransaction) -> dict:
         batch_no = parts[2] if len(parts) > 2 else ""
         scene = "生成卡密"
         subject = f"卡密批次 {batch_no}" if batch_no else "卡密批次"
+    elif biz_id.startswith("kami_delete:"):
+        kami_code = biz_id.split(":", 1)[1]
+        scene = "额度退回"
+        subject = f"删除卡密返还额度 {kami_code}" if kami_code else "删除卡密返还额度"
     elif transaction_type == "grant":
         scene = "管理员发放"
     elif transaction_type == "consume":

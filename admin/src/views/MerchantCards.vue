@@ -43,8 +43,18 @@
         <el-table-column prop="kami_code" label="卡密" min-width="220" show-overflow-tooltip />
         <el-table-column prop="app_name" label="应用" min-width="140" show-overflow-tooltip />
         <el-table-column prop="batch_no" label="批次号" min-width="150" show-overflow-tooltip />
-        <el-table-column prop="kami_type" label="类型" width="100" />
-        <el-table-column prop="status" label="状态" width="100" />
+        <el-table-column label="类型" width="120">
+          <template #default="{ row }">
+            <el-tag effect="plain" round>{{ getTypeText(row.kami_type) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="getKamiStatusType(row)" effect="plain" round>
+              {{ getKamiStatusText(row) }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="bound_device_count" label="绑定设备" width="100" />
         <el-table-column prop="activate_time" label="激活时间" width="170">
           <template #default="{ row }">{{ formatOptionalTime(row.activate_time) }}</template>
@@ -154,7 +164,7 @@ import {
   previewMerchantKamis
 } from '../api/merchant'
 import { formatBeijingTime } from '../utils/datetime'
-import { getMachineBindModeText, getTypeText, getValidityText } from '../utils/kamiDisplay'
+import { getMachineBindModeText, getStatusText, getStatusType, getTypeText, getValidityText } from '../utils/kamiDisplay'
 
 const route = useRoute()
 const loading = ref(false)
@@ -242,6 +252,10 @@ async function loadIssuePreview() {
 }
 
 const formatOptionalTime = (value) => (value ? formatBeijingTime(value) : '-')
+
+const isKamiExpired = (row) => row?.is_code_expired || row?.display_status === 'expired'
+const getKamiStatusText = (row) => (isKamiExpired(row) ? '已过期' : getStatusText(row?.status))
+const getKamiStatusType = (row) => (isKamiExpired(row) ? 'warning' : getStatusType(row?.status))
 
 watch(
   () => [

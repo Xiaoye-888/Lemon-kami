@@ -11,14 +11,23 @@ export const useUserStore = defineStore('user', () => {
 
   const homePath = computed(() => (role.value === 'merchant' ? '/merchant/dashboard' : '/admin/dashboard'))
 
+  function setUserInfo(nextUserInfo) {
+    const merged = { ...(nextUserInfo || {}) }
+    if (!merged.role && role.value) {
+      merged.role = role.value
+    }
+    userInfo.value = merged
+    role.value = merged.role || ''
+    localStorage.setItem('userInfo', JSON.stringify(userInfo.value))
+    localStorage.setItem('role', role.value)
+  }
+
   async function userLogin(loginForm) {
     const res = await sharedLogin(loginForm)
     token.value = res.token
     role.value = res.role || res.user_info?.role || 'admin'
-    userInfo.value = { ...(res.user_info || {}), role: role.value }
+    setUserInfo({ ...(res.user_info || {}), role: role.value })
     localStorage.setItem('token', res.token)
-    localStorage.setItem('role', role.value)
-    localStorage.setItem('userInfo', JSON.stringify(userInfo.value))
     return { ...res, redirect: res.redirect || homePath.value }
   }
 
@@ -26,10 +35,8 @@ export const useUserStore = defineStore('user', () => {
     const res = await sharedRegister(registerForm)
     token.value = res.token
     role.value = res.role || res.user_info?.role || 'merchant'
-    userInfo.value = { ...(res.user_info || {}), role: role.value }
+    setUserInfo({ ...(res.user_info || {}), role: role.value })
     localStorage.setItem('token', res.token)
-    localStorage.setItem('role', role.value)
-    localStorage.setItem('userInfo', JSON.stringify(userInfo.value))
     return { ...res, redirect: res.redirect || homePath.value }
   }
 
@@ -48,6 +55,7 @@ export const useUserStore = defineStore('user', () => {
     role,
     userInfo,
     homePath,
+    setUserInfo,
     userLogin,
     userRegister,
     logout

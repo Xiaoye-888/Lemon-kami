@@ -216,6 +216,98 @@ def test_shared_register_creates_merchant_and_blocks_application_user_console_ac
         fastapi_app.dependency_overrides.clear()
 
 
+def test_merchant_profile_update_syncs_visible_profile_and_cached_relations():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        _, merchant = seed_admin_and_merchant(session)
+        owned_app = App(
+            app_id="app_profile_owned",
+            name="Profile Owned App",
+            app_secret="secret-owned",
+            rsa_public_key="public-owned",
+            rsa_private_key="private-owned",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+            status=1,
+        )
+        authorized_app = App(
+            app_id="app_profile_authorized",
+            name="Profile Authorized App",
+            app_secret="secret-authorized",
+            rsa_public_key="public-authorized",
+            rsa_private_key="private-authorized",
+            created_by="admin",
+            status=1,
+        )
+        session.add_all(
+            [
+                owned_app,
+                authorized_app,
+                UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=12),
+                UserAppAuthorization(
+                    app_id=authorized_app.app_id,
+                    user_id=merchant.id,
+                    username=merchant.username,
+                    granted_by="admin",
+                ),
+            ]
+        )
+        session.commit()
+        session.refresh(merchant)
+        merchant_id = merchant.id
+        token = routes_user.create_user_access_token(merchant)
+
+    try:
+        update_response = client.put(
+            "/api/v1/merchant/me",
+            headers=auth_headers(token),
+            json={
+                "username": "merchant-renamed",
+                "email": "merchant@example.com",
+                "phone": "13800000000",
+            },
+        )
+        assert update_response.status_code == 200
+        update_data = update_response.json()["data"]
+        assert update_data["username"] == "merchant-renamed"
+        assert update_data["email"] == "merchant@example.com"
+        assert update_data["phone"] == "13800000000"
+
+        me_response = client.get("/api/v1/merchant/me", headers=auth_headers(token))
+        assert me_response.status_code == 200
+        assert me_response.json()["data"]["username"] == "merchant-renamed"
+
+        with Session(engine) as session:
+            updated_merchant = session.get(EndUser, merchant_id)
+            assert updated_merchant is not None
+            assert updated_merchant.username == "merchant-renamed"
+            assert updated_merchant.email == "merchant@example.com"
+            assert updated_merchant.phone == "13800000000"
+
+            owned_app_row = session.exec(
+                select(App).where(App.app_id == owned_app.app_id)
+            ).one()
+            assert owned_app_row.created_by == "merchant-renamed"
+
+            quota_account = session.exec(
+                select(UserQuotaAccount).where(UserQuotaAccount.user_id == merchant_id)
+            ).one()
+            assert quota_account.username == "merchant-renamed"
+
+            authorization = session.exec(
+                select(UserAppAuthorization).where(UserAppAuthorization.app_id == authorized_app.app_id)
+            ).one()
+            assert authorization.username == "merchant-renamed"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_admin_application_users_and_commercial_merchants_are_listed_separately():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
@@ -2616,6 +2708,19 @@ def test_merchant_can_delete_own_issued_kamis_and_refund_source_quota():
             ).all()
             assert [tx.amount for tx in refund_transactions] == [3, 5]
 
+        tx_response = client.get(
+            "/api/v1/merchant/quota-transactions",
+            headers=auth_headers(token),
+        )
+        assert tx_response.status_code == 200
+        delete_tx = next(
+            item for item in tx_response.json()["data"]["items"] if str(item.get("biz_id", "")).startswith("kami_delete:")
+        )
+        assert delete_tx["display_scene"] == "额度退回"
+        assert delete_tx["display_subject"].startswith("删除卡密返还额度")
+        assert "Refund deleted kami" not in tx_response.text
+
+        with Session(engine) as session:
             assert session.exec(select(KamiDeviceBinding)).all() == []
             logs = session.exec(select(EventLog)).all()
             assert len(logs) == 1
