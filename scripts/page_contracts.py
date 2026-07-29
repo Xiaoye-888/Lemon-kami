@@ -345,7 +345,7 @@ PAGE_CONTRACTS = [
             action_group("spec-hero-actions", ("backFromDetail", "handleEditSpecGroup(selectedSpec)", "handleDeleteSpecGroup(selectedSpec)", "showGenerateForGroup(selectedSpec)")),
             action_group("batch-hero-actions", ("backFromDetail", "showBatchDialog(currentBatch)", "deleteBatch(currentBatch)")),
             action_group("batch-row-actions", ("openBatchDetail(row)", "showBatchDialog(row)", "deleteBatch(row)")),
-            action_group("card-panel-actions", ("handleDetailExport", "handleDeleteSelectedDetail", "showAppendDialog(currentBatch)")),
+            action_group("card-panel-actions", ("handleDetailExport", "handleDeleteSelectedDetail", "deleteMerchantKamis", "showAppendDialog(currentBatch)")),
         ],
         "tables": [
             table("batch-columns", ("批次名称", "类型", "权益", "剩余权益", "卡密有效期", "机器码限制", "总数/已用/剩余", "状态", "创建时间", "操作")),
@@ -368,11 +368,13 @@ PAGE_CONTRACTS = [
             region("filter-strip", 'class="filter-strip"'),
             region("cards-table", "<el-table"),
         ],
-        "card_groups": [],
+        "card_groups": [
+            card_group("generate-preview", ("issuePreview?.can_issue", "issuePreview?.total_cost", "issuePreview?.balance_before", "issuePreview?.balance_after", "previewLoading")),
+        ],
         "action_groups": [
             action_group("toolbar-actions", ("openSdkTest", "goGenerateKamis", "loadCards")),
             action_group("filter-actions", ("handleSearch", "handleReset", "handleExport")),
-            action_group("generate-actions", ("loadBatchStats", "selectedBatch", "handleGenerate")),
+            action_group("generate-actions", ("previewMerchantKamis", "issuePreview", "loadBatchStats", "selectedBatch", "loadIssuePreview", "handleGenerate")),
         ],
         "tables": [
             table("cards-columns", ("卡密", "应用", "批次号", "类型", "状态", "绑定设备", "激活时间", "创建时间"))
@@ -610,11 +612,12 @@ PAGE_CONTRACTS = [
 ROLE_PERMISSION_CONTRACTS = [
     {
         "id": "merchant_self_owned_app",
-        "allowed": ["rename", "delete", "manage_interfaces", "manage_specs", "generate_batches"],
+        "allowed": ["rename", "delete", "manage_interfaces", "manage_specs", "generate_batches", "delete_own_kamis"],
         "forbidden": ["read_admin_app_secret", "manage_other_merchant_apps"],
         "tests": [
             "test_merchant_app_detail_and_interface_management_follow_ownership_boundaries",
             "test_merchant_self_owned_specs_are_manageable_and_authorized_specs_are_read_only",
+            "test_merchant_can_delete_own_issued_kamis_and_refund_source_quota",
         ],
     },
     {

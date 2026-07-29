@@ -192,6 +192,14 @@ export function exportMerchantKamis(params) {
   })
 }
 
+export function deleteMerchantKamis(data) {
+  return request({
+    url: '/merchant/kamis/delete',
+    method: 'post',
+    data
+  })
+}
+
 export function getMerchantAppKamis(appId) {
   return request({
     url: `/merchant/apps/${appId}/kamis`,

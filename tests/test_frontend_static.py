@@ -1103,6 +1103,16 @@ def test_merchant_batch_generation_defaults_match_admin_batch_number_logic():
     assert 'placeholder="可留空自动生成"' not in merchant_batches
 
 
+def test_merchant_spec_edit_mode_keeps_group_editable_like_admin():
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+
+    assert 'v-model="specForm.spec_group" style="width: 100%"' in merchant_batches
+    assert 'v-model="specForm.spec_group" :disabled="Boolean(editingSpec)"' not in merchant_batches
+    assert 'v-model="specForm.kami_type" :disabled="Boolean(editingSpec)"' in merchant_batches
+    assert "deleteDetailKamis: viewMode.value !== 'list'" in merchant_batches
+    assert "deleteMerchantKamis" in merchant_batches
+
+
 def test_commercial_ops_stability_controls_are_exposed():
     admin_orders = (PROJECT_ROOT / "admin/src/views/AdminRechargeOrders.vue").read_text(encoding="utf-8")
     admin_settings = (PROJECT_ROOT / "admin/src/views/AdminRechargeSettings.vue").read_text(encoding="utf-8")
@@ -1376,6 +1386,13 @@ def test_phase2_merchant_card_search_export_and_batch_stats_are_visible():
     assert "handleGenerate" in merchant_cards
     assert "getMerchantBatches" in merchant_cards
     assert "appendMerchantBatchKamis" in merchant_cards
+    assert "previewMerchantKamis" in merchant_cards
+    assert "issuePreview" in merchant_cards
+    assert "balance_before" in merchant_cards
+    assert "balance_after" in merchant_cards
+    assert "can_issue" in merchant_cards
+    assert "previewLoading" in merchant_cards
+    assert "deleteMerchantKamis" in merchant_api
     assert "ElMessage.warning('请先选择应用')" in merchant_cards
     assert "router.push({ path: '/merchant/batches'" not in merchant_cards
     assert ':disabled="!query.app_id"' not in merchant_cards

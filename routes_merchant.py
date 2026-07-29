@@ -65,6 +65,7 @@ from models import (
     EndUser,
     EventLog,
     Kami,
+    KamiStatus,
     KamiBatch,
     KamiDeviceBinding,
     KamiSpecGroup,
@@ -84,10 +85,12 @@ from models import (
 )
 from user_quota_service import (
     create_user_app,
+    get_or_create_user_quota_account,
     get_user_visible_apps,
     issue_user_kamis,
     list_user_issued_kamis,
     preview_user_kami_issue,
+    refund_user_quota,
     user_can_manage_app,
 )
 
@@ -189,6 +192,11 @@ class MerchantKamiIssueRequest(BaseModel):
     times_total: Optional[int] = PydanticField(None, gt=0)
     time_value: Optional[int] = PydanticField(None, gt=0)
     time_unit: Optional[str] = PydanticField(None, max_length=32)
+
+
+class MerchantKamiDeleteRequest(BaseModel):
+    app_id: str = PydanticField(..., max_length=64)
+    kami_codes: list[str] = PydanticField(..., min_length=1, max_length=1000)
 
 
 class MerchantBatchUpdateRequest(BaseModel):
@@ -850,6 +858,52 @@ def _batch_cost_snapshot(session: Session, batch: KamiBatch, user: EndUser, fall
         "pricing_source": metadata.get("pricing_source") or "default",
         "pricing_rule_id": metadata.get("pricing_rule_id"),
     }
+
+
+def _merchant_kami_refund_unit_cost(session: Session, kami: Kami, user: EndUser) -> int:
+    transaction = None
+    if kami.issue_quota_transaction_id:
+        transaction = session.exec(
+            select(UserQuotaTransaction).where(
+                UserQuotaTransaction.transaction_id == kami.issue_quota_transaction_id,
+                UserQuotaTransaction.user_id == user.id,
+                UserQuotaTransaction.quota_type == UserQuotaType.kami_issue,
+                UserQuotaTransaction.transaction_type == UserQuotaTransactionType.consume,
+            )
+        ).first()
+
+    if transaction:
+        metadata = {}
+        if transaction.metadata_json:
+            try:
+                metadata = json.loads(transaction.metadata_json)
+            except json.JSONDecodeError:
+                metadata = {}
+        unit_cost = metadata.get("unit_cost")
+        if unit_cost is None:
+            try:
+                count = int(metadata.get("count") or 0)
+            except (TypeError, ValueError):
+                count = 0
+            if count > 0:
+                unit_cost = abs(transaction.amount) // count
+        if unit_cost is not None:
+            try:
+                return max(int(unit_cost), 1)
+            except (TypeError, ValueError):
+                pass
+
+    if kami.batch_no:
+        batch = session.exec(
+            select(KamiBatch).where(KamiBatch.app_id == kami.app_id, KamiBatch.batch_no == kami.batch_no)
+        ).first()
+        if batch:
+            snapshot = _batch_cost_snapshot(session, batch, user, 1)
+            try:
+                return max(int(snapshot.get("unit_issue_cost") or 1), 1)
+            except (TypeError, ValueError):
+                return 1
+    return 1
 
 
 def _resolve_merchant_issue_context(
@@ -2262,6 +2316,105 @@ async def list_merchant_kamis(
             }
             for kami in kamis
         ],
+    }
+
+
+@router.post("/kamis/delete", summary="Delete merchant issued kamis and refund issue quota")
+async def delete_merchant_kamis(
+    payload: MerchantKamiDeleteRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    app = session.exec(select(App).where(App.app_id == payload.app_id)).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="App not found")
+    if not user_can_manage_app(session, current_user, payload.app_id):
+        raise HTTPException(status_code=403, detail="No permission to manage this app")
+
+    kami_codes = list(dict.fromkeys(code.strip() for code in payload.kami_codes if code and code.strip()))
+    if not kami_codes:
+        raise HTTPException(status_code=400, detail="kami_codes is required")
+
+    found_kamis = session.exec(
+        select(Kami).where(
+            Kami.app_id == payload.app_id,
+            Kami.kami_code.in_(kami_codes),
+            Kami.created_by_user_id == current_user.id,
+        )
+    ).all()
+    found_by_code = {kami.kami_code: kami for kami in found_kamis}
+    skipped = []
+    deleted_codes = []
+    deleted_details = []
+    refunded_amount = 0
+    account = get_or_create_user_quota_account(session, current_user.id, current_user.username)
+
+    for code in kami_codes:
+        kami = found_by_code.get(code)
+        if not kami:
+            skipped.append({"kami_code": code, "reason": "not_found_or_not_owned"})
+            continue
+        if kami.status != KamiStatus.unused:
+            skipped.append({"kami_code": code, "reason": "only_unused_kamis_can_be_refunded"})
+            continue
+
+        refund_amount = _merchant_kami_refund_unit_cost(session, kami, current_user)
+        refund_result = refund_user_quota(
+            session=session,
+            account=account,
+            quota_type=UserQuotaType.kami_issue,
+            amount=refund_amount,
+            operator=current_user.username,
+            biz_id=f"kami_delete:{kami.kami_code}",
+            remark=f"Refund deleted kami {kami.kami_code}",
+            metadata={
+                "app_id": kami.app_id,
+                "batch_no": kami.batch_no,
+                "spec_id": kami.spec_id,
+                "issue_quota_transaction_id": kami.issue_quota_transaction_id,
+            },
+        )
+        refunded_amount += refund_amount if not refund_result.get("idempotent") else 0
+
+        bindings = session.exec(
+            select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code == kami.kami_code)
+        ).all()
+        for binding in bindings:
+            session.delete(binding)
+
+        related_logs = session.exec(select(EventLog).where(EventLog.kami_code == kami.kami_code)).all()
+        for log in related_logs:
+            log.kami_code = None
+            session.add(log)
+
+        deleted_details.append(
+            {
+                "kami_code": code,
+                "batch_no": kami.batch_no,
+                "spec_id": kami.spec_id,
+                "refund_amount": refund_amount,
+                "device_binding_count": len(bindings),
+                "detached_event_log_count": len(related_logs),
+            }
+        )
+        deleted_codes.append(code)
+        session.delete(kami)
+
+    session.add(account)
+    session.commit()
+    session.refresh(account)
+    return {
+        "success": True,
+        "message": "kami deleted",
+        "data": {
+            "deleted_count": len(deleted_codes),
+            "deleted_codes": deleted_codes,
+            "deleted_details": deleted_details,
+            "skipped_count": len(skipped),
+            "skipped": skipped,
+            "refunded_amount": refunded_amount,
+            "quota_balance_after": account.kami_issue_balance,
+        },
     }
 
 

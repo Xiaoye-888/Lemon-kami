@@ -636,6 +636,7 @@ class Kami(SQLModel, table=True):
     charset: Optional[str] = Field(default=None, max_length=32, description="Generation charset")
     code_valid_days: Optional[int] = Field(default=None, description="Code validity days before first use")
     code_expires_at: Optional[datetime] = Field(default=None, index=True, description="Code expiration before first use")
+    issue_quota_transaction_id: Optional[str] = Field(default=None, max_length=128, index=True, description="Source quota consume transaction ID")
     bind_ip: Optional[str] = Field(default=None, description="Bound activation IP")
     unbind_count: int = Field(default=0, description="Device unbind count")
     last_unbind_at: Optional[datetime] = Field(default=None, description="Last unbind time")

@@ -98,6 +98,15 @@
             {{ getMachineBindModeText(selectedBatch.machine_bind_mode, selectedBatch.max_bind_devices) }}
           </div>
         </el-form-item>
+        <el-alert
+          v-if="issuePreview"
+          :type="issuePreview?.can_issue === false ? 'warning' : 'info'"
+          :title="`本次预计消耗 ${issuePreview?.total_cost || 0} 发卡额度`"
+          :description="`当前余额 ${issuePreview?.balance_before || 0}，生成后余额 ${issuePreview?.balance_after || 0}`"
+          :closable="false"
+          show-icon
+          class="generate-alert"
+        />
         <el-form-item label="生成数量" required>
           <el-input-number v-model="generateForm.count" :min="1" :max="1000" style="width: 100%" />
         </el-form-item>
@@ -121,7 +130,7 @@
         <el-button
           type="primary"
           :loading="generating"
-          :disabled="!selectedBatch || selectedBatch.can_append === false"
+          :disabled="!selectedBatch || selectedBatch.can_append === false || previewLoading || issuePreview?.can_issue === false"
           @click="handleGenerate"
         >
           生成
@@ -132,7 +141,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Download, Plus, Refresh, Search, VideoPlay } from '@element-plus/icons-vue'
@@ -141,7 +150,8 @@ import {
   exportMerchantKamis,
   getMerchantApps,
   getMerchantBatches,
-  getMerchantKamis
+  getMerchantKamis,
+  previewMerchantKamis
 } from '../api/merchant'
 import { formatBeijingTime } from '../utils/datetime'
 import { getMachineBindModeText, getTypeText, getValidityText } from '../utils/kamiDisplay'
@@ -155,6 +165,8 @@ const batchStats = ref([])
 const cards = ref([])
 const total = ref(0)
 const generateDialogVisible = ref(false)
+const previewLoading = ref(false)
+const issuePreview = ref(null)
 
 const query = reactive({
   app_id: '',
@@ -202,7 +214,52 @@ const codePreview = computed(() => {
   return `${generateForm.code_prefix || ''}${suffix}`
 })
 
+function buildPreviewPayload() {
+  return {
+    spec_id: selectedBatch.value?.spec_id || null,
+    kami_type: selectedBatch.value?.kami_type || null,
+    count: generateForm.count,
+    code_prefix: generateForm.code_prefix || null,
+    code_length: generateForm.code_length,
+    charset: generateForm.charset
+  }
+}
+
+async function loadIssuePreview() {
+  if (!generateDialogVisible.value || !selectedBatch.value?.id || !generateForm.app_id) {
+    issuePreview.value = null
+    return
+  }
+  previewLoading.value = true
+  try {
+    const res = await previewMerchantKamis(generateForm.app_id, buildPreviewPayload())
+    issuePreview.value = res.data || null
+  } catch {
+    issuePreview.value = null
+  } finally {
+    previewLoading.value = false
+  }
+}
+
 const formatOptionalTime = (value) => (value ? formatBeijingTime(value) : '-')
+
+watch(
+  () => [
+    generateDialogVisible.value,
+    selectedBatch.value?.id,
+    generateForm.count,
+    generateForm.code_prefix,
+    generateForm.code_length,
+    generateForm.charset
+  ],
+  () => {
+    if (!generateDialogVisible.value || !selectedBatch.value?.id) {
+      issuePreview.value = null
+      return
+    }
+    loadIssuePreview()
+  }
+)
 
 function normalizedParams(includePage = true) {
   const params = {}
@@ -294,6 +351,7 @@ async function goGenerateKamis() {
   generateForm.code_prefix = ''
   generateForm.code_length = 16
   generateForm.charset = 'upper_numeric'
+  issuePreview.value = null
   await loadBatchStats()
   generateDialogVisible.value = true
 }
@@ -305,6 +363,11 @@ async function handleGenerate() {
   }
   if (selectedBatch.value.can_append === false) {
     ElMessage.warning('该批次不可追加卡密')
+    return
+  }
+  await loadIssuePreview()
+  if (issuePreview.value?.can_issue === false) {
+    ElMessage.error(`额度不足，还差 ${Math.max((issuePreview.value.total_cost || 0) - (issuePreview.value.balance_before || 0), 0)} 发卡额度`)
     return
   }
   generating.value = true

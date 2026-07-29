@@ -236,6 +236,74 @@ def consume_user_quota(
     }
 
 
+def refund_user_quota(
+    session: Session,
+    account: UserQuotaAccount,
+    quota_type: str | UserQuotaType,
+    amount: int,
+    operator: Optional[str] = None,
+    biz_id: Optional[str] = None,
+    remark: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> dict:
+    quota_type_enum = _normalize_quota_type(quota_type)
+    if amount <= 0:
+        raise ValueError("amount must be greater than 0")
+    if not biz_id:
+        raise ValueError("biz_id is required")
+
+    existing = session.exec(
+        select(UserQuotaTransaction).where(
+            UserQuotaTransaction.account_id == account.id,
+            UserQuotaTransaction.quota_type == quota_type_enum,
+            UserQuotaTransaction.transaction_type == UserQuotaTransactionType.refund,
+            UserQuotaTransaction.biz_id == biz_id,
+        )
+    ).first()
+    if existing:
+        if existing.amount != amount:
+            raise ValueError("biz_id was used with a different amount")
+        return {
+            "transaction_id": existing.transaction_id,
+            "quota_type": quota_type_enum.value,
+            "amount": amount,
+            "balance_after": existing.balance_after,
+            "idempotent": True,
+        }
+
+    balance_field, _ = _quota_field_names(quota_type_enum)
+    balance_before = getattr(account, balance_field)
+    balance_after = balance_before + amount
+    setattr(account, balance_field, balance_after)
+    account.updated_at = _now()
+
+    tx = UserQuotaTransaction(
+        transaction_id=f"uq_{uuid.uuid4().hex}",
+        account_id=account.id,
+        user_id=account.user_id,
+        username=account.username,
+        quota_type=quota_type_enum,
+        transaction_type=UserQuotaTransactionType.refund,
+        amount=amount,
+        balance_before=balance_before,
+        balance_after=balance_after,
+        biz_id=biz_id,
+        operator=operator,
+        remark=remark,
+        metadata_json=json.dumps(metadata, ensure_ascii=False) if metadata else None,
+        created_at=_now(),
+    )
+    session.add(account)
+    session.add(tx)
+    session.flush()
+    return {
+        "transaction_id": tx.transaction_id,
+        "quota_type": quota_type_enum.value,
+        "amount": amount,
+        "balance_after": balance_after,
+    }
+
+
 def grant_app_authorization(
     session: Session,
     app_id: str,
@@ -451,6 +519,7 @@ def issue_user_kamis(
             "app_id": app.app_id,
             "kami_type": _normalize_kami_type(kami_type).value,
             "spec_id": spec_id,
+            "count": count,
             "unit_cost": unit_cost,
             "total_cost": total_cost,
             "pricing_source": pricing_source or "default",
@@ -534,6 +603,7 @@ def issue_user_kamis(
             charset=charset,
             code_valid_days=code_valid_days,
             code_expires_at=code_expires_at,
+            issue_quota_transaction_id=quota_result["transaction_id"],
             machine_bind_mode=machine_bind_mode_enum,
             max_bind_devices=max_bind_devices,
             authorization_owner=authorization_owner_enum,

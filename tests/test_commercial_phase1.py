@@ -21,6 +21,7 @@ from models import (
     AppNotice,
     Device,
     EndUser,
+    EventLog,
     Kami,
     KamiBatch,
     KamiDeviceBinding,
@@ -39,6 +40,7 @@ from models import (
     UserQuotaType,
     get_now_naive,
 )
+from user_quota_service import issue_user_kamis
 
 
 def make_engine():
@@ -2497,6 +2499,127 @@ def test_issue_pricing_rules_drive_merchant_preview_issue_and_quota_snapshots():
             assert metadata[1]["unit_cost"] == 5
             assert metadata[1]["pricing_source"] == "user_authorized_spec"
             assert metadata[1]["pricing_rule_id"] == authorized_rule.json()["data"]["id"]
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_can_delete_own_issued_kamis_and_refund_source_quota():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="delete-issuer", password_hash="secret123", status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+
+        app = App(
+            app_id="app_delete_self",
+            name="Delete Self App",
+            app_secret="secret-self",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        session.add(app)
+        session.add(UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=20))
+        session.commit()
+        session.refresh(app)
+
+        issue_user_kamis(
+            session,
+            merchant,
+            app,
+            kami_type="points",
+            count=2,
+            unit_cost=3,
+            batch_no="REFUND-001",
+            points_amount=100,
+        )
+        issue_user_kamis(
+            session,
+            merchant,
+            app,
+            kami_type="points",
+            count=1,
+            unit_cost=5,
+            batch_no="REFUND-001",
+            points_amount=100,
+            allow_existing_batch=True,
+            biz_id_suffix="second",
+        )
+        session.commit()
+
+        cards = session.exec(
+            select(Kami)
+            .where(Kami.app_id == app.app_id, Kami.created_by_user_id == merchant.id)
+            .order_by(Kami.id)
+        ).all()
+        session.add(
+            KamiDeviceBinding(
+                app_id=app.app_id,
+                kami_code=cards[0].kami_code,
+                device_uuid="device-a",
+                fingerprint="fingerprint-a",
+            )
+        )
+        session.add(
+            EventLog(
+                app_id=app.app_id,
+                kami_code=cards[-1].kami_code,
+                event_type="verify",
+                status=1,
+            )
+        )
+        session.commit()
+        token = routes_user.create_user_access_token(merchant)
+
+    try:
+        delete_response = client.post(
+            "/api/v1/merchant/kamis/delete",
+            headers=auth_headers(token),
+            json={
+                "app_id": "app_delete_self",
+                "kami_codes": [cards[0].kami_code, cards[-1].kami_code],
+            },
+        )
+        assert delete_response.status_code == 200
+        delete_data = delete_response.json()["data"]
+        assert delete_data["deleted_count"] == 2
+        assert delete_data["refunded_amount"] == 8
+        assert delete_data["skipped_count"] == 0
+
+        with Session(engine) as session:
+            account = session.exec(
+                select(UserQuotaAccount).where(UserQuotaAccount.user_id == merchant.id)
+            ).one()
+            assert account.kami_issue_balance == 17
+
+            remaining_cards = session.exec(
+                select(Kami).where(Kami.app_id == "app_delete_self")
+            ).all()
+            assert len(remaining_cards) == 1
+            assert remaining_cards[0].issue_quota_transaction_id is not None
+
+            refund_transactions = session.exec(
+                select(UserQuotaTransaction)
+                .where(
+                    UserQuotaTransaction.user_id == merchant.id,
+                    UserQuotaTransaction.transaction_type == UserQuotaTransactionType.refund,
+                )
+                .order_by(UserQuotaTransaction.id)
+            ).all()
+            assert [tx.amount for tx in refund_transactions] == [3, 5]
+
+            assert session.exec(select(KamiDeviceBinding)).all() == []
+            logs = session.exec(select(EventLog)).all()
+            assert len(logs) == 1
+            assert logs[0].kami_code is None
     finally:
         fastapi_app.dependency_overrides.clear()
 

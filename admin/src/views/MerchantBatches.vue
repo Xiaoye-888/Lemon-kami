@@ -478,6 +478,7 @@
             <el-button
               type="danger"
               plain
+              :loading="deletingDetail"
               :disabled="!merchantBatchPermissions.deleteDetailKamis || selectedDetailKamis.length === 0"
               :title="merchantBatchPermissions.deleteDetailKamis ? '' : '发卡用户无批量删除卡密权限'"
               @click="handleDeleteSelectedDetail"
@@ -649,7 +650,7 @@
         <el-row :gutter="16">
           <el-col :xs="24" :sm="12">
             <el-form-item label="规格分组" required>
-              <el-select v-model="specForm.spec_group" :disabled="Boolean(editingSpec)" style="width: 100%">
+              <el-select v-model="specForm.spec_group" style="width: 100%">
                 <el-option v-for="option in SPEC_GROUP_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
               </el-select>
             </el-form-item>
@@ -1050,6 +1051,7 @@ import { copyTextToClipboard } from '../utils/clipboard'
 import {
   createMerchantAppSpec,
   deleteMerchantAppSpec,
+  deleteMerchantKamis,
   getMerchantAppSpecs,
   getMerchantApps,
   exportMerchantKamis,
@@ -1094,6 +1096,7 @@ const editingSpec = ref(null)
 const editingBatch = ref(null)
 const savingBatch = ref(false)
 const appending = ref(false)
+const deletingDetail = ref(false)
 const issuePreview = ref(null)
 const issueCardQuota = ref({
   balance: 0,
@@ -1243,7 +1246,7 @@ const merchantBatchPermissions = computed(() => ({
   appendBatch: canManageSelectedApp.value,
   deleteBatch: canManageSelectedApp.value,
   generateBatch: Boolean(selectedApp.value?.app_id && selectedSpec.value?.id),
-  deleteDetailKamis: false
+  deleteDetailKamis: viewMode.value !== 'list' && Boolean(currentDetailTarget.value?.app_id)
 }))
 const editingBatchHasCards = computed(() => (editingBatch.value?.count || 0) > 0)
 const charsetOptions = [
@@ -1952,7 +1955,25 @@ const handleDeleteSelectedDetail = async () => {
     ElMessage.warning('发卡用户无批量删除卡密权限')
     return
   }
-  if (selectedDetailKamis.value.length === 0) return
+  const kamiCodes = [...new Set(selectedDetailKamis.value.map((row) => row.kami_code).filter(Boolean))]
+  if (kamiCodes.length === 0) return
+  await ElMessageBox.confirm(`确认删除选中的 ${kamiCodes.length} 张卡密？删除后会返还对应发卡额度。`, '删除卡密', {
+    type: 'warning'
+  })
+  deletingDetail.value = true
+  try {
+    const res = await deleteMerchantKamis({
+      app_id: currentDetailTarget.value?.app_id || queryParams.app_id,
+      kami_codes: kamiCodes
+    })
+    const deletedCount = res.data?.deleted_count ?? kamiCodes.length
+    const refundedAmount = res.data?.refunded_amount ?? 0
+    ElMessage.success(`已删除 ${deletedCount} 张卡密，返还 ${refundedAmount} 发卡额度`)
+    selectedDetailKamis.value = []
+    await Promise.all([loadQuota(), loadSpecs()])
+  } finally {
+    deletingDetail.value = false
+  }
 }
 
 function downloadBlob(response, filename) {

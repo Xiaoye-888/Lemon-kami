@@ -327,6 +327,7 @@ def _ensure_points_schema():
                 "charset": "ALTER TABLE kamis ADD COLUMN charset VARCHAR(32) DEFAULT NULL",
                 "code_valid_days": "ALTER TABLE kamis ADD COLUMN code_valid_days INT DEFAULT NULL",
                 "code_expires_at": "ALTER TABLE kamis ADD COLUMN code_expires_at DATETIME DEFAULT NULL",
+                "issue_quota_transaction_id": "ALTER TABLE kamis ADD COLUMN issue_quota_transaction_id VARCHAR(128) DEFAULT NULL",
                 "bind_ip": "ALTER TABLE kamis ADD COLUMN bind_ip VARCHAR(255) DEFAULT NULL",
                 "unbind_count": "ALTER TABLE kamis ADD COLUMN unbind_count INT DEFAULT 0",
                 "last_unbind_at": "ALTER TABLE kamis ADD COLUMN last_unbind_at DATETIME DEFAULT NULL",
@@ -352,6 +353,9 @@ def _ensure_points_schema():
             }
             if "idx_created_by_user_id" not in indexes:
                 conn.execute(text("CREATE INDEX idx_created_by_user_id ON kamis (created_by_user_id)"))
+                conn.commit()
+            if "idx_issue_quota_transaction_id" not in indexes:
+                conn.execute(text("CREATE INDEX idx_issue_quota_transaction_id ON kamis (issue_quota_transaction_id)"))
                 conn.commit()
             conn.execute(text("""
                 UPDATE kamis
@@ -701,6 +705,7 @@ def _ensure_sqlite_schema():
                 "charset": "VARCHAR(32) DEFAULT NULL",
                 "code_valid_days": "INTEGER DEFAULT NULL",
                 "code_expires_at": "DATETIME DEFAULT NULL",
+                "issue_quota_transaction_id": "VARCHAR(128) DEFAULT NULL",
                 "bind_ip": "VARCHAR(255) DEFAULT NULL",
                 "unbind_count": "INTEGER DEFAULT 0",
                 "last_unbind_at": "DATETIME DEFAULT NULL",
@@ -721,6 +726,7 @@ def _ensure_sqlite_schema():
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_authorization_owner ON kamis (authorization_owner)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_user_bind_mode ON kamis (user_bind_mode)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_created_by_user_id ON kamis (created_by_user_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_issue_quota_transaction_id ON kamis (issue_quota_transaction_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_created_at ON kamis (created_at)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kamis_code_expires_at ON kamis (code_expires_at)"))
             conn.execute(text("""
