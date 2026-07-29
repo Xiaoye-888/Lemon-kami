@@ -579,6 +579,69 @@ def test_delete_empty_spec_and_reject_non_empty_spec():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_delete_kami_spec_prunes_empty_batches_before_deleting_spec():
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    def override_session():
+        with Session(engine) as session:
+            yield session
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app())
+        session.commit()
+        spec = KamiSpec(
+            app_id="app_demo",
+            spec_key="points-empty-batch",
+            spec_name="Empty Batch Spec",
+            kami_type=KamiType.points,
+            points_amount=88,
+            machine_bind_mode=MachineBindMode.one_card_one_device,
+            max_bind_devices=1,
+            authorization_owner=AuthorizationOwnerMode.auto,
+            user_bind_mode=UserBindMode.auto,
+        )
+        session.add(spec)
+        session.commit()
+        session.refresh(spec)
+        session.add(
+            KamiBatch(
+                app_id="app_demo",
+                spec_id=spec.id,
+                batch_no="empty-batch",
+                kami_type=KamiType.points,
+                points_amount=88,
+                machine_bind_mode=MachineBindMode.one_card_one_device,
+                max_bind_devices=1,
+                authorization_owner=AuthorizationOwnerMode.auto,
+                user_bind_mode=UserBindMode.auto,
+            )
+        )
+        session.commit()
+        spec_id = spec.id
+
+    try:
+        delete_spec = client.request(
+            "DELETE",
+            f"/api/v1/admin/kami-specs/{spec_id}",
+            json={"confirm_text": CONFIRM_DELETE_KAMI},
+        )
+        assert delete_spec.status_code == 200
+
+        with Session(engine) as session:
+            assert session.exec(select(KamiBatch).where(KamiBatch.spec_id == spec_id)).all() == []
+            assert session.get(KamiSpec, spec_id) is None
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_delete_kamis_allows_active_card_and_clears_direct_relations():
     from fastapi.testclient import TestClient
     from main import app as fastapi_app

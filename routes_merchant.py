@@ -844,6 +844,27 @@ def _get_visible_merchant_batch_or_404(
     return batch, app, True
 
 
+def _delete_empty_merchant_batches(session: Session, app_id: str, batch_nos: set[str]) -> int:
+    deleted_count = 0
+    for batch_no in batch_nos:
+        if not batch_no:
+            continue
+        still_has_kamis = session.exec(
+            select(Kami.id)
+            .where(Kami.app_id == app_id, Kami.batch_no == batch_no)
+            .limit(1)
+        ).first()
+        if still_has_kamis:
+            continue
+        empty_batches = session.exec(
+            select(KamiBatch).where(KamiBatch.app_id == app_id, KamiBatch.batch_no == batch_no)
+        ).all()
+        for batch in empty_batches:
+            session.delete(batch)
+            deleted_count += 1
+    return deleted_count
+
+
 def _batch_cost_snapshot(session: Session, batch: KamiBatch, user: EndUser, fallback_count: int) -> dict:
     prefix = f"kami_issue:{batch.app_id}:{batch.batch_no}:"
     transaction = session.exec(
@@ -2342,10 +2363,12 @@ async def delete_merchant_app_spec(
     spec = session.get(KamiSpec, spec_id)
     if not spec or spec.app_id != app_id:
         raise HTTPException(status_code=404, detail="Spec not found")
-    existing_batch = session.exec(select(KamiBatch).where(KamiBatch.spec_id == spec_id)).first()
     existing_kami = session.exec(select(Kami).where(Kami.spec_id == spec_id)).first()
-    if existing_batch or existing_kami:
+    if existing_kami:
         raise HTTPException(status_code=400, detail="规格下仍有批次或卡密，无法删除")
+    empty_batches = session.exec(select(KamiBatch).where(KamiBatch.spec_id == spec_id)).all()
+    for batch in empty_batches:
+        session.delete(batch)
     session.delete(spec)
     session.commit()
     return {"success": True, "message": "spec deleted"}
@@ -2523,6 +2546,7 @@ async def delete_merchant_kamis(
     deleted_details = []
     refunded_amount = 0
     account = get_or_create_user_quota_account(session, current_user.id, current_user.username)
+    touched_batch_nos: set[str] = set()
 
     for code in kami_codes:
         kami = found_by_code.get(code)
@@ -2573,8 +2597,11 @@ async def delete_merchant_kamis(
             }
         )
         deleted_codes.append(code)
+        if kami.batch_no:
+            touched_batch_nos.add(kami.batch_no)
         session.delete(kami)
 
+    _delete_empty_merchant_batches(session, payload.app_id, touched_batch_nos)
     session.add(account)
     session.commit()
     session.refresh(account)

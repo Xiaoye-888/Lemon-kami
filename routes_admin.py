@@ -2888,9 +2888,9 @@ async def delete_kami_spec(
     app_id = spec.app_id
     spec_name = spec.spec_name
     payload_data = _kami_spec_payload(spec, _kami_spec_stats(session, spec.id))
-    existing_batch = session.exec(select(KamiBatch).where(KamiBatch.spec_id == spec.id)).first()
+    existing_batches = session.exec(select(KamiBatch).where(KamiBatch.spec_id == spec.id)).all()
     existing_kami = session.exec(select(Kami).where(Kami.spec_id == spec.id)).first()
-    if existing_batch or existing_kami:
+    if existing_kami:
         record_admin_audit(
             session,
             admin=current_user,
@@ -2903,7 +2903,7 @@ async def delete_kami_spec(
             metadata={
                 "app_id": app_id,
                 "spec_name": spec_name,
-                "has_batch": bool(existing_batch),
+                "has_batch": bool(existing_batches),
                 "has_kami": bool(existing_kami),
             },
             error_message="规格下仍有批次或卡密",
@@ -2917,6 +2917,8 @@ async def delete_kami_spec(
         ).all()
         for rule in issue_pricing_rules:
             session.delete(rule)
+        for batch in existing_batches:
+            session.delete(batch)
         session.delete(spec)
         session.commit()
     except Exception as error:

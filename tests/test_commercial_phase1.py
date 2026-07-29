@@ -2835,6 +2835,97 @@ def test_merchant_can_delete_own_issued_kamis_and_refund_source_quota():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_merchant_deleting_last_issued_kami_cleans_empty_batch_and_allows_spec_delete():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="cleanup-issuer", password_hash="secret123", status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+
+        app = App(
+            app_id="app_cleanup_self",
+            name="Cleanup Self App",
+            app_secret="secret-self",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        spec = KamiSpec(
+            app_id=app.app_id,
+            spec_key="points-cleanup",
+            spec_name="Cleanup Spec",
+            kami_type="points",
+            points_amount=100,
+            status=1,
+        )
+        session.add(app)
+        session.add(spec)
+        session.add(UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=10))
+        session.commit()
+        session.refresh(spec)
+
+        issue_user_kamis(
+            session,
+            merchant,
+            app,
+            spec_id=spec.id,
+            kami_type="points",
+            count=1,
+            unit_cost=3,
+            batch_no="CLEAN-001",
+            points_amount=100,
+        )
+        session.commit()
+
+        card = session.exec(
+            select(Kami).where(Kami.app_id == app.app_id, Kami.created_by_user_id == merchant.id)
+        ).one()
+        batch = session.exec(
+            select(KamiBatch).where(KamiBatch.app_id == app.app_id, KamiBatch.batch_no == "CLEAN-001")
+        ).one()
+        assert batch.spec_id == spec.id
+        token = routes_user.create_user_access_token(merchant)
+
+    try:
+        delete_response = client.post(
+            "/api/v1/merchant/kamis/delete",
+            headers=auth_headers(token),
+            json={"app_id": app.app_id, "kami_codes": [card.kami_code]},
+        )
+        assert delete_response.status_code == 200
+        assert delete_response.json()["data"]["deleted_count"] == 1
+
+        with Session(engine) as session:
+            assert (
+                session.exec(
+                    select(Kami).where(Kami.app_id == app.app_id, Kami.batch_no == "CLEAN-001")
+                ).all()
+                == []
+            )
+            assert (
+                session.exec(
+                    select(KamiBatch).where(KamiBatch.app_id == app.app_id, KamiBatch.batch_no == "CLEAN-001")
+                ).all()
+                == []
+            )
+
+        delete_spec = client.delete(
+            f"/api/v1/merchant/apps/{app.app_id}/specs/{spec.id}",
+            headers=auth_headers(token),
+        )
+        assert delete_spec.status_code == 200
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_legacy_user_management_routes_are_gone_for_merchant_accounts():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
