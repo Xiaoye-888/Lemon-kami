@@ -345,7 +345,7 @@ PAGE_CONTRACTS = [
             action_group("spec-hero-actions", ("backFromDetail", "handleEditSpecGroup(selectedSpec)", "handleDeleteSpecGroup(selectedSpec)", "showGenerateForGroup(selectedSpec)")),
             action_group("batch-hero-actions", ("backFromDetail", "showBatchDialog(currentBatch)", "deleteBatch(currentBatch)")),
             action_group("batch-row-actions", ("openBatchDetail(row)", "showBatchDialog(row)", "deleteBatch(row)")),
-            action_group("card-panel-actions", ("handleDetailExport", "handleDeleteSelectedDetail", "deleteMerchantKamis", "showAppendDialog(currentBatch)")),
+            action_group("card-panel-actions", ("handleDetailExport", "handleDeleteSelectedDetail", "showAppendDialog(currentBatch)", "deleteMerchantKamis")),
         ],
         "tables": [
             table("batch-columns", ("批次名称", "类型", "权益", "剩余权益", "卡密有效期", "机器码限制", "总数/已用/剩余", "状态", "创建时间", "操作")),
