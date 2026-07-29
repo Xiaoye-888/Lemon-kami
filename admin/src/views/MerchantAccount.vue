@@ -10,7 +10,19 @@
 
     <section class="account-grid">
       <el-card shadow="never" class="panel account-summary">
-        <template #header>基本信息</template>
+        <template #header>
+          <div class="panel-header">
+            <span>基本信息</span>
+            <el-button
+              size="small"
+              :icon="EditPen"
+              :disabled="loading"
+              @click="openEditDialog"
+            >
+              编辑
+            </el-button>
+          </div>
+        </template>
         <div class="profile-head">
           <el-avatar :size="56" class="profile-avatar">{{ avatarText }}</el-avatar>
           <div class="profile-title">
@@ -29,58 +41,62 @@
         </el-descriptions>
       </el-card>
 
-      <div class="side-stack">
-        <el-card shadow="never" class="panel">
-          <template #header>资料编辑</template>
-          <el-form ref="formRef" :model="form" :rules="rules" label-width="88px" class="profile-form">
-            <el-form-item label="用户名" prop="username">
-              <el-input v-model="form.username" maxlength="64" show-word-limit placeholder="请输入用户名" />
-            </el-form-item>
-            <el-form-item label="邮箱" prop="email">
-              <el-input v-model="form.email" maxlength="255" clearable placeholder="请输入邮箱" />
-            </el-form-item>
-            <el-form-item label="手机号" prop="phone">
-              <el-input v-model="form.phone" maxlength="32" clearable placeholder="请输入手机号" />
-            </el-form-item>
-
-            <div class="form-actions">
-              <el-button :disabled="loading || saving" @click="resetForm">重置</el-button>
-              <el-button type="primary" :loading="saving" @click="saveProfile">保存修改</el-button>
-            </div>
-          </el-form>
-        </el-card>
-
-        <el-card shadow="never" class="panel security-panel">
-          <template #header>安全设置</template>
-          <el-alert
-            title="密码和头像已单独放在安全设置里，这里只开放用户名、邮箱、手机号。"
-            type="info"
-            :closable="false"
-            show-icon
-          />
-          <div class="permission-list">
-            <div class="permission-row">
-              <span>后台身份</span>
-              <strong>发卡用户</strong>
-            </div>
-            <div class="permission-row">
-              <span>发卡额度</span>
-              <strong>由管理员授权和充值审核入账</strong>
-            </div>
-            <div class="permission-row">
-              <span>应用权限</span>
-              <strong>可管理自建应用，可使用管理员授权应用发卡</strong>
-            </div>
+      <el-card shadow="never" class="panel security-panel">
+        <template #header>安全设置</template>
+        <el-alert
+          title="密码和头像已单独放在安全设置里，这里只开放用户名、邮箱、手机号。"
+          type="info"
+          :closable="false"
+          show-icon
+        />
+        <div class="permission-list">
+          <div class="permission-row">
+            <span>后台身份</span>
+            <strong>发卡用户</strong>
           </div>
-        </el-card>
-      </div>
+          <div class="permission-row">
+            <span>发卡额度</span>
+            <strong>由管理员授权和充值审核入账</strong>
+          </div>
+          <div class="permission-row">
+            <span>应用权限</span>
+            <strong>可管理自建应用，可使用管理员授权应用发卡</strong>
+          </div>
+        </div>
+      </el-card>
     </section>
+
+    <el-dialog
+      v-model="editDialogVisible"
+      title="资料编辑"
+      width="520px"
+      :close-on-click-modal="false"
+      @closed="resetForm"
+    >
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="88px" class="profile-form">
+        <el-form-item label="用户名" prop="username">
+          <el-input v-model="form.username" maxlength="64" show-word-limit placeholder="请输入用户名" />
+        </el-form-item>
+        <el-form-item label="邮箱" prop="email">
+          <el-input v-model="form.email" maxlength="255" clearable placeholder="请输入邮箱" />
+        </el-form-item>
+        <el-form-item label="手机号" prop="phone">
+          <el-input v-model="form.phone" maxlength="32" clearable placeholder="请输入手机号" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="loading || saving" @click="resetForm">重置</el-button>
+        <el-button :disabled="saving" @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="saveProfile">保存修改</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { EditPen } from '@element-plus/icons-vue'
 import { getMerchantMe, updateMerchantMe } from '../api/merchant'
 import { useUserStore } from '../stores/user'
 import { formatBeijingTime } from '../utils/datetime'
@@ -88,6 +104,7 @@ import { formatBeijingTime } from '../utils/datetime'
 const userStore = useUserStore()
 const loading = ref(false)
 const saving = ref(false)
+const editDialogVisible = ref(false)
 const formRef = ref(null)
 const profile = ref({ ...(userStore.userInfo || {}) })
 const form = reactive({
@@ -167,6 +184,12 @@ function syncFormFromProfile(source) {
   form.phone = source?.phone || ''
 }
 
+function openEditDialog() {
+  syncFormFromProfile(profile.value)
+  formRef.value?.clearValidate?.()
+  editDialogVisible.value = true
+}
+
 function normalizeOptionalText(value) {
   const text = String(value ?? '').trim()
   return text || ''
@@ -186,6 +209,7 @@ async function loadProfile() {
 
 function resetForm() {
   syncFormFromProfile(profile.value)
+  formRef.value?.clearValidate?.()
 }
 
 async function saveProfile() {
@@ -193,28 +217,28 @@ async function saveProfile() {
     return
   }
 
-  await formRef.value.validate(async (valid) => {
-    if (!valid) {
-      ElMessage.warning('请先检查账号资料')
-      return
-    }
+  const valid = await formRef.value.validate().catch(() => false)
+  if (!valid) {
+    ElMessage.warning('请先检查账号资料')
+    return
+  }
 
-    saving.value = true
-    try {
-      const payload = {
-        username: normalizeOptionalText(form.username),
-        email: normalizeOptionalText(form.email) || null,
-        phone: normalizeOptionalText(form.phone) || null
-      }
-      const res = await updateMerchantMe(payload)
-      profile.value = res.data || {}
-      syncFormFromProfile(profile.value)
-      userStore.setUserInfo(profile.value)
-      ElMessage.success('账号资料已更新')
-    } finally {
-      saving.value = false
+  saving.value = true
+  try {
+    const payload = {
+      username: normalizeOptionalText(form.username),
+      email: normalizeOptionalText(form.email) || null,
+      phone: normalizeOptionalText(form.phone) || null
     }
-  })
+    const res = await updateMerchantMe(payload)
+    profile.value = res.data || {}
+    syncFormFromProfile(profile.value)
+    userStore.setUserInfo(profile.value)
+    editDialogVisible.value = false
+    ElMessage.success('账号资料已更新')
+  } finally {
+    saving.value = false
+  }
 }
 
 onMounted(loadProfile)
@@ -251,10 +275,12 @@ onMounted(loadProfile)
   align-items: start;
 }
 
-.side-stack {
+.panel-header {
+  width: 100%;
   display: flex;
-  flex-direction: column;
-  gap: 16px;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
 }
 
 .panel {
@@ -290,13 +316,6 @@ onMounted(loadProfile)
   display: flex;
   flex-direction: column;
   gap: 2px;
-}
-
-.form-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  padding-top: 6px;
 }
 
 .security-panel :deep(.el-card__body) {

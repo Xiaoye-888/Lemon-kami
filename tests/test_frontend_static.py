@@ -610,6 +610,10 @@ def test_merchant_account_route_uses_dedicated_account_page():
     assert "\u8d26\u53f7\u8bbe\u7f6e" in account_view
     assert "\u57fa\u672c\u4fe1\u606f" in account_view
     assert "资料编辑" in account_view
+    assert "class=\"panel-header\"" in account_view
+    assert "@click=\"openEditDialog\"" in account_view
+    assert 'v-model="editDialogVisible"' in account_view
+    assert "<el-dialog" in account_view
     assert "安全设置" in account_view
     assert "密码和头像" in account_view
     assert 'v-model="form.username"' in account_view
@@ -617,6 +621,9 @@ def test_merchant_account_route_uses_dedicated_account_page():
     assert 'v-model="form.phone"' in account_view
     assert 'v-model="form.password"' not in account_view
     assert 'v-model="form.avatar"' not in account_view
+    assert 'class="side-stack"' not in account_view
+    assert '<template #header>资料编辑</template>' not in account_view
+    assert 'class="form-actions"' not in account_view
     assert "\u5546\u6237\u63a7\u5236\u53f0" not in account_view
 
 
