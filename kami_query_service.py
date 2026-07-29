@@ -3,7 +3,7 @@ import io
 from collections import Counter
 from typing import Optional
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlmodel import Session, select
 
 from datetime_utils import to_api_beijing_iso
@@ -14,13 +14,19 @@ def merchant_kami_statement(
     session: Session,
     *,
     user_id: int,
+    legacy_owned_app_ids: Optional[list[str]] = None,
     app_id: Optional[str] = None,
     keyword: Optional[str] = None,
     status: Optional[str] = None,
     batch_no: Optional[str] = None,
     spec_id: Optional[int] = None,
 ):
-    statement = select(Kami).where(Kami.created_by_user_id == user_id)
+    visibility_conditions = [Kami.created_by_user_id == user_id]
+    if legacy_owned_app_ids:
+        visibility_conditions.append(
+            and_(Kami.created_by_user_id.is_(None), Kami.app_id.in_(legacy_owned_app_ids))
+        )
+    statement = select(Kami).where(or_(*visibility_conditions))
     return _apply_kami_filters(
         statement,
         app_id=app_id,
@@ -94,10 +100,14 @@ def batch_stats_payload(
     batch: KamiBatch,
     *,
     created_by_user_id: Optional[int] = None,
+    include_unassigned: bool = False,
 ) -> dict:
     statement = select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
     if created_by_user_id is not None:
-        statement = statement.where(Kami.created_by_user_id == created_by_user_id)
+        visibility_conditions = [Kami.created_by_user_id == created_by_user_id]
+        if include_unassigned:
+            visibility_conditions.append(Kami.created_by_user_id.is_(None))
+        statement = statement.where(or_(*visibility_conditions))
     kamis = session.exec(statement).all()
     codes = [kami.kami_code for kami in kamis if kami.kami_code]
     bindings = []

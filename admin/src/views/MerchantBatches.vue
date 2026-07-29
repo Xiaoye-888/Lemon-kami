@@ -1048,28 +1048,31 @@ import {
   isFixedTimeCard
 } from '../utils/kamiDisplay'
 import { copyTextToClipboard } from '../utils/clipboard'
+import * as merchantApi from '../api/merchant'
 import {
-  createMerchantAppSpec,
-  deleteMerchantAppSpec,
-  deleteMerchantKamis,
-  getMerchantAppSpecs,
-  getMerchantApps,
-  exportMerchantKamis,
-  getMerchantBatchKamis,
-  getMerchantBatches,
-  getMerchantQuotas,
-  getMerchantSpecBatches,
-  getMerchantSpecKamis,
-  issueMerchantKamis,
-  previewMerchantKamis,
-  appendMerchantBatchKamis,
-  deleteMerchantBatch,
-  updateMerchantBatch,
-  updateMerchantAppSpec
-} from '../api/merchant'
+  appendCommercialMerchantBatchKamis,
+  createCommercialMerchantAppSpec,
+  deleteCommercialMerchantAppSpec,
+  deleteCommercialMerchantBatch,
+  deleteCommercialMerchantKamis,
+  exportCommercialMerchantKamis,
+  getCommercialMerchantAppSpecs,
+  getCommercialMerchantBatchApps,
+  getCommercialMerchantBatchKamis,
+  getCommercialMerchantBatches,
+  getCommercialMerchantQuotas,
+  getCommercialMerchantSpecBatches,
+  getCommercialMerchantSpecKamis,
+  issueCommercialMerchantKamis,
+  previewCommercialMerchantKamis,
+  updateCommercialMerchantAppSpec,
+  updateCommercialMerchantBatch
+} from '../api/commercial'
 
 const route = useRoute()
 const router = useRouter()
+const isAdminMerchantScope = computed(() => route.meta?.adminMerchantScope === true)
+const scopedMerchantId = computed(() => String(route.params.merchantId || ''))
 const loading = ref(false)
 const savingSpec = ref(false)
 const issuing = ref(false)
@@ -1276,6 +1279,107 @@ function responseItems(res) {
 
 function responsePayload(res) {
   return res.data?.items ? res.data : { items: res.items || [], total: res.total || 0 }
+}
+
+function normalizeMerchantApp(row) {
+  return {
+    ...row,
+    is_owned: row.is_owned ?? row.source === 'self_owned'
+  }
+}
+
+function batchManagementRoute(query = {}) {
+  return {
+    path: isAdminMerchantScope.value
+      ? `/admin/commercial/merchants/${scopedMerchantId.value}/batches`
+      : '/merchant/batches',
+    query
+  }
+}
+
+function getMerchantApps() {
+  if (isAdminMerchantScope.value) return getCommercialMerchantBatchApps(scopedMerchantId.value)
+  return merchantApi.getMerchantApps()
+}
+
+function getMerchantQuotas() {
+  if (isAdminMerchantScope.value) return getCommercialMerchantQuotas(scopedMerchantId.value)
+  return merchantApi.getMerchantQuotas()
+}
+
+function getMerchantAppSpecs(appId, params) {
+  if (isAdminMerchantScope.value) return getCommercialMerchantAppSpecs(scopedMerchantId.value, appId, params)
+  return merchantApi.getMerchantAppSpecs(appId, params)
+}
+
+function createMerchantAppSpec(appId, data) {
+  if (isAdminMerchantScope.value) return createCommercialMerchantAppSpec(scopedMerchantId.value, appId, data)
+  return merchantApi.createMerchantAppSpec(appId, data)
+}
+
+function updateMerchantAppSpec(appId, specId, data) {
+  if (isAdminMerchantScope.value) return updateCommercialMerchantAppSpec(scopedMerchantId.value, appId, specId, data)
+  return merchantApi.updateMerchantAppSpec(appId, specId, data)
+}
+
+function deleteMerchantAppSpec(appId, specId) {
+  if (isAdminMerchantScope.value) return deleteCommercialMerchantAppSpec(scopedMerchantId.value, appId, specId)
+  return merchantApi.deleteMerchantAppSpec(appId, specId)
+}
+
+function issueMerchantKamis(appId, data) {
+  if (isAdminMerchantScope.value) return issueCommercialMerchantKamis(scopedMerchantId.value, appId, data)
+  return merchantApi.issueMerchantKamis(appId, data)
+}
+
+function previewMerchantKamis(appId, data) {
+  if (isAdminMerchantScope.value) return previewCommercialMerchantKamis(scopedMerchantId.value, appId, data)
+  return merchantApi.previewMerchantKamis(appId, data)
+}
+
+function exportMerchantKamis(params) {
+  if (isAdminMerchantScope.value) return exportCommercialMerchantKamis(scopedMerchantId.value, params)
+  return merchantApi.exportMerchantKamis(params)
+}
+
+function deleteMerchantKamis(data) {
+  if (isAdminMerchantScope.value) return deleteCommercialMerchantKamis(scopedMerchantId.value, data)
+  return merchantApi.deleteMerchantKamis(data)
+}
+
+function getMerchantBatches(appId) {
+  if (isAdminMerchantScope.value) return getCommercialMerchantBatches(scopedMerchantId.value, appId)
+  return merchantApi.getMerchantBatches(appId)
+}
+
+function getMerchantSpecBatches(specId) {
+  if (isAdminMerchantScope.value) return getCommercialMerchantSpecBatches(scopedMerchantId.value, specId)
+  return merchantApi.getMerchantSpecBatches(specId)
+}
+
+function getMerchantSpecKamis(specId, params) {
+  if (isAdminMerchantScope.value) return getCommercialMerchantSpecKamis(scopedMerchantId.value, specId, params)
+  return merchantApi.getMerchantSpecKamis(specId, params)
+}
+
+function getMerchantBatchKamis(batchId, params) {
+  if (isAdminMerchantScope.value) return getCommercialMerchantBatchKamis(scopedMerchantId.value, batchId, params)
+  return merchantApi.getMerchantBatchKamis(batchId, params)
+}
+
+function updateMerchantBatch(batchId, data) {
+  if (isAdminMerchantScope.value) return updateCommercialMerchantBatch(scopedMerchantId.value, batchId, data)
+  return merchantApi.updateMerchantBatch(batchId, data)
+}
+
+function deleteMerchantBatch(batchId) {
+  if (isAdminMerchantScope.value) return deleteCommercialMerchantBatch(scopedMerchantId.value, batchId)
+  return merchantApi.deleteMerchantBatch(batchId)
+}
+
+function appendMerchantBatchKamis(batchId, data) {
+  if (isAdminMerchantScope.value) return appendCommercialMerchantBatchKamis(scopedMerchantId.value, batchId, data)
+  return merchantApi.appendMerchantBatchKamis(batchId, data)
 }
 
 function specValueText(row) {
@@ -1590,7 +1694,7 @@ function buildIssuePayload() {
 
 async function loadApps() {
   const res = await getMerchantApps()
-  apps.value = responseItems(res)
+  apps.value = responseItems(res).map(normalizeMerchantApp)
   const routeAppId = route.query.app_id ? String(route.query.app_id) : ''
   if (routeAppId) {
     queryParams.app_id = routeAppId
@@ -1633,7 +1737,7 @@ async function hydrateRouteAction() {
     await showGenerateForGroup(target)
   }
   const { action, ...nextQuery } = route.query
-  router.replace({ path: '/merchant/batches', query: { ...nextQuery, app_id: queryParams.app_id } })
+  router.replace(batchManagementRoute({ ...nextQuery, app_id: queryParams.app_id }))
 }
 
 async function findBatchByNo(batchNo) {
@@ -1793,7 +1897,7 @@ async function handleAppChange() {
   detailTotal.value = 0
   selectedDetailKamis.value = []
   resetDetailState()
-  router.replace({ path: '/merchant/batches', query: queryParams.app_id ? { app_id: queryParams.app_id } : {} })
+  router.replace(batchManagementRoute(queryParams.app_id ? { app_id: queryParams.app_id } : {}))
   await loadSpecs()
 }
 
@@ -1830,7 +1934,7 @@ async function openSpecGroup(row, updateRoute = true) {
   resetDetailState()
   await selectSpec(variant)
   if (updateRoute) {
-    router.replace({ path: '/merchant/batches', query: { app_id: queryParams.app_id, spec_id: variant.id } })
+    router.replace(batchManagementRoute({ app_id: queryParams.app_id, spec_id: variant.id }))
   }
 }
 
@@ -2074,7 +2178,7 @@ async function backFromDetail() {
   selectedDetailKamis.value = []
   resetDetailState()
   activeTab.value = 'batches'
-  router.replace({ path: '/merchant/batches', query: queryParams.app_id ? { app_id: queryParams.app_id } : {} })
+  router.replace(batchManagementRoute(queryParams.app_id ? { app_id: queryParams.app_id } : {}))
   await loadSpecs()
 }
 
@@ -2107,7 +2211,7 @@ async function openBatchDetail(row, updateRoute = true) {
   viewMode.value = 'batch'
   resetDetailState()
   if (updateRoute) {
-    router.replace({ path: '/merchant/batches', query: { app_id: queryParams.app_id, batch_no: row.batch_no } })
+    router.replace(batchManagementRoute({ app_id: queryParams.app_id, batch_no: row.batch_no }))
   }
   await loadDetailKamis()
 }
@@ -2264,7 +2368,16 @@ onMounted(loadAll)
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.panel-actions :deep(.el-button),
+.section-actions :deep(.el-button),
+.hero-actions :deep(.el-button) {
+  flex: 0 0 auto;
 }
 
 .icon-actions {
@@ -2644,10 +2757,6 @@ onMounted(loadAll)
   .hero-actions,
   .panel-actions {
     justify-content: flex-start;
-  }
-
-  .hero-actions {
-    flex-wrap: wrap;
   }
 }
 

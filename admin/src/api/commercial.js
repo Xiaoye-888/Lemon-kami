@@ -96,6 +96,145 @@ export function getCommercialMerchantDetail(merchantId) {
   })
 }
 
+export function getCommercialMerchantBatchApps(merchantId) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/batch-apps`,
+    method: 'get'
+  })
+}
+
+export function getCommercialMerchantQuotas(merchantId) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/quotas`,
+    method: 'get'
+  })
+}
+
+export function getCommercialMerchantAppSpecs(merchantId, appId, params) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/apps/${appId}/specs`,
+    method: 'get',
+    params
+  })
+}
+
+export function createCommercialMerchantAppSpec(merchantId, appId, data) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/apps/${appId}/specs`,
+    method: 'post',
+    data
+  })
+}
+
+export function updateCommercialMerchantAppSpec(merchantId, appId, specId, data) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/apps/${appId}/specs/${specId}`,
+    method: 'put',
+    data
+  })
+}
+
+export function deleteCommercialMerchantAppSpec(merchantId, appId, specId) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/apps/${appId}/specs/${specId}`,
+    method: 'delete'
+  })
+}
+
+export function issueCommercialMerchantKamis(merchantId, appId, data) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/apps/${appId}/kamis/batch`,
+    method: 'post',
+    data
+  })
+}
+
+export function previewCommercialMerchantKamis(merchantId, appId, data) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/apps/${appId}/kamis/preview`,
+    method: 'post',
+    data
+  })
+}
+
+export function getCommercialMerchantKamis(merchantId, params) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/kamis`,
+    method: 'get',
+    params
+  })
+}
+
+export function exportCommercialMerchantKamis(merchantId, params) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/kamis/export`,
+    method: 'get',
+    params,
+    responseType: 'blob'
+  })
+}
+
+export function deleteCommercialMerchantKamis(merchantId, data) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/kamis/delete`,
+    method: 'post',
+    data
+  })
+}
+
+export function getCommercialMerchantBatches(merchantId, appId) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/apps/${appId}/batches`,
+    method: 'get'
+  })
+}
+
+export function getCommercialMerchantSpecBatches(merchantId, specId) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/kami-specs/${specId}/batches`,
+    method: 'get'
+  })
+}
+
+export function getCommercialMerchantSpecKamis(merchantId, specId, params) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/kami-specs/${specId}/kamis`,
+    method: 'get',
+    params
+  })
+}
+
+export function getCommercialMerchantBatchKamis(merchantId, batchId, params) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/batches/${batchId}/kamis`,
+    method: 'get',
+    params
+  })
+}
+
+export function updateCommercialMerchantBatch(merchantId, batchId, data) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/batches/${batchId}`,
+    method: 'put',
+    data
+  })
+}
+
+export function deleteCommercialMerchantBatch(merchantId, batchId) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/batches/${batchId}`,
+    method: 'delete'
+  })
+}
+
+export function appendCommercialMerchantBatchKamis(merchantId, batchId, data) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/batches/${batchId}/append`,
+    method: 'post',
+    data
+  })
+}
+
 export function approveRechargeOrder(orderNo, data = {}) {
   return request({
     url: `/admin/commercial/recharge-orders/${orderNo}/approve`,

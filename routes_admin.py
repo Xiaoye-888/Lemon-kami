@@ -1241,6 +1241,7 @@ async def create_app(
 
 @router.get("/apps", summary="获取应用列表")
 async def list_apps(
+    owner_scope: Optional[str] = Query(None, pattern="^(admin)$"),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
@@ -1250,6 +1251,15 @@ async def list_apps(
     statement = select(App)
     if not is_admin:
         statement = statement.where(App.created_by == username)
+    elif owner_scope == "admin":
+        merchant_usernames = [
+            user.username
+            for user in session.exec(select(EndUser).where(EndUser.app_id.is_(None))).all()
+            if user.username
+        ]
+        statement = statement.where(App.owner_user_id.is_(None))
+        if merchant_usernames:
+            statement = statement.where(App.created_by.notin_(merchant_usernames))
     apps = session.exec(statement).all()
 
     return {

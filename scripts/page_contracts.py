@@ -587,7 +587,6 @@ PAGE_CONTRACTS = [
             region("merchant-table", "<el-table"),
             region("quota-dialog", 'v-model="quotaDialogVisible"'),
             region("app-auth-dialog", 'v-model="appAuthDialogVisible"'),
-            region("merchant-detail-drawer", 'v-model="merchantDetailVisible"'),
         ],
         "ordered_regions": [
             region("toolbar", 'class="page-toolbar"'),
@@ -595,11 +594,10 @@ PAGE_CONTRACTS = [
             region("merchant-table", "<el-table"),
             region("quota-dialog", 'v-model="quotaDialogVisible"'),
             region("app-auth-dialog", 'v-model="appAuthDialogVisible"'),
-            region("merchant-detail-drawer", 'v-model="merchantDetailVisible"'),
         ],
         "card_groups": [],
         "action_groups": [
-            action_group("row-actions", ("openMerchantDetail(row)", "openQuotaDialog(row)", "openAppAuthDialog(row)")),
+            action_group("row-actions", ("goMerchantDetail(row)", "openQuotaDialog(row)", "openAppAuthDialog(row)")),
             action_group("quota-dialog-actions", ("quotaDialogVisible = false", "submitIssueQuotaGrant")),
             action_group("app-auth-dialog-actions", ("appAuthDialogVisible = false", "submitAppAuthorization")),
         ],
@@ -611,14 +609,14 @@ PAGE_CONTRACTS = [
         "id": "admin.merchants.detail",
         "role": "admin",
         "route": "/admin/commercial/merchants/<id>/detail",
-        "source": "admin/src/views/AdminMerchants.vue",
+        "source": "admin/src/views/AdminMerchantDetail.vue",
         "regions": [
-            region("detail-drawer", 'v-model="merchantDetailVisible"'),
+            region("detail-page", 'class="merchant-detail-page"'),
             region("detail-summary", 'class="merchant-detail-summary"'),
             region("detail-tabs", 'class="merchant-detail-tabs"'),
         ],
         "ordered_regions": [
-            region("detail-drawer", 'v-model="merchantDetailVisible"'),
+            region("detail-page", 'class="merchant-detail-page"'),
             region("detail-summary", 'class="merchant-detail-summary"'),
             region("detail-tabs", 'class="merchant-detail-tabs"'),
         ],
@@ -627,14 +625,41 @@ PAGE_CONTRACTS = [
             card_group("detail-tab-order", ('name="self_owned_apps"', 'name="authorized_apps"', 'name="usage_users"')),
         ],
         "action_groups": [
-            action_group("app-quick-actions", ("openMerchantAppKamis(row)", "openMerchantAppBatches(row)")),
+            action_group("app-quick-actions", ("showGenerateForApp(row)", "showBatchesForApp(row)")),
         ],
         "tables": [
             table("self-owned-app-columns", ("应用名称", "App ID", "状态", "创建时间", "操作")),
             table("authorized-app-columns", ("应用名称", "App ID", "授权人", "授权时间", "操作")),
             table("usage-user-columns", ("用户名", "应用", "设备 UUID", "最近使用")),
         ],
-        "forbidden_tokens": ["App Secret"],
+        "forbidden_tokens": ["App Secret", "<el-drawer", "merchantDetailVisible", "path: '/admin/kamis/list'", "path: '/admin/kamis/batches'"],
+    },
+    {
+        "id": "admin.merchants.scoped_batches",
+        "role": "admin",
+        "route": "/admin/commercial/merchants/<id>/batches",
+        "source": "admin/src/views/MerchantBatches.vue",
+        "regions": [
+            region("admin-merchant-scope", "isAdminMerchantScope"),
+            region("scoped-merchant-id", "scopedMerchantId"),
+            region("batch-route", "batchManagementRoute"),
+            region("scoped-app-api", "getCommercialMerchantBatchApps(scopedMerchantId.value)"),
+        ],
+        "ordered_regions": [
+            region("admin-merchant-scope", "isAdminMerchantScope"),
+            region("scoped-merchant-id", "scopedMerchantId"),
+            region("batch-route", "batchManagementRoute"),
+        ],
+        "card_groups": [
+            card_group("scoped-api-set", ("getCommercialMerchantBatchApps", "getCommercialMerchantAppSpecs", "issueCommercialMerchantKamis", "appendCommercialMerchantBatchKamis")),
+        ],
+        "action_groups": [
+            action_group("scoped-actions", ("batchManagementRoute", "showGenerateForGroup", "handleIssue", "handleAppendKamis")),
+        ],
+        "tables": [
+            table("scoped-spec-table-columns", ("规格", "类型", "策略数", "批次", "总数/已用/剩余", "状态", "用途备注", "操作"))
+        ],
+        "forbidden_tokens": ["openBatchDrawer", "batchDrawerVisible", "<el-drawer"],
     },
     {
         "id": "admin.recharge_orders",

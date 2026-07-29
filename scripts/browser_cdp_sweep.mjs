@@ -360,13 +360,19 @@ async function waitForRouteContent(cdp, sessionId, route) {
     const style = window.getComputedStyle(el);
     return rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.top <= viewportHeight && style.display !== 'none' && style.visibility !== 'hidden';
   };
+  const present = (el) => {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+  };
   const text = document.body.innerText || '';
   const loadingMasks = Array.from(document.querySelectorAll('.el-loading-mask, .el-loading-spinner')).filter(visible);
-  const specRowActions = Array.from(document.querySelectorAll('.spec-section .row-actions')).filter(visible);
-  const specLinks = Array.from(document.querySelectorAll('.spec-section .batch-title-link')).filter(visible);
-  const merchantAppRowActions = Array.from(document.querySelectorAll('.merchant-apps .row-actions')).filter(visible);
-  const merchantCardsToolbar = Array.from(document.querySelectorAll('.merchant-cards-page .page-toolbar .actions')).filter(visible);
-  const merchantCardsRows = Array.from(document.querySelectorAll('.merchant-cards-page .el-table__row')).filter(visible);
+  const specRowActions = Array.from(document.querySelectorAll('.spec-section .row-actions')).filter(present);
+  const specLinks = Array.from(document.querySelectorAll('.spec-section .batch-title-link')).filter(present);
+  const merchantAppRowActions = Array.from(document.querySelectorAll('.merchant-apps .row-actions')).filter(present);
+  const merchantCardsToolbar = Array.from(document.querySelectorAll('.merchant-cards-page .page-toolbar .actions')).filter(present);
+  const merchantCardsRows = Array.from(document.querySelectorAll('.merchant-cards-page .el-table__row')).filter(present);
   const hasAdminBatchAppContext = route === '/admin/kamis/batches' && window.location.pathname.includes('/admin/kamis/batches') && window.location.search.includes('app_id=');
   const hasMerchantBatchAppContext = route === '/merchant/batches' && window.location.pathname.includes('/merchant/batches') && window.location.search.includes('app_id=');
   const hasBatchAppContext = hasAdminBatchAppContext || hasMerchantBatchAppContext;

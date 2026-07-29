@@ -498,6 +498,198 @@ def test_admin_commercial_merchant_detail_aggregates_apps_authorizations_and_usa
         fastapi_app.dependency_overrides.clear()
 
 
+def test_admin_apps_owner_scope_admin_excludes_merchant_self_owned_apps():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="merchant-owner", password_hash=hash_password("secret123"), status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        session.add_all(
+            [
+                App(
+                    app_id="app_admin_owned",
+                    name="Admin Owned",
+                    app_secret="s1",
+                    rsa_public_key="public-admin",
+                    rsa_private_key="private-admin",
+                    created_by="admin",
+                ),
+                App(
+                    app_id="app_merchant_owned",
+                    name="Merchant Owned",
+                    app_secret="s2",
+                    rsa_public_key="public-merchant",
+                    rsa_private_key="private-merchant",
+                    created_by=merchant.username,
+                    owner_user_id=merchant.id,
+                ),
+            ]
+        )
+        session.commit()
+
+    try:
+        scoped = client.get("/api/v1/admin/apps?owner_scope=admin")
+        assert scoped.status_code == 200
+        scoped_ids = [item["app_id"] for item in scoped.json()["data"]]
+        assert scoped_ids == ["app_admin_owned"]
+
+        unscoped = client.get("/api/v1/admin/apps")
+        assert unscoped.status_code == 200
+        all_ids = {item["app_id"] for item in unscoped.json()["data"]}
+        assert {"app_admin_owned", "app_merchant_owned"}.issubset(all_ids)
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_commercial_merchant_batch_scope_generates_as_target_issuer():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="scoped-issuer", password_hash=hash_password("secret123"), status=1)
+        other = EndUser(username="other-issuer", password_hash=hash_password("secret123"), status=1)
+        session.add_all([merchant, other])
+        session.commit()
+        session.refresh(merchant)
+        session.refresh(other)
+
+        admin_app = App(
+            app_id="app_scoped_admin",
+            name="Scoped Admin App",
+            app_secret="s1",
+            rsa_public_key="public-admin",
+            rsa_private_key="private-admin",
+            created_by="admin",
+        )
+        self_app = App(
+            app_id="app_scoped_self",
+            name="Scoped Self App",
+            app_secret="s2",
+            rsa_public_key="public-self",
+            rsa_private_key="private-self",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        other_app = App(
+            app_id="app_scoped_other",
+            name="Other Self App",
+            app_secret="s3",
+            rsa_public_key="public-other",
+            rsa_private_key="private-other",
+            created_by=other.username,
+            owner_user_id=other.id,
+        )
+        session.add_all([admin_app, self_app, other_app])
+        session.add(
+            UserAppAuthorization(
+                app_id=admin_app.app_id,
+                user_id=merchant.id,
+                username=merchant.username,
+                granted_by="admin",
+            )
+        )
+        session.add(UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=5))
+        session.add(UserQuotaAccount(user_id=other.id, username=other.username, kami_issue_balance=5))
+        session.commit()
+
+        spec = KamiSpec(
+            app_id=admin_app.app_id,
+            spec_key="scoped-points",
+            spec_name="Scoped Points",
+            kami_type="points",
+            points_amount=100,
+            status=1,
+        )
+        self_spec = KamiSpec(
+            app_id=self_app.app_id,
+            spec_key="self-points",
+            spec_name="Self Points",
+            kami_type="points",
+            points_amount=50,
+            status=1,
+        )
+        session.add_all([spec, self_spec])
+        session.commit()
+        session.refresh(spec)
+
+        issue_user_kamis(
+            session,
+            other,
+            admin_app,
+            spec_id=spec.id,
+            kami_type="points",
+            count=1,
+            unit_cost=1,
+            batch_no="OTHER-ISSUER-BATCH",
+            points_amount=100,
+        )
+        session.commit()
+        merchant_id = merchant.id
+        spec_id = spec.id
+
+    try:
+        apps_response = client.get(f"/api/v1/admin/commercial/merchants/{merchant_id}/batch-apps")
+        assert apps_response.status_code == 200
+        app_ids = [item["app_id"] for item in apps_response.json()["data"]]
+        assert app_ids == ["app_scoped_self", "app_scoped_admin"]
+        assert "app_scoped_other" not in app_ids
+
+        specs_response = client.get(
+            f"/api/v1/admin/commercial/merchants/{merchant_id}/apps/app_scoped_admin/specs"
+        )
+        assert specs_response.status_code == 200
+        scoped_spec = specs_response.json()["data"]["items"][0]
+        assert scoped_spec["id"] == spec_id
+        assert scoped_spec["total_count"] == 0
+        assert scoped_spec["batch_count"] == 0
+
+        preview = client.post(
+            f"/api/v1/admin/commercial/merchants/{merchant_id}/apps/app_scoped_admin/kamis/preview",
+            json={"spec_id": spec_id, "count": 2},
+        )
+        assert preview.status_code == 200
+        assert preview.json()["data"]["balance_before"] == 5
+        assert preview.json()["data"]["balance_after"] == 3
+
+        issue = client.post(
+            f"/api/v1/admin/commercial/merchants/{merchant_id}/apps/app_scoped_admin/kamis/batch",
+            json={
+                "spec_id": spec_id,
+                "count": 2,
+                "batch_no": "ADMIN-SCOPED-ISSUE",
+                "code_length": 8,
+                "charset": "upper_numeric",
+            },
+        )
+        assert issue.status_code == 200
+        assert issue.json()["data"]["count"] == 2
+
+        batches = client.get(f"/api/v1/admin/commercial/merchants/{merchant_id}/apps/app_scoped_admin/batches")
+        assert batches.status_code == 200
+        batch_nos = [item["batch_no"] for item in batches.json()["data"]]
+        assert batch_nos == ["ADMIN-SCOPED-ISSUE"]
+
+        with Session(engine) as session:
+            cards = session.exec(select(Kami).where(Kami.batch_no == "ADMIN-SCOPED-ISSUE")).all()
+            assert len(cards) == 2
+            assert {card.created_by_user_id for card in cards} == {merchant_id}
+            account = session.exec(select(UserQuotaAccount).where(UserQuotaAccount.user_id == merchant_id)).one()
+            assert account.kami_issue_balance == 3
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_manual_recharge_order_review_credits_issue_quota_and_transactions(tmp_path, monkeypatch):
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
@@ -2916,6 +3108,122 @@ def test_merchant_deleting_last_issued_kami_cleans_empty_batch_and_allows_spec_d
                 ).all()
                 == []
             )
+
+        delete_spec = client.delete(
+            f"/api/v1/merchant/apps/{app.app_id}/specs/{spec.id}",
+            headers=auth_headers(token),
+        )
+        assert delete_spec.status_code == 200
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_merchant_self_owned_app_legacy_unassigned_kamis_are_visible_deletable_and_unblock_spec_delete():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="legacy-owner", password_hash="secret123", status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+
+        app = App(
+            app_id="app_legacy_owner",
+            name="Legacy Owner App",
+            app_secret="secret-owner",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        spec = KamiSpec(
+            app_id=app.app_id,
+            spec_key="legacy-points",
+            spec_name="Legacy Points",
+            kami_type=KamiType.points,
+            points_amount=100,
+            status=1,
+        )
+        account = UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=7)
+        session.add_all([app, spec, account])
+        session.commit()
+        session.refresh(spec)
+        session.refresh(account)
+
+        tx_id = "UQ-LEGACY-CONSUME"
+        session.add(
+            UserQuotaTransaction(
+                transaction_id=tx_id,
+                account_id=account.id,
+                user_id=merchant.id,
+                username=merchant.username,
+                quota_type=UserQuotaType.kami_issue,
+                transaction_type=UserQuotaTransactionType.consume,
+                amount=-2,
+                balance_before=9,
+                balance_after=7,
+                biz_id="kami_issue:app_legacy_owner:LEGACY-BATCH:2",
+                operator=merchant.username,
+                metadata_json=json.dumps({"unit_cost": 2, "count": 1, "total_cost": 2}),
+            )
+        )
+        session.add(
+            KamiBatch(
+                app_id=app.app_id,
+                spec_id=spec.id,
+                batch_no="LEGACY-BATCH",
+                kami_type=KamiType.points,
+                points_amount=100,
+            )
+        )
+        session.add(
+            Kami(
+                app_id=app.app_id,
+                spec_id=spec.id,
+                kami_code="LEGACY-OWNER-001",
+                kami_type=KamiType.points,
+                status=KamiStatus.unused,
+                batch_no="LEGACY-BATCH",
+                points_amount=100,
+                created_by_user_id=None,
+                issue_quota_transaction_id=tx_id,
+            )
+        )
+        session.commit()
+        token = routes_user.create_user_access_token(merchant)
+
+    try:
+        spec_list = client.get(
+            "/api/v1/merchant/apps/app_legacy_owner/specs",
+            headers=auth_headers(token),
+        )
+        assert spec_list.status_code == 200
+        listed_spec = spec_list.json()["data"]["items"][0]
+        assert listed_spec["total_count"] == 1
+        assert listed_spec["batch_count"] == 1
+        assert listed_spec["capabilities"]["can_delete"] is False
+
+        detail_kamis = client.get(
+            f"/api/v1/merchant/kami-specs/{spec.id}/kamis",
+            headers=auth_headers(token),
+        )
+        assert detail_kamis.status_code == 200
+        assert [item["kami_code"] for item in detail_kamis.json()["data"]["items"]] == ["LEGACY-OWNER-001"]
+
+        delete_response = client.post(
+            "/api/v1/merchant/kamis/delete",
+            headers=auth_headers(token),
+            json={"app_id": app.app_id, "kami_codes": ["LEGACY-OWNER-001"]},
+        )
+        assert delete_response.status_code == 200
+        assert delete_response.json()["data"]["deleted_count"] == 1
+        assert delete_response.json()["data"]["refunded_amount"] == 2
+        assert delete_response.json()["data"]["quota_balance_after"] == 9
 
         delete_spec = client.delete(
             f"/api/v1/merchant/apps/{app.app_id}/specs/{spec.id}",

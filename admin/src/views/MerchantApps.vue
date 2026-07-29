@@ -591,6 +591,18 @@ onMounted(loadApps)
   white-space: nowrap;
 }
 
+.actions {
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.actions :deep(.el-button) {
+  flex: 0 0 auto;
+}
+
 .row-actions :deep(.el-button) {
   margin-left: 0;
 }
@@ -678,6 +690,14 @@ onMounted(loadApps)
 }
 
 @media (max-width: 720px) {
+  .page-toolbar {
+    align-items: flex-start;
+  }
+
+  .actions {
+    justify-content: flex-start;
+  }
+
   .credential-row {
     grid-template-columns: 1fr;
     gap: 4px;

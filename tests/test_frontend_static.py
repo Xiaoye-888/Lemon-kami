@@ -1444,21 +1444,43 @@ def test_phase2_merchant_card_search_export_and_batch_stats_are_visible():
 
 def test_admin_merchants_username_drilldown_exposes_apps_users_and_quick_actions():
     admin_merchants = (PROJECT_ROOT / "admin/src/views/AdminMerchants.vue").read_text(encoding="utf-8")
+    admin_merchant_detail = (PROJECT_ROOT / "admin/src/views/AdminMerchantDetail.vue").read_text(encoding="utf-8")
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
     commercial_api = (PROJECT_ROOT / "admin/src/api/commercial.js").read_text(encoding="utf-8")
+    router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")
 
     assert "getCommercialMerchantDetail" in commercial_api
     assert "url: `/admin/commercial/merchants/${merchantId}/detail`" in commercial_api
-    assert "@click=\"openMerchantDetail(row)\"" in admin_merchants
-    assert "merchantDetailVisible" in admin_merchants
-    assert "merchantDetailTabs" in admin_merchants
-    assert "self_owned_apps" in admin_merchants
-    assert "authorized_apps" in admin_merchants
-    assert "usage_users" in admin_merchants
-    assert "openMerchantAppBatches" in admin_merchants
-    assert "openMerchantAppKamis" in admin_merchants
-    assert "生成卡密" in admin_merchants
-    assert "批次管理" in admin_merchants
-    assert "App Secret" not in admin_merchants
+    assert "path: 'commercial/merchants/:merchantId/detail'" in router
+    assert "path: 'commercial/merchants/:merchantId/batches'" in router
+    assert "router.push({ name: 'AdminMerchantDetail'" in admin_merchants
+    assert "merchantDetailVisible" not in admin_merchants
+    assert "<el-drawer" not in admin_merchant_detail
+    assert "merchantDetailTabs" in admin_merchant_detail
+    assert "self_owned_apps" in admin_merchant_detail
+    assert "authorized_apps" in admin_merchant_detail
+    assert "usage_users" in admin_merchant_detail
+    assert "openMerchantAppBatches" in admin_merchant_detail
+    assert "openMerchantAppKamis" in admin_merchant_detail
+    assert "AdminMerchantBatches" in router
+    assert "getCommercialMerchantBatchApps" in commercial_api
+    assert "isAdminMerchantScope" in merchant_batches
+    assert "getCommercialMerchantBatchApps(scopedMerchantId.value)" in merchant_batches
+    assert "batchManagementRoute" in merchant_batches
+    assert "showGenerateForApp(row)" in admin_merchant_detail
+    assert "showBatchesForApp(row)" in admin_merchant_detail
+    assert "path: '/admin/kamis/batches'" not in admin_merchant_detail
+    assert "path: '/admin/kamis/list'" not in admin_merchant_detail
+    assert "App Secret" not in admin_merchant_detail
+
+
+def test_admin_global_batch_page_uses_admin_owned_app_scope():
+    admin_api = (PROJECT_ROOT / "admin/src/api/admin.js").read_text(encoding="utf-8")
+    kami_batches = (PROJECT_ROOT / "admin/src/views/KamiBatches.vue").read_text(encoding="utf-8")
+
+    assert "export function getApps(params = {})" in admin_api
+    assert "params" in admin_api.split("export function getApps", 1)[1].split("}", 1)[0]
+    assert "getApps({ owner_scope: 'admin' })" in kami_batches
 
 
 def test_phase2_ops_center_has_safe_backup_and_cleanup_controls():

@@ -28,7 +28,7 @@
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="username" label="用户名" min-width="140">
           <template #default="{ row }">
-            <el-button link type="primary" class="username-link" @click="openMerchantDetail(row)">
+            <el-button link type="primary" class="username-link" @click="goMerchantDetail(row)">
               {{ row.username }}
             </el-button>
           </template>
@@ -129,86 +129,6 @@
       </template>
     </el-dialog>
 
-    <el-drawer
-      v-model="merchantDetailVisible"
-      :title="`发卡用户详情 - ${merchantDetail.profile?.username || currentMerchant?.username || ''}`"
-      size="860px"
-      class="merchant-detail-drawer"
-    >
-      <div v-loading="merchantDetailLoading" class="merchant-detail">
-        <div class="merchant-detail-summary">
-          <div>
-            <span class="summary-label">用户名</span>
-            <strong>{{ merchantDetail.profile?.username || '-' }}</strong>
-          </div>
-          <div>
-            <span class="summary-label">发卡额度</span>
-            <strong>{{ merchantDetail.quota?.kami_issue_balance ?? merchantDetail.profile?.kami_issue_balance ?? 0 }}</strong>
-          </div>
-          <div>
-            <span class="summary-label">自建应用</span>
-            <strong>{{ merchantDetail.self_owned_apps.length }}</strong>
-          </div>
-          <div>
-            <span class="summary-label">使用用户</span>
-            <strong>{{ merchantDetail.usage_users.length }}</strong>
-          </div>
-        </div>
-
-        <el-tabs v-model="merchantDetailTabs" class="merchant-detail-tabs">
-          <el-tab-pane label="自建应用" name="self_owned_apps">
-            <el-table :data="merchantDetail.self_owned_apps" border stripe>
-              <el-table-column prop="name" label="应用名称" min-width="160" show-overflow-tooltip />
-              <el-table-column prop="app_id" label="App ID" min-width="180" show-overflow-tooltip />
-              <el-table-column prop="status" label="状态" width="90">
-                <template #default="{ row }">
-                  <el-tag :type="row.status === 1 ? 'success' : 'danger'">
-                    {{ row.status === 1 ? '启用' : '禁用' }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="created_at" label="创建时间" width="180">
-                <template #default="{ row }">{{ formatOptionalTime(row.created_at) }}</template>
-              </el-table-column>
-              <el-table-column label="操作" width="180" fixed="right">
-                <template #default="{ row }">
-                  <el-button size="small" type="primary" plain @click="openMerchantAppKamis(row)">生成卡密</el-button>
-                  <el-button size="small" plain @click="openMerchantAppBatches(row)">批次管理</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </el-tab-pane>
-
-          <el-tab-pane label="授权应用" name="authorized_apps">
-            <el-table :data="merchantDetail.authorized_apps" border stripe>
-              <el-table-column prop="app_name" label="应用名称" min-width="160" show-overflow-tooltip />
-              <el-table-column prop="app_id" label="App ID" min-width="180" show-overflow-tooltip />
-              <el-table-column prop="granted_by" label="授权人" width="120" />
-              <el-table-column prop="created_at" label="授权时间" width="180">
-                <template #default="{ row }">{{ formatOptionalTime(row.created_at) }}</template>
-              </el-table-column>
-              <el-table-column label="操作" width="180" fixed="right">
-                <template #default="{ row }">
-                  <el-button size="small" type="primary" plain @click="openMerchantAppKamis(row)">生成卡密</el-button>
-                  <el-button size="small" plain @click="openMerchantAppBatches(row)">批次管理</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </el-tab-pane>
-
-          <el-tab-pane label="使用用户" name="usage_users">
-            <el-table :data="merchantDetail.usage_users" border stripe>
-              <el-table-column prop="username" label="用户名" min-width="150" show-overflow-tooltip />
-              <el-table-column prop="app_name" label="应用" min-width="150" show-overflow-tooltip />
-              <el-table-column prop="device_uuid" label="设备 UUID" min-width="180" show-overflow-tooltip />
-              <el-table-column prop="last_seen_at" label="最近使用" width="180">
-                <template #default="{ row }">{{ formatOptionalTime(row.last_seen_at) }}</template>
-              </el-table-column>
-            </el-table>
-          </el-tab-pane>
-        </el-tabs>
-      </div>
-    </el-drawer>
   </div>
 </template>
 
@@ -216,7 +136,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
-import { getCommercialMerchantDetail, getCommercialMerchants } from '../api/commercial'
+import { getCommercialMerchants } from '../api/commercial'
 import { getApps } from '../api/admin'
 import {
   getEndUserAppAuthorizations,
@@ -234,21 +154,11 @@ const appAuthSaving = ref(false)
 const appAuthRevoking = ref('')
 const quotaDialogVisible = ref(false)
 const appAuthDialogVisible = ref(false)
-const merchantDetailVisible = ref(false)
-const merchantDetailLoading = ref(false)
-const merchantDetailTabs = ref('self_owned_apps')
 const rows = ref([])
 const total = ref(0)
 const apps = ref([])
 const appAuthorizations = ref([])
 const currentMerchant = ref(null)
-const merchantDetail = ref({
-  profile: null,
-  quota: {},
-  self_owned_apps: [],
-  authorized_apps: [],
-  usage_users: []
-})
 const query = reactive({
   keyword: '',
   status: '',
@@ -293,41 +203,9 @@ function handleSearch() {
   loadData()
 }
 
-async function openMerchantDetail(row) {
-  currentMerchant.value = row
-  merchantDetailVisible.value = true
-  merchantDetailTabs.value = 'self_owned_apps'
-  merchantDetail.value = {
-    profile: row,
-    quota: {},
-    self_owned_apps: [],
-    authorized_apps: [],
-    usage_users: []
-  }
-  merchantDetailLoading.value = true
-  try {
-    const res = await getCommercialMerchantDetail(row.id)
-    const data = res.data || {}
-    merchantDetail.value = {
-      profile: data.profile || row,
-      quota: data.quota || {},
-      self_owned_apps: data.self_owned_apps || [],
-      authorized_apps: data.authorized_apps || [],
-      usage_users: data.usage_users || []
-    }
-  } finally {
-    merchantDetailLoading.value = false
-  }
-}
-
-function openMerchantAppBatches(app) {
-  if (!app?.app_id) return
-  router.push({ path: '/admin/kamis/batches', query: { app_id: app.app_id } })
-}
-
-function openMerchantAppKamis(app) {
-  if (!app?.app_id) return
-  router.push({ path: '/admin/kamis/list', query: { app_id: app.app_id, action: 'generate' } })
+function goMerchantDetail(row) {
+  if (!row?.id) return
+  router.push({ name: 'AdminMerchantDetail', params: { merchantId: row.id } })
 }
 
 function openQuotaDialog(row) {
@@ -411,7 +289,7 @@ async function handleRevokeAppAuthorization(row) {
 }
 
 async function loadApps() {
-  const res = await getApps()
+  const res = await getApps({ owner_scope: 'admin' })
   apps.value = res.data || []
 }
 
@@ -454,39 +332,4 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-.merchant-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.merchant-detail-summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.merchant-detail-summary > div {
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 12px;
-  background: #f8fafc;
-}
-
-.summary-label {
-  display: block;
-  margin-bottom: 6px;
-  color: #64748b;
-  font-size: 12px;
-}
-
-.merchant-detail-tabs {
-  min-width: 0;
-}
-
-@media (max-width: 760px) {
-  .merchant-detail-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
 </style>

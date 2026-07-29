@@ -1,9 +1,9 @@
 <template>
   <el-container class="layout">
-    <el-aside :width="collapsed ? '72px' : '236px'" class="layout__aside">
-      <div class="logo" :class="{ 'is-small': collapsed }">
+    <el-aside :width="asideWidth" class="layout__aside">
+      <div class="logo" :class="{ 'is-small': isMenuCollapsed }">
         <img class="logo__img" :src="`${publicBase}static/brand-logo.png`" width="40" height="40" alt="" />
-        <div v-show="!collapsed" class="logo__text">
+        <div v-show="!isMenuCollapsed" class="logo__text">
           <span class="logo__name">{{ shellTitle }}</span>
           <span class="logo__hint">Lemon Kami</span>
         </div>
@@ -12,7 +12,7 @@
       <el-menu
         :default-active="activeMenu"
         :default-openeds="openMenuIndexes"
-        :collapse="collapsed"
+        :collapse="isMenuCollapsed"
         :collapse-transition="true"
         :router="true"
         :unique-opened="true"
@@ -41,11 +41,11 @@
       <el-header class="layout__header" height="64px">
         <div class="layout__header-left">
           <el-button
-            :icon="collapsed ? Expand : Fold"
+            :icon="isMenuCollapsed ? Expand : Fold"
             text
             class="btn-fold"
-            :aria-label="collapsed ? '展开' : '收起'"
-            @click="collapsed = !collapsed"
+            :aria-label="isMenuCollapsed ? '展开' : '收起'"
+            @click="toggleCollapsed"
           />
           <h4 class="page-title">{{ currentTitle }}</h4>
         </div>
@@ -91,7 +91,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   ArrowDown,
@@ -121,11 +121,14 @@ const publicBase = import.meta.env.BASE_URL
 const route = useRoute()
 const userStore = useUserStore()
 const themeStore = useThemeStore()
-const collapsed = ref(false)
+const isNarrowViewport = ref(typeof window !== 'undefined' ? window.innerWidth <= 720 : false)
+const collapsed = ref(isNarrowViewport.value)
 
 const isMerchant = computed(() => userStore.role === 'merchant' || route.path.startsWith('/merchant'))
 const shellTitle = computed(() => (isMerchant.value ? '发卡用户后台' : '商业版后台'))
 const roleLabel = computed(() => (isMerchant.value ? '发卡用户' : '管理员账号'))
+const isMenuCollapsed = computed(() => collapsed.value || isNarrowViewport.value)
+const asideWidth = computed(() => (isMenuCollapsed.value ? '72px' : '236px'))
 const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => route.meta?.title || shellTitle.value)
 const isDark = computed(() => themeStore.isDark)
@@ -233,9 +236,29 @@ const merchantMenuItems = [
 
 const menuItems = computed(() => (isMerchant.value ? merchantMenuItems : adminMenuItems))
 
+function syncViewport() {
+  if (typeof window === 'undefined') return
+  isNarrowViewport.value = window.innerWidth <= 720
+  if (isNarrowViewport.value) collapsed.value = true
+}
+
+function toggleCollapsed() {
+  if (isNarrowViewport.value) return
+  collapsed.value = !collapsed.value
+}
+
 const handleCommand = (command) => {
   if (command === 'logout') userStore.logout()
 }
+
+onMounted(() => {
+  syncViewport()
+  window.addEventListener('resize', syncViewport)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', syncViewport)
+})
 </script>
 
 <style scoped>

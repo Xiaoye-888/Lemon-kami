@@ -1101,6 +1101,8 @@ def test_browser_cdp_helper_exports_detail_summary_rect_and_mismatch_checks():
     assert "retry_attempts" in helper
     assert ".merchant-apps .row-actions" in helper
     assert "waiting for merchant apps table content" in helper
+    assert "const present = (el) =>" in helper
+    assert "filter(present)" in helper
     assert "pageContractMismatches" in helper
     assert "evaluatePageContracts" in helper
     assert "merchant-apps.toolbar-actions" in helper

@@ -326,6 +326,14 @@ def _app_is_owned_by_user(app: App, user: EndUser) -> bool:
     return app.owner_user_id == user.id or (bool(app.created_by) and app.created_by == user.username)
 
 
+def _legacy_owned_app_ids(apps: list[App], user: EndUser) -> list[str]:
+    return [app.app_id for app in apps if _app_is_owned_by_user(app, user)]
+
+
+def _legacy_owned_app_scope(app: App, user: EndUser) -> list[str]:
+    return [app.app_id] if _app_is_owned_by_user(app, user) else []
+
+
 def _app_authorized_to_user(session: Session, app_id: str, user: EndUser) -> bool:
     return session.exec(
         select(UserAppAuthorization).where(
@@ -691,14 +699,17 @@ def _validate_merchant_spec_payload(
     )
 
 
-def _merchant_spec_stats(session: Session, spec_id: int, user_id: int) -> dict:
+def _merchant_spec_stats(session: Session, spec_id: int, user: EndUser, app: App) -> dict:
+    visibility_conditions = [Kami.created_by_user_id == user.id]
+    if _app_is_owned_by_user(app, user):
+        visibility_conditions.append(Kami.created_by_user_id.is_(None))
     batch_count = session.exec(
         select(KamiBatch)
         .join(Kami, (Kami.app_id == KamiBatch.app_id) & (Kami.batch_no == KamiBatch.batch_no))
-        .where(KamiBatch.spec_id == spec_id, Kami.created_by_user_id == user_id)
+        .where(KamiBatch.spec_id == spec_id, or_(*visibility_conditions))
     ).all()
     kamis = session.exec(
-        select(Kami).where(Kami.spec_id == spec_id, Kami.created_by_user_id == user_id)
+        select(Kami).where(Kami.spec_id == spec_id, or_(*visibility_conditions))
     ).all()
     codes = [kami.kami_code for kami in kamis if kami.kami_code]
     bindings = []
@@ -762,9 +773,20 @@ def _merchant_batch_payload(
 ) -> dict:
     app = app or session.exec(select(App).where(App.app_id == batch.app_id)).first()
     spec = spec or (session.get(KamiSpec, batch.spec_id) if batch.spec_id else None)
-    stats = stats or batch_stats_payload(session, batch, created_by_user_id=current_user.id)
-    has_user_cards = _merchant_batch_has_user_cards(session, batch, current_user.id, stats=stats)
     is_owned_app = bool(app and _app_is_owned_by_user(app, current_user))
+    stats = stats or batch_stats_payload(
+        session,
+        batch,
+        created_by_user_id=current_user.id,
+        include_unassigned=is_owned_app,
+    )
+    has_user_cards = _merchant_batch_has_user_cards(
+        session,
+        batch,
+        current_user.id,
+        stats=stats,
+        include_unassigned=is_owned_app,
+    )
     count = stats.get("total_count", 0)
     payload = {
         "id": batch.id,
@@ -816,15 +838,19 @@ def _merchant_batch_has_user_cards(
     user_id: int,
     *,
     stats: Optional[dict] = None,
+    include_unassigned: bool = False,
 ) -> bool:
     if stats is not None and int(stats.get("total_count", 0) or 0) > 0:
         return True
+    visibility_conditions = [Kami.created_by_user_id == user_id]
+    if include_unassigned:
+        visibility_conditions.append(Kami.created_by_user_id.is_(None))
     return session.exec(
         select(Kami.id)
         .where(
             Kami.app_id == batch.app_id,
             Kami.batch_no == batch.batch_no,
-            Kami.created_by_user_id == user_id,
+            or_(*visibility_conditions),
         )
         .limit(1)
     ).first() is not None
@@ -839,7 +865,12 @@ def _get_visible_merchant_batch_or_404(
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     app = _get_visible_app_or_404(session, current_user, batch.app_id)
-    if not _merchant_batch_has_user_cards(session, batch, current_user.id):
+    if not _merchant_batch_has_user_cards(
+        session,
+        batch,
+        current_user.id,
+        include_unassigned=_app_is_owned_by_user(app, current_user),
+    ):
         raise HTTPException(status_code=404, detail="Batch not found")
     return batch, app, True
 
@@ -1341,7 +1372,12 @@ async def get_merchant_dashboard(
             .order_by(KamiBatch.id.desc())
             .limit(12)
         ).all():
-            stats = batch_stats_payload(session, batch, created_by_user_id=current_user.id)
+            stats = batch_stats_payload(
+                session,
+                batch,
+                created_by_user_id=current_user.id,
+                include_unassigned=batch.app_id in owned_app_ids,
+            )
             if stats["total_count"] <= 0:
                 continue
             recent_batches.append(
@@ -1708,11 +1744,19 @@ async def export_merchant_kamis(
     session: Session = Depends(get_session),
 ):
     try:
+        legacy_app_ids = []
         if spec_id is not None:
-            _get_visible_spec_or_404(session, current_user, spec_id)
+            _spec, app, _is_owned = _get_visible_spec_or_404(session, current_user, spec_id)
+            legacy_app_ids = _legacy_owned_app_scope(app, current_user)
+        elif app_id:
+            app = _get_visible_app_or_404(session, current_user, app_id)
+            legacy_app_ids = _legacy_owned_app_scope(app, current_user)
+        else:
+            legacy_app_ids = _legacy_owned_app_ids(get_user_visible_apps(session, current_user), current_user)
         statement = merchant_kami_statement(
             session,
             user_id=current_user.id,
+            legacy_owned_app_ids=legacy_app_ids,
             app_id=app_id,
             keyword=keyword,
             status=status,
@@ -1742,11 +1786,19 @@ async def list_merchant_global_kamis(
     session: Session = Depends(get_session),
 ):
     try:
+        legacy_app_ids = []
         if spec_id is not None:
-            _get_visible_spec_or_404(session, current_user, spec_id)
+            _spec, app, _is_owned = _get_visible_spec_or_404(session, current_user, spec_id)
+            legacy_app_ids = _legacy_owned_app_scope(app, current_user)
+        elif app_id:
+            app = _get_visible_app_or_404(session, current_user, app_id)
+            legacy_app_ids = _legacy_owned_app_scope(app, current_user)
+        else:
+            legacy_app_ids = _legacy_owned_app_ids(get_user_visible_apps(session, current_user), current_user)
         statement = merchant_kami_statement(
             session,
             user_id=current_user.id,
+            legacy_owned_app_ids=legacy_app_ids,
             app_id=app_id,
             keyword=keyword,
             status=status,
@@ -1765,7 +1817,7 @@ async def list_merchant_spec_batches(
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
-    spec, _app, _is_owned = _get_visible_spec_or_404(session, current_user, spec_id)
+    spec, app, is_owned = _get_visible_spec_or_404(session, current_user, spec_id)
     batches = session.exec(
         select(KamiBatch)
         .where(KamiBatch.spec_id == spec.id)
@@ -1773,10 +1825,21 @@ async def list_merchant_spec_batches(
     ).all()
     items = []
     for batch in batches:
-        stats = batch_stats_payload(session, batch, created_by_user_id=current_user.id)
-        if not _merchant_batch_has_user_cards(session, batch, current_user.id, stats=stats):
+        stats = batch_stats_payload(
+            session,
+            batch,
+            created_by_user_id=current_user.id,
+            include_unassigned=is_owned,
+        )
+        if not _merchant_batch_has_user_cards(
+            session,
+            batch,
+            current_user.id,
+            stats=stats,
+            include_unassigned=is_owned,
+        ):
             continue
-        items.append(_merchant_batch_payload(session, batch, current_user, spec=spec, stats=stats))
+        items.append(_merchant_batch_payload(session, batch, current_user, spec=spec, app=app, stats=stats))
     return {"success": True, "data": {"items": items, "total": len(items)}, "items": items}
 
 
@@ -1791,11 +1854,12 @@ async def list_merchant_spec_kamis(
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
-    spec, _app, _is_owned = _get_visible_spec_or_404(session, current_user, spec_id)
+    spec, app, _is_owned = _get_visible_spec_or_404(session, current_user, spec_id)
     try:
         statement = merchant_kami_statement(
             session,
             user_id=current_user.id,
+            legacy_owned_app_ids=_legacy_owned_app_scope(app, current_user),
             app_id=spec.app_id,
             keyword=keyword,
             status=status,
@@ -1817,11 +1881,12 @@ async def list_merchant_batch_kamis(
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
-    batch, _app, _can_manage_batch = _get_visible_merchant_batch_or_404(session, current_user, batch_id)
+    batch, app, _can_manage_batch = _get_visible_merchant_batch_or_404(session, current_user, batch_id)
     try:
         statement = merchant_kami_statement(
             session,
             user_id=current_user.id,
+            legacy_owned_app_ids=_legacy_owned_app_scope(app, current_user),
             app_id=batch.app_id,
             keyword=keyword,
             status=status,
@@ -2216,7 +2281,7 @@ async def list_merchant_app_specs(
             spec,
             user=current_user,
             is_editable=is_owned,
-            stats=_merchant_spec_stats(session, spec.id, current_user.id),
+            stats=_merchant_spec_stats(session, spec.id, current_user, app),
         )
         for spec in specs
     ]
@@ -2230,7 +2295,7 @@ async def create_merchant_app_spec(
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
-    _require_self_owned_app(session, current_user, app_id)
+    app = _require_self_owned_app(session, current_user, app_id)
     (
         kami_type,
         machine_bind_mode,
@@ -2264,7 +2329,7 @@ async def create_merchant_app_spec(
                 existing,
                 user=current_user,
                 is_editable=True,
-                stats=_merchant_spec_stats(session, existing.id, current_user.id),
+                stats=_merchant_spec_stats(session, existing.id, current_user, app),
             ),
         }
 
@@ -2307,7 +2372,7 @@ async def create_merchant_app_spec(
             spec,
             user=current_user,
             is_editable=True,
-            stats=_merchant_spec_stats(session, spec.id, current_user.id),
+            stats=_merchant_spec_stats(session, spec.id, current_user, app),
         ),
     }
 
@@ -2320,7 +2385,7 @@ async def update_merchant_app_spec(
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
-    _require_self_owned_app(session, current_user, app_id)
+    app = _require_self_owned_app(session, current_user, app_id)
     spec = session.get(KamiSpec, spec_id)
     if not spec or spec.app_id != app_id:
         raise HTTPException(status_code=404, detail="Spec not found")
@@ -2347,7 +2412,7 @@ async def update_merchant_app_spec(
             spec,
             user=current_user,
             is_editable=True,
-            stats=_merchant_spec_stats(session, spec.id, current_user.id),
+            stats=_merchant_spec_stats(session, spec.id, current_user, app),
         ),
     }
 
@@ -2537,7 +2602,10 @@ async def delete_merchant_kamis(
         select(Kami).where(
             Kami.app_id == payload.app_id,
             Kami.kami_code.in_(kami_codes),
-            Kami.created_by_user_id == current_user.id,
+            or_(
+                Kami.created_by_user_id == current_user.id,
+                *([Kami.created_by_user_id.is_(None)] if _app_is_owned_by_user(app, current_user) else []),
+            ),
         )
     ).all()
     found_by_code = {kami.kami_code: kami for kami in found_kamis}
@@ -2628,15 +2696,28 @@ async def list_merchant_batches(
 ):
     if not user_can_manage_app(session, current_user, app_id):
         raise HTTPException(status_code=403, detail="No permission to manage this app")
+    app = _get_visible_app_or_404(session, current_user, app_id)
+    is_owned = _app_is_owned_by_user(app, current_user)
     batches = session.exec(
         select(KamiBatch).where(KamiBatch.app_id == app_id).order_by(KamiBatch.id.desc())
     ).all()
     result = []
     for batch in batches:
-        stats = batch_stats_payload(session, batch, created_by_user_id=current_user.id)
-        if not _merchant_batch_has_user_cards(session, batch, current_user.id, stats=stats):
+        stats = batch_stats_payload(
+            session,
+            batch,
+            created_by_user_id=current_user.id,
+            include_unassigned=is_owned,
+        )
+        if not _merchant_batch_has_user_cards(
+            session,
+            batch,
+            current_user.id,
+            stats=stats,
+            include_unassigned=is_owned,
+        ):
             continue
-        result.append(_merchant_batch_payload(session, batch, current_user, stats=stats))
+        result.append(_merchant_batch_payload(session, batch, current_user, app=app, stats=stats))
     return {"success": True, "data": result, "items": result}
 
 

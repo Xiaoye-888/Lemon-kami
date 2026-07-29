@@ -1127,7 +1127,7 @@ const normalizeSelectedAppId = async () => {
 }
 
 const loadApps = async () => {
-  const res = await getApps()
+  const res = await getApps({ owner_scope: 'admin' })
   apps.value = res.data || []
   await normalizeSelectedAppId()
   specForm.app_id = queryParams.app_id
@@ -2052,7 +2052,10 @@ onMounted(loadApps)
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: nowrap;
 }
 
 .hero-actions {
@@ -2061,6 +2064,7 @@ onMounted(loadApps)
 }
 
 .hero-actions :deep(.el-button) {
+  flex: 0 0 auto;
   white-space: nowrap;
 }
 
@@ -2350,10 +2354,6 @@ html.dark .overview-item {
   .summary-metric-card {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     padding: 24px 16px;
-  }
-
-  .hero-actions {
-    flex-wrap: wrap;
   }
 
   .dialog-tip {

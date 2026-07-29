@@ -45,6 +45,7 @@ def test_page_contract_registry_covers_primary_admin_and_merchant_surfaces():
         "admin.batches.detail",
         "admin.merchants",
         "admin.merchants.detail",
+        "admin.merchants.scoped_batches",
         "admin.recharge_orders",
         "admin.devices",
     }.issubset(contract_ids)

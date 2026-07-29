@@ -19,10 +19,11 @@ export function login(data) {
 }
 
 // 获取应用列表
-export function getApps() {
+export function getApps(params = {}) {
   return request({
     url: '/admin/apps',
-    method: 'get'
+    method: 'get',
+    params
   })
 }
 

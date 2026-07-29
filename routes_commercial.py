@@ -9,6 +9,7 @@ from sqlalchemy import or_
 from sqlmodel import Session, select
 
 import routes_admin
+import routes_merchant
 from audit_service import (
     CONFIRM_TEXT_BY_SCOPE,
     audit_log_payload,
@@ -332,6 +333,317 @@ async def get_merchant_detail(
             "usage_users": [_usage_user_payload(user, visible_apps) for user in usage_users],
         },
     }
+
+
+def _get_admin_scoped_merchant_or_404(
+    session: Session,
+    merchant_id: int,
+    current_user: dict,
+) -> EndUser:
+    _require_admin(current_user)
+    merchant = session.get(EndUser, merchant_id)
+    if not merchant or merchant.app_id is not None:
+        raise HTTPException(status_code=404, detail="Merchant not found")
+    return merchant
+
+
+def _merchant_batch_apps(session: Session, merchant: EndUser) -> list[dict]:
+    self_apps = session.exec(
+        select(App)
+        .where((App.owner_user_id == merchant.id) | (App.created_by == merchant.username))
+        .order_by(App.id.desc())
+    ).all()
+    authorizations = session.exec(
+        select(UserAppAuthorization)
+        .where(UserAppAuthorization.user_id == merchant.id)
+        .order_by(UserAppAuthorization.id.desc())
+    ).all()
+    authorized_app_ids = [authorization.app_id for authorization in authorizations]
+    authorized_apps = session.exec(
+        select(App).where(App.app_id.in_(authorized_app_ids)).order_by(App.id.desc())
+    ).all() if authorized_app_ids else []
+    app_by_id = {app.app_id: app for app in authorized_apps}
+
+    items = [_merchant_detail_app_payload(app, source="self_owned") for app in self_apps]
+    items.extend(
+        _merchant_detail_app_payload(
+            app_by_id[authorization.app_id],
+            source="admin_authorized",
+            authorization=authorization,
+        )
+        for authorization in authorizations
+        if authorization.app_id in app_by_id
+    )
+    return items
+
+
+@router.get("/merchants/{merchant_id}/batch-apps", summary="List batch-manageable apps for a merchant")
+async def list_admin_scoped_merchant_batch_apps(
+    merchant_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    items = _merchant_batch_apps(session, merchant)
+    return {"success": True, "data": items, "items": items}
+
+
+@router.get("/merchants/{merchant_id}/quotas", summary="Get merchant quota as admin")
+async def get_admin_scoped_merchant_quotas(
+    merchant_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.get_merchant_quotas(current_user=merchant, session=session)
+
+
+@router.get("/merchants/{merchant_id}/apps/{app_id}/specs", summary="List merchant app specs as admin")
+async def list_admin_scoped_merchant_app_specs(
+    merchant_id: int,
+    app_id: str,
+    kami_type: Optional[str] = Query(None),
+    spec_group: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.list_merchant_app_specs(
+        app_id,
+        kami_type=kami_type,
+        spec_group=spec_group,
+        keyword=keyword,
+        current_user=merchant,
+        session=session,
+    )
+
+
+@router.post("/merchants/{merchant_id}/apps/{app_id}/specs", summary="Create merchant app spec as admin")
+async def create_admin_scoped_merchant_app_spec(
+    merchant_id: int,
+    app_id: str,
+    payload: routes_merchant.MerchantSpecCreateRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.create_merchant_app_spec(app_id, payload, current_user=merchant, session=session)
+
+
+@router.put("/merchants/{merchant_id}/apps/{app_id}/specs/{spec_id}", summary="Update merchant app spec as admin")
+async def update_admin_scoped_merchant_app_spec(
+    merchant_id: int,
+    app_id: str,
+    spec_id: int,
+    payload: routes_merchant.MerchantSpecUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.update_merchant_app_spec(app_id, spec_id, payload, current_user=merchant, session=session)
+
+
+@router.delete("/merchants/{merchant_id}/apps/{app_id}/specs/{spec_id}", summary="Delete merchant app spec as admin")
+async def delete_admin_scoped_merchant_app_spec(
+    merchant_id: int,
+    app_id: str,
+    spec_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.delete_merchant_app_spec(app_id, spec_id, current_user=merchant, session=session)
+
+
+@router.post("/merchants/{merchant_id}/apps/{app_id}/kamis/preview", summary="Preview merchant kami issue as admin")
+async def preview_admin_scoped_merchant_kamis(
+    merchant_id: int,
+    app_id: str,
+    payload: routes_merchant.MerchantKamiIssueRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.preview_merchant_kamis(app_id, payload, current_user=merchant, session=session)
+
+
+@router.post("/merchants/{merchant_id}/apps/{app_id}/kamis/batch", summary="Issue merchant kamis as admin")
+async def issue_admin_scoped_merchant_kamis(
+    merchant_id: int,
+    app_id: str,
+    payload: routes_merchant.MerchantKamiIssueRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.issue_merchant_kamis(app_id, payload, current_user=merchant, session=session)
+
+
+@router.get("/merchants/{merchant_id}/apps/{app_id}/batches", summary="List merchant batches as admin")
+async def list_admin_scoped_merchant_batches(
+    merchant_id: int,
+    app_id: str,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.list_merchant_batches(app_id, current_user=merchant, session=session)
+
+
+@router.get("/merchants/{merchant_id}/kamis/export", summary="Export merchant kamis as admin")
+async def export_admin_scoped_merchant_kamis(
+    merchant_id: int,
+    app_id: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    batch_no: Optional[str] = Query(None),
+    spec_id: Optional[int] = Query(None),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.export_merchant_kamis(
+        app_id=app_id,
+        keyword=keyword,
+        status=status,
+        batch_no=batch_no,
+        spec_id=spec_id,
+        current_user=merchant,
+        session=session,
+    )
+
+
+@router.get("/merchants/{merchant_id}/kamis", summary="List merchant kamis as admin")
+async def list_admin_scoped_merchant_kamis(
+    merchant_id: int,
+    app_id: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    batch_no: Optional[str] = Query(None),
+    spec_id: Optional[int] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.list_merchant_global_kamis(
+        app_id=app_id,
+        keyword=keyword,
+        status=status,
+        batch_no=batch_no,
+        spec_id=spec_id,
+        page=page,
+        page_size=page_size,
+        current_user=merchant,
+        session=session,
+    )
+
+
+@router.post("/merchants/{merchant_id}/kamis/delete", summary="Delete merchant kamis as admin")
+async def delete_admin_scoped_merchant_kamis(
+    merchant_id: int,
+    payload: routes_merchant.MerchantKamiDeleteRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.delete_merchant_kamis(payload, current_user=merchant, session=session)
+
+
+@router.get("/merchants/{merchant_id}/kami-specs/{spec_id}/batches", summary="List merchant spec batches as admin")
+async def list_admin_scoped_merchant_spec_batches(
+    merchant_id: int,
+    spec_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.list_merchant_spec_batches(spec_id, current_user=merchant, session=session)
+
+
+@router.get("/merchants/{merchant_id}/kami-specs/{spec_id}/kamis", summary="List merchant spec kamis as admin")
+async def list_admin_scoped_merchant_spec_kamis(
+    merchant_id: int,
+    spec_id: int,
+    keyword: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    batch_no: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.list_merchant_spec_kamis(
+        spec_id,
+        keyword=keyword,
+        status=status,
+        batch_no=batch_no,
+        page=page,
+        page_size=page_size,
+        current_user=merchant,
+        session=session,
+    )
+
+
+@router.get("/merchants/{merchant_id}/batches/{batch_id}/kamis", summary="List merchant batch kamis as admin")
+async def list_admin_scoped_merchant_batch_kamis(
+    merchant_id: int,
+    batch_id: int,
+    keyword: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.list_merchant_batch_kamis(
+        batch_id,
+        keyword=keyword,
+        status=status,
+        page=page,
+        page_size=page_size,
+        current_user=merchant,
+        session=session,
+    )
+
+
+@router.put("/merchants/{merchant_id}/batches/{batch_id}", summary="Update merchant batch as admin")
+async def update_admin_scoped_merchant_batch(
+    merchant_id: int,
+    batch_id: int,
+    payload: routes_merchant.MerchantBatchUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.update_merchant_batch(batch_id, payload, current_user=merchant, session=session)
+
+
+@router.delete("/merchants/{merchant_id}/batches/{batch_id}", summary="Delete merchant batch as admin")
+async def delete_admin_scoped_merchant_batch(
+    merchant_id: int,
+    batch_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.delete_merchant_batch(batch_id, current_user=merchant, session=session)
+
+
+@router.post("/merchants/{merchant_id}/batches/{batch_id}/append", summary="Append merchant batch as admin")
+async def append_admin_scoped_merchant_batch_kamis(
+    merchant_id: int,
+    batch_id: int,
+    payload: routes_merchant.MerchantBatchAppendRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.append_merchant_batch_kamis(batch_id, payload, current_user=merchant, session=session)
 
 
 @router.get("/overview", summary="Commercial operations overview")

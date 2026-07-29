@@ -62,6 +62,7 @@ logs/
 backups/
 ob/
 qa-artifacts/
+uploads/
 *.tar
 *.tar.gz
 
