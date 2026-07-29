@@ -11,6 +11,7 @@
 
       <el-menu
         :default-active="activeMenu"
+        :default-openeds="openMenuIndexes"
         :collapse="collapsed"
         :collapse-transition="true"
         :router="true"
@@ -60,8 +61,8 @@
           />
           <el-dropdown trigger="click" @command="handleCommand">
             <span class="user-pill">
-              <el-avatar :size="32" class="user-avatar">
-                <el-icon><User /></el-icon>
+              <el-avatar :size="32" :src="userAvatarUrl" class="user-avatar">
+                {{ userAvatarText }}
               </el-avatar>
               <span class="user-name">{{ userStore.userInfo?.username || roleLabel }}</span>
               <el-icon class="el-icon--right"><ArrowDown /></el-icon>
@@ -128,6 +129,17 @@ const roleLabel = computed(() => (isMerchant.value ? '发卡用户' : '管理员
 const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => route.meta?.title || shellTitle.value)
 const isDark = computed(() => themeStore.isDark)
+const userAvatarUrl = computed(() => userStore.userInfo?.avatar_url || '')
+const userAvatarText = computed(() => String(userStore.userInfo?.username || roleLabel.value).slice(0, 1).toUpperCase())
+const openMenuIndexes = computed(() => {
+  const base = isMerchant.value ? '/merchant' : '/admin'
+  const items = []
+  if (route.path.startsWith(`${base}/apps`)) items.push(`${base}/apps`)
+  if (route.path.startsWith(`${base}/kamis`)) items.push(`${base}/kamis`)
+  if (route.path.startsWith(`${base}/interfaces`)) items.push(`${base}/interfaces`)
+  if (route.path.startsWith(`${base}/account`)) items.push(`${base}/account`)
+  return items
+})
 
 const adminMenuItems = [
   { index: '/admin/dashboard', label: '运营总览', icon: DataAnalysis },
@@ -161,6 +173,15 @@ const adminMenuItems = [
   { index: '/admin/devices', label: '设备管理', icon: Monitor },
   { index: '/admin/end-users', label: '使用用户管理', icon: User },
   { index: '/admin/users', label: '管理员账号管理', icon: UserFilled },
+  {
+    index: '/admin/account',
+    label: '账号设置',
+    icon: User,
+    children: [
+      { index: '/admin/account/profile', label: '基本信息', icon: User },
+      { index: '/admin/account/password', label: '修改密码', icon: Key }
+    ]
+  },
   { index: '/admin/logs', label: '事件日志', icon: Document },
   {
     index: '/admin/interfaces',
@@ -199,7 +220,15 @@ const merchantMenuItems = [
     ]
   },
   { index: '/merchant/devices', label: '设备记录', icon: Monitor },
-  { index: '/merchant/account', label: '账号设置', icon: User }
+  {
+    index: '/merchant/account',
+    label: '账号设置',
+    icon: User,
+    children: [
+      { index: '/merchant/account/profile', label: '基本信息', icon: User },
+      { index: '/merchant/account/password', label: '修改密码', icon: Key }
+    ]
+  }
 ]
 
 const menuItems = computed(() => (isMerchant.value ? merchantMenuItems : adminMenuItems))

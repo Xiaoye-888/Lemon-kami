@@ -109,9 +109,9 @@
                             <el-tooltip content="编辑策略" placement="top">
                               <el-button size="small" plain :icon="EditPen" @click="handleEditSpec(variant)">编辑</el-button>
                             </el-tooltip>
-                            <el-tooltip :content="(variant.batch_count || 0) === 0 ? '删除空策略' : '有批次时不可删除'" placement="top">
+                            <el-tooltip :content="canDeleteSpecGroup(variant) ? '删除空策略' : '该规格下仍有批次或卡密，无法删除'" placement="top">
                               <span class="tooltip-action-wrap">
-                                <el-button size="small" type="danger" plain :icon="Delete" :disabled="(variant.batch_count || 0) > 0" @click="handleDeleteSpec(variant)">删除</el-button>
+                                <el-button size="small" type="danger" plain :icon="Delete" :disabled="!canDeleteSpecGroup(variant)" @click="handleDeleteSpec(variant)">删除</el-button>
                               </span>
                             </el-tooltip>
                           </div>
@@ -174,7 +174,7 @@
                     <el-tooltip content="编辑默认策略" placement="top">
                       <el-button size="small" plain :icon="EditPen" @click="handleEditSpecGroup(row)">编辑</el-button>
                     </el-tooltip>
-                    <el-tooltip :content="canDeleteSpecGroup(row) ? '删除空规格' : '有批次时不可删除'" placement="top">
+                    <el-tooltip :content="canDeleteSpecGroup(row) ? '删除空规格' : '该规格下仍有批次或卡密，无法删除'" placement="top">
                       <span class="tooltip-action-wrap">
                         <el-button size="small" type="danger" plain :icon="Delete" :disabled="!canDeleteSpecGroup(row)" @click="handleDeleteSpecGroup(row)">删除</el-button>
                       </span>
@@ -243,9 +243,9 @@
                             <el-tooltip content="编辑策略" placement="top">
                               <el-button size="small" plain :icon="EditPen" @click="handleEditSpec(variant)">编辑</el-button>
                             </el-tooltip>
-                            <el-tooltip :content="(variant.batch_count || 0) === 0 ? '删除空策略' : '有批次时不可删除'" placement="top">
+                            <el-tooltip :content="canDeleteSpecGroup(variant) ? '删除空策略' : '该规格下仍有批次或卡密，无法删除'" placement="top">
                               <span class="tooltip-action-wrap">
-                                <el-button size="small" type="danger" plain :icon="Delete" :disabled="(variant.batch_count || 0) > 0" @click="handleDeleteSpec(variant)">删除</el-button>
+                                <el-button size="small" type="danger" plain :icon="Delete" :disabled="!canDeleteSpecGroup(variant)" @click="handleDeleteSpec(variant)">删除</el-button>
                               </span>
                             </el-tooltip>
                           </div>
@@ -308,7 +308,7 @@
                     <el-tooltip content="编辑默认策略" placement="top">
                       <el-button size="small" plain :icon="EditPen" @click="handleEditSpecGroup(row)">编辑</el-button>
                     </el-tooltip>
-                    <el-tooltip :content="canDeleteSpecGroup(row) ? '删除空规格' : '有批次时不可删除'" placement="top">
+                    <el-tooltip :content="canDeleteSpecGroup(row) ? '删除空规格' : '该规格下仍有批次或卡密，无法删除'" placement="top">
                       <span class="tooltip-action-wrap">
                         <el-button size="small" type="danger" plain :icon="Delete" :disabled="!canDeleteSpecGroup(row)" @click="handleDeleteSpecGroup(row)">删除</el-button>
                       </span>
@@ -345,7 +345,7 @@
             <el-button :icon="ArrowLeft" @click="backFromDetail">{{ viewMode === 'batch' && currentSpec ? '返回规格' : '返回批次管理' }}</el-button>
             <template v-if="viewMode === 'spec'">
               <el-button :icon="EditPen" @click="handleEditSpec(currentSpec)">编辑规格</el-button>
-              <el-button type="danger" plain :icon="Delete" :disabled="(currentSpec?.batch_count || 0) > 0" @click="handleDeleteSpec(currentSpec)">删除规格</el-button>
+              <el-button type="danger" plain :icon="Delete" :disabled="!canDeleteSpecGroup(currentSpec)" @click="handleDeleteSpec(currentSpec)">删除规格</el-button>
               <el-button type="primary" :icon="Plus" :disabled="!kamiGenerateEnabled" @click="showGenerateDialog(currentSpec)">生成卡密</el-button>
             </template>
             <template v-else>
@@ -1359,7 +1359,12 @@ const handleEditSpecGroup = (row) => {
   handleEditSpec(variant)
 }
 
-const canDeleteSpecGroup = (row) => (row?.batch_count || 0) === 0
+const canDeleteSpecGroup = (row) => {
+  if (!row) return false
+  if (typeof row.can_delete === 'boolean') return row.can_delete
+  if (typeof row.capabilities?.can_delete === 'boolean') return row.capabilities.can_delete
+  return (row.batch_count || 0) === 0 && (row.total_count || 0) === 0
+}
 
 const resetDetailAfterSpecDelete = (deletedIds) => {
   if (viewMode.value === 'spec' && deletedIds.includes(currentSpec.value?.id)) {
@@ -1373,7 +1378,7 @@ const resetDetailAfterSpecDelete = (deletedIds) => {
 const handleDeleteSpecGroup = async (row) => {
   if (!row) return
   if (!canDeleteSpecGroup(row)) {
-    ElMessage.warning('该规格下已有批次，请先迁移或删除批次后再删除规格')
+    ElMessage.warning('该规格下仍有批次或卡密，无法删除')
     return
   }
   const variants = (row.variants?.length ? row.variants : [getDefaultVariant(row)]).filter(Boolean)
@@ -1384,7 +1389,7 @@ const handleDeleteSpecGroup = async (row) => {
   const deletedIds = variants.map((variant) => variant.id)
   try {
     await ElMessageBox.confirm(
-      `确定删除规格「${row.spec_name}」吗？该规格下没有批次，将同时删除 ${variants.length} 个空绑定策略。`,
+      `确定删除规格「${row.spec_name}」吗？该规格下没有批次和卡密，将同时删除 ${variants.length} 个空绑定策略。`,
       '删除空规格',
       { type: 'warning' }
     )
@@ -1480,8 +1485,8 @@ const handleSaveSpec = async () => {
 
 const handleDeleteSpec = async (row) => {
   if (!row) return
-  if ((row.batch_count || 0) > 0) {
-    ElMessage.warning('该规格下已有批次，请先迁移或删除批次后再删除规格')
+  if (!canDeleteSpecGroup(row)) {
+    ElMessage.warning('该规格下仍有批次或卡密，无法删除')
     return
   }
   try {

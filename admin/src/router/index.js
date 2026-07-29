@@ -24,7 +24,16 @@ const adminChildren = [
   { path: 'users', name: 'Users', component: () => import('../views/Users.vue'), meta: { title: '账号管理' } },
   { path: 'end-users', name: 'EndUsers', component: () => import('../views/EndUsers.vue'), meta: { title: '用户管理' } },
   { path: 'interfaces/new', name: 'InterfaceCreate', component: () => import('../views/InterfaceCreate.vue'), meta: { title: '新增接口' } },
-  { path: 'interfaces/list', name: 'InterfaceList', component: () => import('../views/InterfaceList.vue'), meta: { title: '接口列表' } }
+  { path: 'interfaces/list', name: 'InterfaceList', component: () => import('../views/InterfaceList.vue'), meta: { title: '接口列表' } },
+  {
+    path: 'account',
+    redirect: '/admin/account/profile',
+    meta: { title: '账号设置' },
+    children: [
+      { path: 'profile', name: 'AdminAccountProfile', component: () => import('../views/AccountProfile.vue'), meta: { title: '基本信息' } },
+      { path: 'password', name: 'AdminAccountPassword', component: () => import('../views/AccountPassword.vue'), meta: { title: '修改密码' } }
+    ]
+  }
 ]
 
 const merchantChildren = [
@@ -38,7 +47,15 @@ const merchantChildren = [
   { path: 'batches', name: 'MerchantBatches', component: () => import('../views/MerchantBatches.vue'), meta: { title: '批次管理' } },
   { path: 'cards', name: 'MerchantCards', component: () => import('../views/MerchantCards.vue'), meta: { title: '我的卡密' } },
   { path: 'devices', name: 'MerchantDevices', component: () => import('../views/Devices.vue'), meta: { title: '设备记录' } },
-  { path: 'account', name: 'MerchantAccount', component: () => import('../views/MerchantAccount.vue'), meta: { title: '账号设置' } }
+  {
+    path: 'account',
+    redirect: '/merchant/account/profile',
+    meta: { title: '账号设置' },
+    children: [
+      { path: 'profile', name: 'MerchantAccountProfile', component: () => import('../views/AccountProfile.vue'), meta: { title: '基本信息' } },
+      { path: 'password', name: 'MerchantAccountPassword', component: () => import('../views/AccountPassword.vue'), meta: { title: '修改密码' } }
+    ]
+  }
 ]
 
 const legacyAdminRedirects = [

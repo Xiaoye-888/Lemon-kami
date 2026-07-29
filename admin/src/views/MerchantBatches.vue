@@ -129,7 +129,7 @@
                                 <el-button size="small" plain :icon="EditPen" :disabled="!variant.is_editable" @click="handleEditSpecGroup(variant)">编辑</el-button>
                               </span>
                             </el-tooltip>
-                            <el-tooltip :content="canDeleteSpecGroup(variant) ? '删除空规格' : '有批次时不可删除'" placement="top">
+                            <el-tooltip :content="canDeleteSpecGroup(variant) ? '删除空规格' : '该规格下仍有批次或卡密，无法删除'" placement="top">
                               <span class="tooltip-action-wrap">
                                 <el-button size="small" type="danger" plain :icon="Delete" :disabled="!canDeleteSpecGroup(variant)" @click="handleDeleteSpecGroup(variant)">删除</el-button>
                               </span>
@@ -196,7 +196,7 @@
                         <el-button size="small" plain :icon="EditPen" :disabled="!canEditSpecGroup(row)" @click="handleEditSpecGroup(row)">编辑</el-button>
                       </span>
                     </el-tooltip>
-                    <el-tooltip :content="canDeleteSpecGroup(row) ? '删除空规格' : '有批次时不可删除'" placement="top">
+                    <el-tooltip :content="canDeleteSpecGroup(row) ? '删除空规格' : '该规格下仍有批次或卡密，无法删除'" placement="top">
                       <span class="tooltip-action-wrap">
                         <el-button size="small" type="danger" plain :icon="Delete" :disabled="!canDeleteSpecGroup(row)" @click="handleDeleteSpecGroup(row)">删除</el-button>
                       </span>
@@ -267,7 +267,7 @@
                                 <el-button size="small" plain :icon="EditPen" :disabled="!variant.is_editable" @click="handleEditSpecGroup(variant)">编辑</el-button>
                               </span>
                             </el-tooltip>
-                            <el-tooltip :content="canDeleteSpecGroup(variant) ? '删除空规格' : '有批次时不可删除'" placement="top">
+                            <el-tooltip :content="canDeleteSpecGroup(variant) ? '删除空规格' : '该规格下仍有批次或卡密，无法删除'" placement="top">
                               <span class="tooltip-action-wrap">
                                 <el-button size="small" type="danger" plain :icon="Delete" :disabled="!canDeleteSpecGroup(variant)" @click="handleDeleteSpecGroup(variant)">删除</el-button>
                               </span>
@@ -334,7 +334,7 @@
                         <el-button size="small" plain :icon="EditPen" :disabled="!canEditSpecGroup(row)" @click="handleEditSpecGroup(row)">编辑</el-button>
                       </span>
                     </el-tooltip>
-                    <el-tooltip :content="canDeleteSpecGroup(row) ? '删除空规格' : '有批次时不可删除'" placement="top">
+                    <el-tooltip :content="canDeleteSpecGroup(row) ? '删除空规格' : '该规格下仍有批次或卡密，无法删除'" placement="top">
                       <span class="tooltip-action-wrap">
                         <el-button size="small" type="danger" plain :icon="Delete" :disabled="!canDeleteSpecGroup(row)" @click="handleDeleteSpecGroup(row)">删除</el-button>
                       </span>
@@ -1435,8 +1435,10 @@ function canEditSpecGroup(row) {
 }
 
 function canDeleteSpecGroup(row) {
-  const variants = getSpecVariants(row)
-  return variants.length > 0 && variants.every((variant) => variant.is_editable !== false && (variant.batch_count || 0) === 0)
+  if (!row) return false
+  if (typeof row.can_delete === 'boolean') return row.can_delete
+  if (typeof row.capabilities?.can_delete === 'boolean') return row.capabilities.can_delete
+  return row.is_editable !== false && (row.batch_count || 0) === 0 && (row.total_count || 0) === 0
 }
 
 function pricingLabel(value) {
@@ -1858,10 +1860,10 @@ async function handleDeleteSpecGroup(row) {
     return
   }
   if (!canDeleteSpecGroup(row)) {
-    ElMessage.warning('有批次时不可删除')
+    ElMessage.warning('该规格下仍有批次或卡密，无法删除')
     return
   }
-  await ElMessageBox.confirm(`确认删除规格「${row.spec_name}」吗？该规格下没有批次，将同时删除 ${variants.length} 个空绑定策略。`, '删除规格', {
+  await ElMessageBox.confirm(`确认删除规格「${row.spec_name}」吗？该规格下没有批次和卡密，将同时删除 ${variants.length} 个空绑定策略。`, '删除规格', {
     type: 'warning'
   })
   for (const variant of variants) {

@@ -25,6 +25,8 @@ from models import (
     Kami,
     KamiBatch,
     KamiDeviceBinding,
+    KamiStatus,
+    KamiType,
     RechargeChannel,
     RechargeBonusRule,
     RechargeMode,
@@ -304,6 +306,74 @@ def test_merchant_profile_update_syncs_visible_profile_and_cached_relations():
                 select(UserAppAuthorization).where(UserAppAuthorization.app_id == authorized_app.app_id)
             ).one()
             assert authorization.username == "merchant-renamed"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_and_merchant_account_profile_password_and_avatar_routes_round_trip():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_auth.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        admin = AdminUser(username="admin-route", password_hash=hash_password("admin-pass"), is_admin=True, status=1)
+        merchant = EndUser(username="merchant-route", password_hash=hash_password("merchant-pass"), status=1)
+        session.add_all([admin, merchant])
+        session.commit()
+        session.refresh(admin)
+        session.refresh(merchant)
+
+    admin_token = routes_admin.create_access_token({"sub": admin.username, "user_id": admin.id, "is_admin": True})
+    merchant_token = routes_user.create_user_access_token(merchant)
+
+    try:
+        admin_me = client.get("/api/v1/admin/me", headers=auth_headers(admin_token))
+        assert admin_me.status_code == 200
+        assert admin_me.json()["data"]["role"] == "admin"
+        assert admin_me.json()["data"]["avatar_url"] is None
+
+        password_reject = client.put(
+            "/api/v1/admin/me/password",
+            headers=auth_headers(admin_token),
+            json={"old_password": "wrong-pass", "new_password": "new-admin-pass"},
+        )
+        assert password_reject.status_code == 400
+
+        password_update = client.put(
+            "/api/v1/admin/me/password",
+            headers=auth_headers(admin_token),
+            json={"old_password": "admin-pass", "new_password": "new-admin-pass"},
+        )
+        assert password_update.status_code == 200
+
+        relogin = client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin-route", "password": "new-admin-pass"},
+        )
+        assert relogin.status_code == 200
+        assert relogin.json()["user_info"]["avatar_url"] is None
+
+        merchant_avatar = client.post(
+            "/api/v1/merchant/me/avatar",
+            headers=auth_headers(merchant_token),
+            files={"avatar_file": ("avatar.png", b"fake-png-data", "image/png")},
+        )
+        assert merchant_avatar.status_code == 200
+        avatar_url = merchant_avatar.json()["data"]["avatar_url"]
+        assert avatar_url.startswith("/api/v1/profile/avatars/")
+
+        served_avatar = client.get(avatar_url)
+        assert served_avatar.status_code == 200
+        assert served_avatar.headers["content-type"].startswith("image/png")
+
+        merchant_me = client.get("/api/v1/merchant/me", headers=auth_headers(merchant_token))
+        assert merchant_me.status_code == 200
+        assert merchant_me.json()["data"]["role"] == "merchant"
+        assert merchant_me.json()["data"]["avatar_url"] == avatar_url
     finally:
         fastapi_app.dependency_overrides.clear()
 
@@ -1782,6 +1852,42 @@ def test_merchant_self_owned_specs_are_manageable_and_authorized_specs_are_read_
 
         deleted = client.delete(f"/api/v1/merchant/apps/app_spec_self/specs/{spec_id}", headers=auth_headers(token))
         assert deleted.status_code == 200
+
+        blocking_spec = KamiSpec(
+            app_id="app_spec_self",
+            spec_key="blocking",
+            spec_name="Blocking Spec",
+            kami_type=KamiType.points,
+            points_amount=66,
+            status=1,
+        )
+        session.add(blocking_spec)
+        session.commit()
+        session.refresh(blocking_spec)
+        session.add(
+            Kami(
+                app_id="app_spec_self",
+                spec_id=blocking_spec.id,
+                kami_code="BLOCK-001",
+                kami_type=KamiType.points,
+                status=KamiStatus.unused,
+                created_by_user_id=merchant.id,
+            )
+        )
+        session.commit()
+
+        blocked_list = client.get("/api/v1/merchant/apps/app_spec_self/specs", headers=auth_headers(token))
+        assert blocked_list.status_code == 200
+        blocked_items = blocked_list.json()["data"]["items"]
+        blocked_item = next(item for item in blocked_items if item["id"] == blocking_spec.id)
+        assert blocked_item["capabilities"]["can_delete"] is False
+
+        blocked_delete = client.delete(
+            f"/api/v1/merchant/apps/app_spec_self/specs/{blocking_spec.id}",
+            headers=auth_headers(token),
+        )
+        assert blocked_delete.status_code == 400
+        assert blocked_delete.json()["detail"] == "规格下仍有批次或卡密，无法删除"
 
         authorized_list = client.get("/api/v1/merchant/apps/app_spec_authorized/specs", headers=auth_headers(token))
         assert authorized_list.status_code == 200

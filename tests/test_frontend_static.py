@@ -590,41 +590,46 @@ def test_commercial_recharge_pages_expose_order_review_and_upload_flow():
     assert "customPreview" in merchant_recharge
 
 
-def test_merchant_account_route_uses_dedicated_account_page():
+def test_account_routes_use_shared_profile_and_password_pages():
     router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")
-    account_view_path = PROJECT_ROOT / "admin/src/views/MerchantAccount.vue"
-    merchant_api = (PROJECT_ROOT / "admin/src/api/merchant.js").read_text(encoding="utf-8")
+    profile_view_path = PROJECT_ROOT / "admin/src/views/AccountProfile.vue"
+    password_view_path = PROJECT_ROOT / "admin/src/views/AccountPassword.vue"
 
-    assert account_view_path.exists()
+    assert profile_view_path.exists()
+    assert password_view_path.exists()
 
+    admin_routes = router.split("const adminChildren = [", 1)[1].split("]\n\nconst merchantChildren", 1)[0]
     merchant_routes = router.split("const merchantChildren = [", 1)[1].split("]\n\nconst legacyAdminRedirects", 1)[0]
-    account_route = re.search(r"\{\s*path:\s*'account'.*?\}", merchant_routes, re.S)
 
-    assert account_route is not None
-    assert "../views/MerchantAccount.vue" in account_route.group(0)
-    assert "../views/MerchantDashboard.vue" not in account_route.group(0)
+    for routes_block in (admin_routes, merchant_routes):
+        account_route = re.search(r"\{\s*path:\s*'account'.*?\}\n\s*\]", routes_block, re.S)
+        assert account_route is not None
+        account_block = account_route.group(0)
+        assert "AccountProfile.vue" in account_block
+        assert "AccountPassword.vue" in account_block
+        assert "MerchantAccount.vue" not in account_block
+        assert "path: 'profile'" in account_block
+        assert "path: 'password'" in account_block
 
-    account_view = account_view_path.read_text(encoding="utf-8")
-    assert "getMerchantMe" in account_view
-    assert "updateMerchantMe" in merchant_api
-    assert "\u8d26\u53f7\u8bbe\u7f6e" in account_view
-    assert "\u57fa\u672c\u4fe1\u606f" in account_view
-    assert "资料编辑" in account_view
-    assert "class=\"panel-header\"" in account_view
-    assert "@click=\"openEditDialog\"" in account_view
-    assert 'v-model="editDialogVisible"' in account_view
-    assert "<el-dialog" in account_view
-    assert "安全设置" in account_view
-    assert "密码和头像" in account_view
-    assert 'v-model="form.username"' in account_view
-    assert 'v-model="form.email"' in account_view
-    assert 'v-model="form.phone"' in account_view
-    assert 'v-model="form.password"' not in account_view
-    assert 'v-model="form.avatar"' not in account_view
-    assert 'class="side-stack"' not in account_view
-    assert '<template #header>资料编辑</template>' not in account_view
-    assert 'class="form-actions"' not in account_view
-    assert "\u5546\u6237\u63a7\u5236\u53f0" not in account_view
+    profile_view = profile_view_path.read_text(encoding="utf-8")
+    password_view = password_view_path.read_text(encoding="utf-8")
+    assert "getCurrentAccountProfile" in profile_view
+    assert "updateCurrentAccountProfile" in profile_view
+    assert "uploadCurrentAccountAvatar" in profile_view
+    assert "openEditDialog" in profile_view
+    assert "handleAvatarUpload" in profile_view
+    assert "资料编辑" in profile_view
+    assert "基本信息" in profile_view
+    assert "安全设置" not in profile_view
+    assert "原密码" not in profile_view
+    assert "新密码" not in profile_view
+    assert "updateCurrentAccountPassword" in password_view
+    assert "原密码" in password_view
+    assert "新密码" in password_view
+    assert "确认新密码" in password_view
+    assert "上传头像" not in password_view
+    assert "基本信息" not in password_view
+    assert "安全设置" not in password_view
 
 
 def test_merchant_recharge_channel_radios_use_value_prop():
@@ -645,8 +650,8 @@ def test_merchant_recharge_layout_places_amount_left_and_payment_right():
     assert "justify-content: start" in merchant_recharge
     assert "minmax(0, 1fr)" not in merchant_recharge.split(".recharge-grid", 1)[1].split("}", 1)[0]
 
-def test_merchant_views_format_all_visible_time_columns():
-    merchant_account = (PROJECT_ROOT / "admin/src/views/MerchantAccount.vue").read_text(encoding="utf-8")
+def test_account_profile_view_formats_visible_time_columns():
+    merchant_account = (PROJECT_ROOT / "admin/src/views/AccountProfile.vue").read_text(encoding="utf-8")
     merchant_dashboard = (PROJECT_ROOT / "admin/src/views/MerchantDashboard.vue").read_text(encoding="utf-8")
     merchant_orders = (PROJECT_ROOT / "admin/src/views/MerchantOrders.vue").read_text(encoding="utf-8")
     merchant_transactions = (PROJECT_ROOT / "admin/src/views/MerchantTransactions.vue").read_text(encoding="utf-8")
@@ -664,6 +669,8 @@ def test_merchant_views_format_all_visible_time_columns():
     assert "formatOptionalTime" in merchant_cards
     assert "profile.created_at || '-'" not in merchant_account
     assert "profile.last_login || '-'" not in merchant_account
+    assert "安全设置" not in merchant_account
+    assert "uploadCurrentAccountAvatar" in merchant_account
 
 
 def test_merchant_cards_render_chinese_type_and_status_tags():

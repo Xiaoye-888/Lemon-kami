@@ -57,6 +57,7 @@ def _merchant_user_info(user: EndUser) -> dict:
         "username": user.username,
         "email": user.email,
         "phone": user.phone,
+        "avatar_url": user.avatar_url,
         "role": "merchant",
         "status": user.status,
         "last_login": to_api_beijing_iso(user.last_login, naive="civil")
@@ -107,6 +108,8 @@ async def shared_login(
                 "id": admin.id,
                 "username": admin.username,
                 "email": admin.email,
+                "phone": admin.phone,
+                "avatar_url": admin.avatar_url,
                 "is_admin": admin.is_admin,
                 "role": "admin",
                 "last_login": to_api_beijing_iso(admin.last_login, naive="civil")
@@ -133,16 +136,17 @@ async def shared_login(
         "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         "role": "merchant",
         "redirect": "/merchant/dashboard",
-        "user_info": {
-            "id": merchant.id,
-            "username": merchant.username,
-            "email": merchant.email,
-            "phone": merchant.phone,
-            "role": "merchant",
-            "status": merchant.status,
-            "last_login": to_api_beijing_iso(merchant.last_login, naive="civil")
-            if merchant.last_login
-            else None,
+            "user_info": {
+                "id": merchant.id,
+                "username": merchant.username,
+                "email": merchant.email,
+                "phone": merchant.phone,
+                "avatar_url": merchant.avatar_url,
+                "role": "merchant",
+                "status": merchant.status,
+                "last_login": to_api_beijing_iso(merchant.last_login, naive="civil")
+                if merchant.last_login
+                else None,
         },
     }
 

@@ -13,6 +13,7 @@ from sqlalchemy import or_
 from sqlmodel import Session, select
 
 import routes_user
+from auth_utils import hash_password, verify_password
 from commercial_service import (
     calculate_recharge_preview,
     cancel_recharge_order,
@@ -43,6 +44,7 @@ from app_release_service import (
     notice_payload,
     version_payload,
 )
+from profile_service import avatar_public_url, save_avatar_upload
 from kami_query_service import (
     batch_stats_payload,
     kami_csv,
@@ -121,6 +123,12 @@ class MerchantProfileUpdateRequest(BaseModel):
     username: str
     email: Optional[str] = None
     phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+
+class MerchantPasswordUpdateRequest(BaseModel):
+    old_password: str = PydanticField(..., min_length=6, max_length=128)
+    new_password: str = PydanticField(..., min_length=6, max_length=128)
 
 
 class MerchantAppCreateRequest(BaseModel):
@@ -709,6 +717,7 @@ def _merchant_spec_stats(session: Session, spec_id: int, user_id: int) -> dict:
 def _merchant_spec_payload(spec: KamiSpec, *, user: EndUser, is_editable: bool, stats: Optional[dict] = None) -> dict:
     payload = _spec_payload(spec)
     batch_count = 0
+    total_count = 0
     payload.update(
         {
             "is_editable": is_editable,
@@ -727,6 +736,7 @@ def _merchant_spec_payload(spec: KamiSpec, *, user: EndUser, is_editable: bool, 
     if stats:
         payload.update(stats)
     batch_count = int(payload.get("batch_count", 0) or 0)
+    total_count = int(payload.get("total_count", 0) or 0)
     capabilities = {
         "can_view": True,
         "can_manage": is_editable,
@@ -734,7 +744,7 @@ def _merchant_spec_payload(spec: KamiSpec, *, user: EndUser, is_editable: bool, 
         "can_view_batches": True,
         "can_view_kamis": True,
         "can_edit": is_editable,
-        "can_delete": is_editable and batch_count == 0,
+        "can_delete": is_editable and batch_count == 0 and total_count == 0,
     }
     payload["capabilities"] = capabilities
     payload.update(capabilities)
@@ -1056,6 +1066,7 @@ def _merchant_me_payload(user: EndUser) -> dict:
         "username": user.username,
         "email": user.email,
         "phone": user.phone,
+        "avatar_url": user.avatar_url,
         "role": "merchant",
         "status": user.status,
         "created_at": to_api_beijing_iso(user.created_at, naive="civil"),
@@ -1160,6 +1171,10 @@ async def update_merchant_me(
     if new_phone and not PHONE_RE.fullmatch(new_phone):
         raise HTTPException(status_code=400, detail="请输入有效手机号")
 
+    new_avatar_url = _normalize_optional_profile_text(payload.avatar_url, "头像URL", 512)
+    if new_avatar_url and not new_avatar_url.startswith("/api/v1/profile/avatars/"):
+        raise HTTPException(status_code=400, detail="头像URL无效")
+
     if new_username != current_user.username:
         username_exists = session.exec(
             select(EndUser).where(
@@ -1177,6 +1192,8 @@ async def update_merchant_me(
     current_user.username = new_username
     current_user.email = new_email
     current_user.phone = new_phone
+    if new_avatar_url is not None:
+        current_user.avatar_url = new_avatar_url
     session.add(current_user)
     _sync_merchant_profile_relations(session, current_user, old_username, new_username)
     session.commit()
@@ -1185,6 +1202,46 @@ async def update_merchant_me(
         "success": True,
         "message": "账号资料已更新",
         "data": _merchant_me_payload(current_user),
+    }
+
+
+@router.post("/me/avatar", summary="Upload merchant avatar")
+async def upload_merchant_avatar(
+    avatar_file: UploadFile = File(...),
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    try:
+        _, filename, _ = await save_avatar_upload(avatar_file, file_prefix=f"merchant_{current_user.id or current_user.username}")
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    current_user.avatar_url = avatar_public_url(filename)
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+    return {
+        "success": True,
+        "message": "头像已更新",
+        "data": _merchant_me_payload(current_user),
+    }
+
+
+@router.put("/me/password", summary="Update merchant password")
+async def update_merchant_password(
+    payload: MerchantPasswordUpdateRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    if not verify_password(payload.old_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="原密码不正确")
+    if payload.old_password == payload.new_password:
+        raise HTTPException(status_code=400, detail="新密码不能与原密码相同")
+    current_user.password_hash = hash_password(payload.new_password)
+    session.add(current_user)
+    session.commit()
+    return {
+        "success": True,
+        "message": "密码已更新",
     }
 
 
@@ -2288,7 +2345,7 @@ async def delete_merchant_app_spec(
     existing_batch = session.exec(select(KamiBatch).where(KamiBatch.spec_id == spec_id)).first()
     existing_kami = session.exec(select(Kami).where(Kami.spec_id == spec_id)).first()
     if existing_batch or existing_kami:
-        raise HTTPException(status_code=400, detail="spec still has batches or kamis")
+        raise HTTPException(status_code=400, detail="规格下仍有批次或卡密，无法删除")
     session.delete(spec)
     session.commit()
     return {"success": True, "message": "spec deleted"}

@@ -16,12 +16,14 @@ from routes_admin import router as admin_router
 from routes_auth import router as auth_router
 from routes_commercial import public_router as commercial_public_router
 from routes_commercial import router as commercial_router
+from routes_profile import router as profile_router
 from routes_user import router as user_router
 from routes_merchant import router as merchant_router
 from routes_ops import router as ops_router
 from routes_docs import router as docs_router
 from config import settings
 from commercial_service import ensure_upload_directories
+from profile_service import ensure_avatar_directories
 
 # 创建 logs 目录
 log_dir = "logs"
@@ -147,6 +149,7 @@ app.include_router(auth_router)
 app.include_router(admin_advanced_router)
 app.include_router(commercial_public_router)
 app.include_router(commercial_router)
+app.include_router(profile_router)
 app.include_router(admin_router)
 app.include_router(user_router)
 app.include_router(merchant_router)
@@ -163,6 +166,11 @@ async def startup_event():
         app_logger.info("Upload directories initialized successfully")
     except OSError as error:
         app_logger.warning("Upload directories are not available: %s", error)
+    try:
+        ensure_avatar_directories()
+        app_logger.info("Avatar directories initialized successfully")
+    except OSError as error:
+        app_logger.warning("Avatar directories are not available: %s", error)
     app_logger.info("✅ Database initialized successfully")
     app_logger.info(f"Application started in {'DEBUG' if settings.DEBUG else 'PRODUCTION'} mode")
     app_logger.info(f"Log file: {log_file}")

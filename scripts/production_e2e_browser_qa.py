@@ -426,6 +426,8 @@ def browser_routes():
             "/admin/devices",
             "/admin/end-users",
             "/admin/users",
+            "/admin/account/profile",
+            "/admin/account/password",
             "/admin/logs",
             "/admin/interfaces/new",
             "/admin/interfaces/list",
@@ -440,7 +442,8 @@ def browser_routes():
             "/merchant/batches",
             "/merchant/cards",
             "/merchant/devices",
-            "/merchant/account",
+            "/merchant/account/profile",
+            "/merchant/account/password",
         ],
     }
 

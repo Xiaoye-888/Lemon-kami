@@ -81,6 +81,7 @@ def _ensure_end_users_schema():
                     password_hash VARCHAR(255) NOT NULL,
                     email VARCHAR(255),
                     phone VARCHAR(64),
+                    avatar_url VARCHAR(512),
                     status INT DEFAULT 1,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     last_login DATETIME,
@@ -101,6 +102,28 @@ def _ensure_end_users_schema():
             conn.execute(text("ALTER TABLE end_users ADD COLUMN app_id VARCHAR(64) DEFAULT NULL"))
             conn.commit()
             conn.execute(text("CREATE INDEX idx_end_users_app_id ON end_users (app_id)"))
+            conn.commit()
+        if "avatar_url" not in columns:
+            conn.execute(text("ALTER TABLE end_users ADD COLUMN avatar_url VARCHAR(512) DEFAULT NULL"))
+            conn.commit()
+
+
+def _ensure_admin_users_schema():
+    """Backfill admin_users profile columns on existing MySQL databases."""
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        result = conn.execute(text("SHOW TABLES"))
+        existing_tables = [row[0] for row in result.fetchall()]
+        if "admin_users" not in existing_tables:
+            return
+
+        columns = {
+            row[0]
+            for row in conn.execute(text("SHOW COLUMNS FROM admin_users")).fetchall()
+        }
+        if "avatar_url" not in columns:
+            conn.execute(text("ALTER TABLE admin_users ADD COLUMN avatar_url VARCHAR(512) DEFAULT NULL"))
             conn.commit()
 
 
@@ -641,6 +664,17 @@ def _ensure_sqlite_schema():
                 conn.execute(text("ALTER TABLE end_users ADD COLUMN app_id VARCHAR(64) DEFAULT NULL"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_end_users_app_id ON end_users (app_id)"))
                 conn.commit()
+            if "avatar_url" not in columns:
+                conn.execute(text("ALTER TABLE end_users ADD COLUMN avatar_url VARCHAR(512) DEFAULT NULL"))
+                conn.commit()
+        if "admin_users" in tables:
+            columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(admin_users)")).fetchall()
+            }
+            if "avatar_url" not in columns:
+                conn.execute(text("ALTER TABLE admin_users ADD COLUMN avatar_url VARCHAR(512) DEFAULT NULL"))
+                conn.commit()
         if "apps" in tables:
             columns = {
                 row[1]
@@ -916,6 +950,7 @@ def _init_db_unlocked():
     wait_for_db()
 
     _ensure_end_users_schema()
+    _ensure_admin_users_schema()
     _ensure_mysql_apps_app_id_collation()
     debug_print(f"Using MySQL app_id collation: {models.MYSQL_APP_ID_COLLATION}")
     
@@ -947,6 +982,7 @@ def _init_db_unlocked():
                         password_hash VARCHAR(255) NOT NULL,
                         email VARCHAR(255),
                         phone VARCHAR(255),
+                        avatar_url VARCHAR(512),
                         is_admin BOOLEAN DEFAULT FALSE,
                         status INT DEFAULT 1,
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

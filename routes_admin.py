@@ -11,6 +11,7 @@ import json
 import csv
 import io
 import logging
+import re
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -22,7 +23,7 @@ def get_now():
     """获取当前中国时间"""
     return datetime.now(CST)
 from typing import Any, List, Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import or_
 from sqlmodel import Session, select
@@ -30,6 +31,7 @@ from auth_utils import hash_password, verify_password
 from audit_service import record_admin_audit, require_sensitive_confirmation
 from database import get_session
 from redis_client import get_redis
+from profile_service import avatar_public_url, save_avatar_upload
 from models import (
     App,
     AppNotice,
@@ -508,6 +510,18 @@ class SensitiveConfirmRequest(BaseModel):
     confirm_text: Optional[str] = None
 
 
+class AdminProfileUpdateRequest(BaseModel):
+    username: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+
+class AdminPasswordUpdateRequest(BaseModel):
+    old_password: str = PydanticField(..., min_length=6, max_length=128)
+    new_password: str = PydanticField(..., min_length=6, max_length=128)
+
+
 class KamiBatchCreateRequest(BaseModel):
     app_id: str = PydanticField(..., max_length=64)
     batch_no: str = PydanticField(..., min_length=1, max_length=64)
@@ -812,6 +826,160 @@ async def get_current_user(
     if not resolved_token:
         raise HTTPException(status_code=401, detail="Missing token")
     return verify_token(resolved_token)
+
+
+def _admin_me_payload(user: AdminUser) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "phone": user.phone,
+        "avatar_url": user.avatar_url,
+        "role": "admin",
+        "is_admin": user.is_admin,
+        "status": user.status,
+        "created_at": to_api_beijing_iso(user.created_at, naive="civil"),
+        "last_login": to_api_beijing_iso(user.last_login, naive="civil") if user.last_login else None,
+    }
+
+
+def _sync_admin_profile_relations(session: Session, old_username: str, new_username: str) -> None:
+    if old_username == new_username:
+        return
+
+    for app in session.exec(select(App).where(App.created_by == old_username)).all():
+        app.created_by = new_username
+        session.add(app)
+
+    for authorization in session.exec(select(AppAuthorization).where(AppAuthorization.granted_by == old_username)).all():
+        authorization.granted_by = new_username
+        session.add(authorization)
+
+
+def _normalize_optional_profile_text(value: Optional[str], field_name: str, max_length: int) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if len(normalized) > max_length:
+        raise HTTPException(status_code=400, detail=f"{field_name}长度不能超过 {max_length} 个字符")
+    return normalized
+
+
+def _get_current_admin_user(session: Session, current_user: dict) -> AdminUser:
+    if not current_user.get("is_admin", False):
+        raise HTTPException(status_code=403, detail="无权访问管理员资料")
+    user_id = current_user.get("user_id")
+    username = current_user.get("sub")
+    user = None
+    if user_id is not None:
+        try:
+            user = session.get(AdminUser, int(user_id))
+        except (TypeError, ValueError):
+            user = None
+    if not user and username:
+        user = session.exec(select(AdminUser).where(AdminUser.username == username)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if user.status != 1:
+        raise HTTPException(status_code=403, detail="账号已被禁用")
+    return user
+
+
+@router.get("/me", summary="Get current admin profile")
+async def get_admin_me(
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    user = _get_current_admin_user(session, current_user)
+    return {"success": True, "data": _admin_me_payload(user)}
+
+
+@router.put("/me", summary="Update current admin profile")
+async def update_admin_me(
+    payload: AdminProfileUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    user = _get_current_admin_user(session, current_user)
+    new_username = (payload.username or "").strip()
+    if len(new_username) < 3 or len(new_username) > 64:
+        raise HTTPException(status_code=400, detail="用户名长度需为 3 到 64 位")
+    if re.search(r"\s", new_username):
+        raise HTTPException(status_code=400, detail="用户名不能包含空格")
+
+    new_email = _normalize_optional_profile_text(payload.email, "邮箱", 255)
+    if new_email and not re.fullmatch(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", new_email):
+        raise HTTPException(status_code=400, detail="请输入有效邮箱")
+
+    new_phone = _normalize_optional_profile_text(payload.phone, "手机号", 32)
+    if new_phone and not re.fullmatch(r"^[0-9+\-\s()]{6,32}$", new_phone):
+        raise HTTPException(status_code=400, detail="请输入有效手机号")
+
+    new_avatar_url = _normalize_optional_profile_text(payload.avatar_url, "头像URL", 512)
+    if new_avatar_url and not new_avatar_url.startswith("/api/v1/profile/avatars/"):
+        raise HTTPException(status_code=400, detail="头像URL无效")
+
+    if new_username != user.username:
+        username_exists = session.exec(
+            select(AdminUser).where(
+                AdminUser.username == new_username,
+                AdminUser.id != user.id,
+            )
+        ).first()
+        if username_exists:
+            raise HTTPException(status_code=400, detail="用户名已被占用")
+        merchant_exists = session.exec(select(EndUser).where(EndUser.username == new_username)).first()
+        if merchant_exists:
+            raise HTTPException(status_code=400, detail="用户名已被发卡用户占用")
+
+    old_username = user.username
+    user.username = new_username
+    user.email = new_email
+    user.phone = new_phone
+    if new_avatar_url is not None:
+        user.avatar_url = new_avatar_url
+    session.add(user)
+    _sync_admin_profile_relations(session, old_username, new_username)
+    session.commit()
+    session.refresh(user)
+    return {"success": True, "message": "账号资料已更新", "data": _admin_me_payload(user)}
+
+
+@router.post("/me/avatar", summary="Upload current admin avatar")
+async def upload_admin_avatar(
+    avatar_file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    user = _get_current_admin_user(session, current_user)
+    try:
+        _, filename, _ = await save_avatar_upload(avatar_file, file_prefix=f"admin_{user.id or user.username}")
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    user.avatar_url = avatar_public_url(filename)
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return {"success": True, "message": "头像已更新", "data": _admin_me_payload(user)}
+
+
+@router.put("/me/password", summary="Update current admin password")
+async def update_admin_password(
+    payload: AdminPasswordUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    user = _get_current_admin_user(session, current_user)
+    if not verify_password(payload.old_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="原密码不正确")
+    if payload.old_password == payload.new_password:
+        raise HTTPException(status_code=400, detail="新密码不能与原密码相同")
+    user.password_hash = hash_password(payload.new_password)
+    session.add(user)
+    session.commit()
+    return {"success": True, "message": "密码已更新"}
 
 
 # ==================== 仪表盘接口 ====================
@@ -2357,10 +2525,19 @@ def _kami_spec_payload(spec: KamiSpec, stats: Optional[dict] = None) -> dict:
         "expired_count": 0,
         "redeemed_count": 0,
         "times_remaining_total": 0,
-        "points_remaining_total": 0,
-        "code_valid_days_values": [],
-        "code_validity_text": "-",
-    })
+            "points_remaining_total": 0,
+            "code_valid_days_values": [],
+            "code_validity_text": "-",
+        })
+    batch_count = int(payload.get("batch_count", 0) or 0)
+    total_count = int(payload.get("total_count", 0) or 0)
+    capabilities = {
+        "can_view": True,
+        "can_edit": True,
+        "can_delete": batch_count == 0 and total_count == 0,
+    }
+    payload["capabilities"] = capabilities
+    payload.update(capabilities)
     return payload
 
 
@@ -2729,7 +2906,7 @@ async def delete_kami_spec(
                 "has_batch": bool(existing_batch),
                 "has_kami": bool(existing_kami),
             },
-            error_message="kami spec still has batches or kamis",
+            error_message="规格下仍有批次或卡密",
             summary=f"删除卡密规格失败：{spec_name}",
         )
         raise HTTPException(status_code=400, detail="规格下仍有批次或卡密，请先删除批次和卡密后再删除规格。")
@@ -4799,6 +4976,8 @@ async def admin_login(
         "user_info": {
             "username": user.username,
             "email": user.email,
+            "phone": user.phone,
+            "avatar_url": user.avatar_url,
             "is_admin": user.is_admin,
             "last_login": to_api_beijing_iso(user.last_login, naive="civil")
             if user.last_login
