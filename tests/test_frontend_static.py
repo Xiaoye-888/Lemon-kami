@@ -1186,6 +1186,19 @@ def test_commercial_ops_stability_controls_are_exposed():
     assert "can_issue" in merchant_batches
 
 
+def test_admin_recharge_orders_use_status_scoped_actions_and_center_dialog():
+    admin_orders = (PROJECT_ROOT / "admin/src/views/AdminRechargeOrders.vue").read_text(encoding="utf-8")
+
+    assert "<el-drawer" not in admin_orders
+    assert '<el-dialog v-model="detailVisible"' in admin_orders
+    assert "visibleOrderActions(row)" in admin_orders
+    assert "visibleOrderActions(selectedOrder)" in admin_orders
+    assert "const orderActions" in admin_orders
+    assert "const terminalOrderActionByStatus" in admin_orders
+    assert "runOrderAction(row, action)" in admin_orders
+    assert "row.status !== 'pending_review'" not in admin_orders
+
+
 def test_admin_merchants_formats_visible_time_columns():
     admin_merchants = (PROJECT_ROOT / "admin/src/views/AdminMerchants.vue").read_text(encoding="utf-8")
 

@@ -670,24 +670,24 @@ PAGE_CONTRACTS = [
             region("toolbar", 'class="page-toolbar"'),
             region("filters", 'class="filters"'),
             region("orders-table", "<el-table"),
-            region("detail-drawer", 'v-model="detailVisible"'),
+            region("detail-dialog", '<el-dialog v-model="detailVisible"'),
             region("proof-dialog", 'v-model="proofVisible"'),
         ],
         "ordered_regions": [
             region("toolbar", 'class="page-toolbar"'),
             region("filters", 'class="filters"'),
             region("orders-table", "<el-table"),
-            region("detail-drawer", 'v-model="detailVisible"'),
+            region("detail-dialog", '<el-dialog v-model="detailVisible"'),
             region("proof-dialog", 'v-model="proofVisible"'),
         ],
         "card_groups": [
             card_group("detail-business-fields", ("selectedOrder.base_quota", "selectedOrder.bonus_quota", "selectedOrder.credit_quota", "selectedOrder.reject_reason")),
         ],
-        "forbidden_tokens": ["payment_snapshot", "preview_snapshot"],
+        "forbidden_tokens": ["payment_snapshot", "preview_snapshot", "<el-drawer", "drawer-actions"],
         "action_groups": [
             action_group("toolbar-actions", ("handleCleanupProofs", "loadOrders")),
-            action_group("row-actions", ("openDetail(row)", "handleApprove(row)", "handleReject(row)", "handleExpire(row)", "handleMarkAbnormal(row)")),
-            action_group("drawer-actions", ("openProof(selectedOrder)", "handleApprove(selectedOrder)", "handleReject(selectedOrder)", "handleExpire(selectedOrder)", "handleMarkAbnormal(selectedOrder)")),
+            action_group("row-actions", ("openDetail(row)", "visibleOrderActions(row)", "runOrderAction(row, action)")),
+            action_group("detail-dialog-actions", ("openProof(selectedOrder)", "visibleOrderActions(selectedOrder)", "runOrderAction(selectedOrder, action)")),
         ],
         "tables": [
             table("order-columns", ("订单号", "用户", "金额", "到账额度", "赠送额度", "支付渠道", "状态", "提交时间", "支付凭证", "操作"))

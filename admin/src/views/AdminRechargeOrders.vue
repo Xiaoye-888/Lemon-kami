@@ -45,49 +45,23 @@
             <el-button link type="primary" :disabled="!row.has_proof" @click="openProof(row)">查看</el-button>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="390" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" plain @click="openDetail(row)">详情</el-button>
-            <el-button
-              size="small"
-              type="success"
-              plain
-              :disabled="row.status !== 'pending_review'"
-              :loading="rowAction === `approve:${row.order_no}`"
-              @click="handleApprove(row)"
-            >
-              通过
-            </el-button>
-            <el-button
-              size="small"
-              type="danger"
-              plain
-              :disabled="row.status !== 'pending_review'"
-              :loading="rowAction === `reject:${row.order_no}`"
-              @click="handleReject(row)"
-            >
-              拒绝
-            </el-button>
-            <el-button
-              size="small"
-              type="warning"
-              plain
-              :disabled="row.status !== 'pending_review'"
-              :loading="rowAction === `expire:${row.order_no}`"
-              @click="handleExpire(row)"
-            >
-              过期
-            </el-button>
-            <el-button
-              size="small"
-              type="danger"
-              plain
-              :disabled="row.status !== 'pending_review'"
-              :loading="rowAction === `abnormal:${row.order_no}`"
-              @click="handleMarkAbnormal(row)"
-            >
-              异常
-            </el-button>
+            <div class="row-actions">
+              <el-button size="small" plain @click="openDetail(row)">详情</el-button>
+              <el-button
+                v-for="action in visibleOrderActions(row)"
+                :key="action.key"
+                size="small"
+                :type="action.type"
+                plain
+                :disabled="!action.enabled"
+                :loading="rowAction === `${action.key}:${row.order_no}`"
+                @click="runOrderAction(row, action)"
+              >
+                {{ action.label }}
+              </el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -106,7 +80,7 @@
       </div>
     </el-card>
 
-    <el-drawer v-model="detailVisible" title="订单详情" size="520px">
+    <el-dialog v-model="detailVisible" title="订单详情" width="720px" align-center class="order-detail-dialog">
       <div v-if="selectedOrder" class="detail-body">
         <el-descriptions :column="1" border size="small">
           <el-descriptions-item label="订单号">{{ selectedOrder.order_no }}</el-descriptions-item>
@@ -122,47 +96,22 @@
           <el-descriptions-item label="审核人">{{ selectedOrder.reviewer || '-' }}</el-descriptions-item>
           <el-descriptions-item label="审核时间">{{ formatOptionalTime(selectedOrder.reviewed_at) }}</el-descriptions-item>
         </el-descriptions>
-        <div class="drawer-actions">
+        <div class="detail-actions">
           <el-button type="primary" plain :disabled="!selectedOrder.has_proof" @click="openProof(selectedOrder)">查看凭证</el-button>
           <el-button
-            type="success"
+            v-for="action in visibleOrderActions(selectedOrder)"
+            :key="action.key"
+            :type="action.type"
             plain
-            :disabled="selectedOrder.status !== 'pending_review'"
-            :loading="rowAction === `approve:${selectedOrder.order_no}`"
-            @click="handleApprove(selectedOrder)"
+            :disabled="!action.enabled"
+            :loading="rowAction === `${action.key}:${selectedOrder.order_no}`"
+            @click="runOrderAction(selectedOrder, action)"
           >
-            通过
-          </el-button>
-          <el-button
-            type="danger"
-            plain
-            :disabled="selectedOrder.status !== 'pending_review'"
-            :loading="rowAction === `reject:${selectedOrder.order_no}`"
-            @click="handleReject(selectedOrder)"
-          >
-            拒绝
-          </el-button>
-          <el-button
-            type="warning"
-            plain
-            :disabled="selectedOrder.status !== 'pending_review'"
-            :loading="rowAction === `expire:${selectedOrder.order_no}`"
-            @click="handleExpire(selectedOrder)"
-          >
-            过期
-          </el-button>
-          <el-button
-            type="danger"
-            plain
-            :disabled="selectedOrder.status !== 'pending_review'"
-            :loading="rowAction === `abnormal:${selectedOrder.order_no}`"
-            @click="handleMarkAbnormal(selectedOrder)"
-          >
-            异常
+            {{ action.label }}
           </el-button>
         </div>
       </div>
-    </el-drawer>
+    </el-dialog>
 
     <el-dialog v-model="proofVisible" title="支付凭证" width="520px">
       <img v-if="proofUrl" class="proof-image" :src="proofUrl" alt="支付凭证" />
@@ -237,6 +186,47 @@ const channelText = (channel) => ({
 }[channel] || channel)
 
 const formatOptionalTime = (value) => (value ? formatBeijingTime(value) : '-')
+
+const orderActions = [
+  { key: 'approve', label: '通过', type: 'success', handler: handleApprove },
+  { key: 'reject', label: '拒绝', type: 'danger', handler: handleReject },
+  { key: 'expire', label: '过期', type: 'warning', handler: handleExpire },
+  { key: 'abnormal', label: '异常', type: 'danger', handler: handleMarkAbnormal }
+]
+
+const orderActionByKey = Object.fromEntries(orderActions.map((action) => [action.key, action]))
+
+const terminalOrderActionByStatus = {
+  approved: { key: 'approve', label: '通过', type: 'success' },
+  rejected: { key: 'reject', label: '拒绝', type: 'danger' },
+  expired: { key: 'expire', label: '过期', type: 'warning' },
+  abnormal: { key: 'abnormal', label: '异常', type: 'danger' },
+  canceled: { key: 'cancel', label: '取消', type: 'info' }
+}
+
+function runningActionKey(order) {
+  if (!order || !rowAction.value) return ''
+  const [key, orderNo] = rowAction.value.split(':')
+  return orderNo === order.order_no ? key : ''
+}
+
+function visibleOrderActions(order) {
+  if (!order) return []
+  const runningKey = runningActionKey(order)
+  if (runningKey && orderActionByKey[runningKey]) {
+    return [{ ...orderActionByKey[runningKey], enabled: false }]
+  }
+  if (order.status === 'pending_review') {
+    return orderActions.map((action) => ({ ...action, enabled: true }))
+  }
+  const terminalAction = terminalOrderActionByStatus[order.status]
+  return terminalAction ? [{ ...terminalAction, enabled: false }] : []
+}
+
+function runOrderAction(order, action) {
+  if (!order || !action?.enabled || !action.handler) return
+  return action.handler(order)
+}
 
 async function loadOrders() {
   loading.value = true
@@ -413,11 +403,16 @@ onMounted(loadOrders)
 }
 
 .toolbar-actions,
-.drawer-actions {
+.row-actions,
+.detail-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.detail-actions {
+  justify-content: flex-end;
 }
 
 .panel {
