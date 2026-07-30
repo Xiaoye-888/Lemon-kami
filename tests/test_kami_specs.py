@@ -676,6 +676,67 @@ def test_delete_kami_batch_can_cascade_delete_batch_kamis_after_confirmation():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_delete_merchant_owned_kami_batch_audit_records_target_user():
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    def override_session():
+        with Session(engine) as session:
+            yield session
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="audit-issuer", password_hash="hash", status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        app = make_app("app_audit_issuer")
+        app.created_by = merchant.username
+        app.owner_user_id = merchant.id
+        batch = KamiBatch(
+            app_id=app.app_id,
+            batch_no="audit-target-batch",
+            kami_type=KamiType.points,
+            points_amount=68,
+            machine_bind_mode=MachineBindMode.one_card_one_device,
+            max_bind_devices=1,
+            authorization_owner=AuthorizationOwnerMode.auto,
+            user_bind_mode=UserBindMode.auto,
+        )
+        session.add(app)
+        session.add(batch)
+        session.commit()
+        session.refresh(batch)
+        batch_id = batch.id
+        merchant_id = merchant.id
+
+    try:
+        delete_response = client.delete(
+            f"/api/v1/admin/kamis/batches/{batch_id}",
+            params={"confirm_text": CONFIRM_DELETE_KAMI_BATCH},
+        )
+        assert delete_response.status_code == 200
+
+        with Session(engine) as session:
+            audit_log = session.exec(
+                select(AdminAuditLog).where(
+                    AdminAuditLog.action == "delete_kami_batch",
+                    AdminAuditLog.resource_id == str(batch_id),
+                    AdminAuditLog.status == "success",
+                )
+            ).one()
+            assert audit_log.target_user_id == merchant_id
+            assert audit_log.target_username == "audit-issuer"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_delete_kami_spec_prunes_empty_batches_before_deleting_spec():
     from fastapi.testclient import TestClient
     from main import app as fastapi_app

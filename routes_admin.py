@@ -3317,6 +3317,22 @@ async def update_kami_batch(
     return {"success": True, "message": "Batch updated", "data": _kami_batch_payload(batch)}
 
 
+def _audit_target_user_for_app(session: Session, app_id: str) -> tuple[Optional[int], Optional[str]]:
+    app = session.exec(select(App).where(App.app_id == app_id)).first()
+    if not app:
+        return None, None
+    if app.owner_user_id:
+        owner = session.get(EndUser, app.owner_user_id)
+        return app.owner_user_id, owner.username if owner else app.created_by
+    if app.created_by:
+        owner = session.exec(
+            select(EndUser).where(EndUser.app_id.is_(None), EndUser.username == app.created_by)
+        ).first()
+        if owner:
+            return owner.id, owner.username
+    return None, None
+
+
 @router.delete("/kamis/batches/{batch_id}", summary="Delete kami batch")
 async def delete_kami_batch(
     batch_id: int,
@@ -3334,6 +3350,7 @@ async def delete_kami_batch(
     is_admin = current_user.get("is_admin", False)
     if not check_app_permission(session, batch.app_id, username, is_admin):
         raise HTTPException(status_code=403, detail="No permission to delete this batch")
+    target_user_id, target_username = _audit_target_user_for_app(session, batch.app_id)
     require_sensitive_confirmation(
         session,
         admin=current_user,
@@ -3341,6 +3358,8 @@ async def delete_kami_batch(
         confirm_text=confirm_text,
         resource_type="kami_batch",
         resource_id=batch_id,
+        target_user_id=target_user_id,
+        target_username=target_username,
         request=request,
         metadata={"app_id": batch.app_id, "batch_no": batch.batch_no},
     )
@@ -3356,6 +3375,8 @@ async def delete_kami_batch(
             action="delete_kami_batch",
             resource_type="kami_batch",
             resource_id=batch_id,
+            target_user_id=target_user_id,
+            target_username=target_username,
             status="failed",
             request=request,
             metadata={"app_id": batch.app_id, "batch_no": batch.batch_no},
@@ -3402,6 +3423,8 @@ async def delete_kami_batch(
             action="delete_kami_batch",
             resource_type="kami_batch",
             resource_id=batch_id,
+            target_user_id=target_user_id,
+            target_username=target_username,
             status="failed",
             request=request,
             before=payload_data,
@@ -3423,6 +3446,8 @@ async def delete_kami_batch(
         action="delete_kami_batch",
         resource_type="kami_batch",
         resource_id=batch_id,
+        target_user_id=target_user_id,
+        target_username=target_username,
         request=request,
         after=after_data,
         summary=f"删除卡密批次 {batch_no}",
