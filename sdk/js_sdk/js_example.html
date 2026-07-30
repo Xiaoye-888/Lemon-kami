@@ -260,7 +260,7 @@
         async function waitForSdkReady(instance, timeoutMs = 5000) {
             const start = Date.now();
             while (Date.now() - start < timeoutMs) {
-                if (instance.rsaPublicKey && instance.fingerprint) {
+                if (instance.rsaPublicKey && instance.deviceInfo && instance.deviceInfo.device_id) {
                     return;
                 }
                 await new Promise(resolve => setTimeout(resolve, 100));
@@ -290,15 +290,16 @@
                     rsaPublicKey: rsaPublicKey
                 });
                 
-                // 等待指纹加载完成
+                // 等待设备信息加载完成
                 await waitForSdkReady(sdk);
 
                 showResult('initResult', '✅ SDK 初始化成功', 'success');
 
                 // 显示设备信息
                 document.getElementById('deviceInfo').innerHTML = `
-                    <strong>设备 UUID:</strong> ${sdk.deviceUuid}<br>
-                    <strong>设备指纹:</strong> ${sdk.fingerprint ? sdk.fingerprint.substring(0, 32) + '...' : '生成中...'}
+                    <strong>设备名称:</strong> ${sdk.deviceInfo.device_name || '-'}<br>
+                    <strong>设备型号:</strong> ${sdk.deviceInfo.device_model || '-'}<br>
+                    <strong>设备 ID:</strong> ${sdk.deviceInfo.device_id || '-'}
                 `;
 
                 // 启用按钮

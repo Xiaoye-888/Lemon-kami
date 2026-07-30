@@ -333,6 +333,26 @@ def test_devices_page_uses_merchant_scoped_api_in_merchant_console():
     assert "等待新版SDK上报" in source
 
 
+def test_devices_page_opens_kami_device_details_from_clickable_text_only():
+    source = (PROJECT_ROOT / "admin/src/views/Devices.vue").read_text(encoding="utf-8")
+
+    assert "deviceDetailVisible" in source
+    assert "selectedDeviceGroup" in source
+    assert "openDeviceDetail(row)" in source
+    assert "device_items" in source
+    assert "设备明细" in source
+    assert "每台机器" not in source
+    assert "查看设备" not in source
+    assert "设备名称" in source
+    assert "设备型号" in source
+    assert "设备 ID" in source
+    assert "IP地址" in source
+    assert "device.device_name" in source
+    assert "device.device_model" in source
+    assert "device.device_id" in source
+    assert "device.last_ip" in source
+
+
 def test_application_menu_groups_info_notice_and_versions():
     layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
     router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")

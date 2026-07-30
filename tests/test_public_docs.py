@@ -103,6 +103,42 @@ def test_public_docs_sdk_user_identity_fields_are_documented_together():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_public_docs_sdk_device_info_device_id_replaces_required_fingerprint():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    def override_session():
+        with Session(engine) as session:
+            yield session
+
+    fastapi_app.dependency_overrides[routes_docs.get_session] = override_session
+    client = TestClient(fastapi_app)
+
+    try:
+        response = client.get(
+            "/api/v1/docs/interfaces",
+            params={"page_size": 100},
+            headers={"accept": "application/json"},
+        )
+
+        assert response.status_code == 200
+        items = response.json()["data"]["items"]
+        by_key = {item["interface_key"]: item for item in items}
+
+        for interface_key in ("sdk.verify", "sdk.consume", "sdk.unbind", "sdk.device_limit"):
+            params = {item["name"]: item for item in by_key[interface_key]["request_params"]}
+            assert "payload.uuid" not in params
+            assert "payload.fingerprint" not in params
+            assert "payload.device_info.device_id" in params
+            assert params["payload.device_info.device_id"]["required"] is True
+            assert "fingerprint" not in params["payload.device_info.device_id"]["description"]
+            assert "device_info.device_id" in by_key[interface_key]["remark"]
+            assert "fingerprint" not in by_key[interface_key]["remark"]
+            assert "fingerprint" not in by_key[interface_key]["doc_markdown"]
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_legacy_app_config_interface_is_not_exposed():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

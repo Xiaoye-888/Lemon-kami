@@ -79,7 +79,7 @@ const sdk = new LemonKamiSDK({
     serverUrl: 'http://localhost:8000'  // 服务器地址
 });
 
-// 等待公钥和设备指纹加载（约1-2秒）
+// 等待公钥和设备信息加载（约1-2秒）
 await new Promise(resolve => setTimeout(resolve, 1500));
 ```
 
@@ -709,17 +709,17 @@ SDK 使用多层加密保护通信安全：
 - **HMAC-SHA256**：用于签名验证，防止篡改
 - **时间戳 + 随机数**：防止重放攻击
 
-### 2. 设备指纹
+### 2. 设备信息
 
-SDK 会自动生成唯一的设备指纹，包括：
+SDK 会自动生成稳定的设备 ID，并上报设备信息，包括：
 
-- Canvas 指纹
-- WebGL 指纹
+- 浏览器平台
+- 浏览器 User-Agent
 - 浏览器特征
 - 屏幕信息
 - 系统信息
 
-设备指纹用于：
+设备 ID 用于：
 - 设备绑定卡密的验证
 - 防止多设备共享同一卡密
 - 异常行为检测
@@ -798,7 +798,7 @@ const sdk = new LemonKamiSDK({
 
 ### Q1: 初始化后无法立即使用？
 
-**A:** SDK 需要从服务器获取 RSA 公钥并生成本地设备指纹，这个过程需要 1-2 秒。建议：
+**A:** SDK 需要从服务器获取 RSA 公钥并准备本地设备信息，这个过程需要 1-2 秒。建议：
 
 ```javascript
 const sdk = new LemonKamiSDK({...});
@@ -808,10 +808,10 @@ await new Promise(resolve => setTimeout(resolve, 1500));
 
 ### Q2: 如何知道 SDK 是否初始化完成？
 
-**A:** 检查 `sdk.publicKey` 和 `sdk.fingerprint` 是否存在：
+**A:** 检查 `sdk.rsaPublicKey` 和 `sdk.deviceInfo.device_id` 是否存在：
 
 ```javascript
-if (sdk.publicKey && sdk.fingerprint) {
+if (sdk.rsaPublicKey && sdk.deviceInfo && sdk.deviceInfo.device_id) {
     console.log('SDK 已就绪');
 }
 ```

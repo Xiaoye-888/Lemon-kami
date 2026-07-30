@@ -26,8 +26,8 @@ class LemonKamiSDK {
     this.appSecret = config.appSecret;
     this.serverUrl = (config.serverUrl || 'http://localhost:8000').replace(/\/$/, '');
     this.rsaPublicKey = config.rsaPublicKey || null;
-    this.deviceUuid = this._getDeviceUuid();
-    this.fingerprint = ''; // 初始化为空字符串
+    this.deviceId = this._getDeviceId();
+    this.deviceInfo = this._collectDeviceInfo();
     this.currentKamiCode = null;
     this.autoReleaseOnUnload = config.autoReleaseOnUnload !== false;
     this._releaseOnUnloadHandler = () => {
@@ -35,9 +35,6 @@ class LemonKamiSDK {
         this.releaseDevice(this.currentKamiCode, { keepalive: true });
       }
     };
-
-    // 异步生成指纹
-    this._fingerprintReady = this._initFingerprint();
 
     // 如果未提供公钥，自动获取
     if (!this.rsaPublicKey) {
@@ -51,33 +48,25 @@ class LemonKamiSDK {
   }
 
   /**
-   * 异步初始化设备指纹
+   * 获取稳定设备 ID
+   * @returns {string} 设备 ID
    * @private
    */
-  async _initFingerprint() {
-    this.fingerprint = await this._generateFingerprint();
-  }
-
-  /**
-   * 获取设备UUID
-   * @returns {string} 设备UUID
-   * @private
-   */
-  _getDeviceUuid() {
-    let uuid = localStorage.getItem('device_uuid');
-    if (!uuid) {
-      uuid = this._generateUuid();
-      localStorage.setItem('device_uuid', uuid);
+  _getDeviceId() {
+    let deviceId = localStorage.getItem('lemon_device_id');
+    if (!deviceId) {
+      deviceId = this._generateDeviceId();
+      localStorage.setItem('lemon_device_id', deviceId);
     }
-    return uuid;
+    return deviceId;
   }
 
   /**
-   * 生成UUID
-   * @returns {string} UUID
+   * 生成设备 ID
+   * @returns {string} 设备 ID
    * @private
    */
-  _generateUuid() {
+  _generateDeviceId() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
       const r = Math.random() * 16 | 0;
       const v = c === 'x' ? r : (r & 0x3 | 0x8);
@@ -86,22 +75,29 @@ class LemonKamiSDK {
   }
 
   /**
-   * 生成设备指纹
-   * @returns {string} 设备指纹哈希
+   * 收集设备信息
+   * @returns {Object} 设备名称、设备型号、设备 ID
    * @private
    */
-  _generateFingerprint() {
+  _collectDeviceInfo() {
     const info = {
-      platform: navigator.platform,
-      userAgent: navigator.userAgent,
-      language: navigator.language,
-      screenResolution: `${screen.width}x${screen.height}`,
-      colorDepth: screen.colorDepth,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      device_name: this._browserDeviceName(),
+      device_model: navigator.platform || navigator.userAgent || 'Browser',
+      device_id: this.deviceId,
     };
+    const result = {};
+    Object.keys(info).forEach((key) => {
+      const value = String(info[key] || '').trim();
+      if (value) {
+        result[key] = value.slice(0, 255);
+      }
+    });
+    return result;
+  }
 
-    const fingerprintStr = JSON.stringify(info);
-    return this._sha256(fingerprintStr);
+  _browserDeviceName() {
+    const platform = navigator.platform || 'Browser';
+    return `${platform} Browser`;
   }
 
   /**
@@ -261,11 +257,9 @@ class LemonKamiSDK {
    * @returns {Promise<Object>} 验证结果
    */
   async verify(kamiCode) {
-    await this._fingerprintReady;
     const requestData = {
       kami: kamiCode,
-      uuid: this.deviceUuid,
-      fingerprint: this.fingerprint,
+      device_info: this.deviceInfo,
       _app_info: {
         app_id: this.appId
       }
@@ -313,11 +307,9 @@ class LemonKamiSDK {
       };
     }
 
-    await this._fingerprintReady;
     const requestData = {
       kami: kamiCode,
-      uuid: this.deviceUuid,
-      fingerprint: this.fingerprint,
+      device_info: this.deviceInfo,
       _app_info: {
         app_id: this.appId
       }

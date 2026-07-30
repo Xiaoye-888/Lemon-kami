@@ -307,6 +307,20 @@ def _app_interface_enabled(
     return bool(config.enabled), config_data
 
 
+def _clean_identity_value(value) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _device_identity_from_payload(data: dict) -> tuple[str, str, dict]:
+    device_info = data.get("device_info")
+    device_info = device_info if isinstance(device_info, dict) else {}
+    device_id = _clean_identity_value(device_info.get("device_id"))
+    return device_id or "", device_id or "", device_info
+
+
 def _device_uuid(uuid: str, fingerprint: str) -> str:
     return uuid if uuid else fingerprint
 
@@ -625,9 +639,7 @@ async def verify_kami(
     非首次验证：校验设备指纹是否一致
     """
     kami_code = data.get("kami")
-    uuid = data.get("uuid", "")  # 兼容旧版本，可能为空
-    fingerprint = data.get("fingerprint")
-    device_info = data.get("device_info")
+    uuid, fingerprint, device_info = _device_identity_from_payload(data)
     app_info = data.get("_app_info", {})
     app_id = app_info.get("app_id")
     
@@ -636,7 +648,10 @@ async def verify_kami(
     user_agent = request.headers.get("user-agent", "")
 
     if not all([kami_code, fingerprint]):
-        raise HTTPException(status_code=400, detail="Missing required fields: kami and fingerprint")
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required fields: kami and device_info.device_id",
+        )
 
     app = session.exec(select(App).where(App.app_id == app_id)).first()
     if not app:
@@ -988,9 +1003,7 @@ async def consume_kami(
 ):
     """核销次数卡。验证卡密有效性，但只有此接口会扣减次数。"""
     kami_code = data.get("kami")
-    uuid = data.get("uuid", "")
-    fingerprint = data.get("fingerprint")
-    device_info = data.get("device_info")
+    uuid, fingerprint, device_info = _device_identity_from_payload(data)
     app_info = data.get("_app_info", {})
     app_id = app_info.get("app_id")
     amount = int(data.get("amount") or 1)
@@ -1000,7 +1013,10 @@ async def consume_kami(
     user_agent = request.headers.get("user-agent", "")
 
     if not all([kami_code, fingerprint]):
-        raise HTTPException(status_code=400, detail="Missing required fields: kami and fingerprint")
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required fields: kami and device_info.device_id",
+        )
 
     app = session.exec(select(App).where(App.app_id == app_id)).first()
     if not app:
@@ -1293,15 +1309,17 @@ async def release_device(
 ):
     """释放当前设备的在线占用名额，用于软件退出或用户退出登录。"""
     kami_code = data.get("kami")
-    uuid = data.get("uuid", "")
-    fingerprint = data.get("fingerprint")
+    uuid, fingerprint, _device_info = _device_identity_from_payload(data)
     app_info = data.get("_app_info", {})
     app_id = app_info.get("app_id")
     client_ip = _client_ip_from_request(request)
     user_agent = request.headers.get("user-agent", "")
 
     if not all([kami_code, fingerprint]):
-        raise HTTPException(status_code=400, detail="Missing required fields: kami and fingerprint")
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required fields: kami and device_info.device_id",
+        )
 
     app = session.exec(select(App).where(App.app_id == app_id)).first()
     if not app:
@@ -1375,15 +1393,17 @@ async def unbind_kami(
 ):
     """按应用策略解绑卡密设备绑定。"""
     kami_code = data.get("kami")
-    uuid = data.get("uuid", "")
-    fingerprint = data.get("fingerprint")
+    uuid, fingerprint, _device_info = _device_identity_from_payload(data)
     app_info = data.get("_app_info", {})
     app_id = app_info.get("app_id")
     client_ip = _client_ip_from_request(request)
     user_agent = request.headers.get("user-agent", "")
 
     if not all([kami_code, fingerprint]):
-        raise HTTPException(status_code=400, detail="Missing required fields: kami and fingerprint")
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required fields: kami and device_info.device_id",
+        )
 
     app = session.exec(select(App).where(App.app_id == app_id)).first()
     if not app:

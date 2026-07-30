@@ -5,7 +5,6 @@ Lemon Kami Python SDK
 
 import json
 import time
-import uuid
 import hashlib
 import hmac
 import platform
@@ -41,16 +40,15 @@ class LemonKamiSDK:
         self.app_secret = app_secret
         self.server_url = server_url.rstrip('/')
         self.rsa_public_key = rsa_public_key
-        # 移除设备UUID缓存，每次重新生成设备指纹
-        self.fingerprint = self._generate_device_fingerprint()
+        self.device_info = self._collect_device_info()
         
         # 如果未提供公钥，自动获取
         if not self.rsa_public_key:
             self._fetch_public_key()
     
-    def _generate_device_fingerprint(self) -> str:
+    def _generate_device_hash(self) -> str:
         """
-        生成设备指纹（每次都重新计算，不依赖缓存）
+        生成设备 ID 降级哈希（每次都重新计算，不依赖缓存）
         
         使用多种硬件信息组合生成唯一的设备标识符，确保每次执行结果一致且难以伪造
         """
@@ -69,9 +67,9 @@ class LemonKamiSDK:
             "system_info": self._get_system_unique_id(),
         }
         
-        # 生成指纹哈希 - 使用 SHA256 确保一致性
-        fingerprint_str = json.dumps(info, sort_keys=True)
-        return hashlib.sha256(fingerprint_str.encode()).hexdigest()
+        # 生成设备 ID 降级哈希 - 使用 SHA256 确保一致性
+        identity_str = json.dumps(info, sort_keys=True)
+        return hashlib.sha256(identity_str.encode()).hexdigest()
     
     def _get_system_unique_id(self) -> str:
         """
@@ -175,6 +173,19 @@ class LemonKamiSDK:
         
         # 去重并排序，确保顺序一致
         return sorted(list(set(macs)))
+
+    def _collect_device_info(self) -> Dict[str, str]:
+        """Collect the SDK device identity payload expected by the server."""
+        info = {
+            "device_name": platform.node(),
+            "device_model": platform.platform(),
+            "device_id": self._get_system_unique_id() or self._generate_device_hash(),
+        }
+        return {
+            key: str(value).strip()[:255]
+            for key, value in info.items()
+            if value is not None and str(value).strip()
+        }
     
     def _fetch_public_key(self):
         """从服务器获取RSA公钥"""
@@ -267,10 +278,9 @@ class LemonKamiSDK:
         Returns:
             验证结果字典
         """
-        # 构建请求数据（不再使用 device_uuid，只使用动态生成的 fingerprint）
         request_data = {
             "kami": kami_code,
-            "fingerprint": self.fingerprint,
+            "device_info": self.device_info,
             "_app_info": {
                 "app_id": self.app_id
             }
@@ -377,7 +387,7 @@ class LemonKamiSDK:
         """
         request_data = {
             "kami": kami_code,
-            "fingerprint": self.fingerprint,
+            "device_info": self.device_info,
             "_app_info": {
                 "app_id": self.app_id
             }

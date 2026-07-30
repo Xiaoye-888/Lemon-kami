@@ -24,7 +24,7 @@ def main():
         server_url=SERVER_URL
     )
     
-    print(f"设备指纹: {sdk.fingerprint[:32]}...")
+    print(f"设备 ID: {sdk.device_info.get('device_id', '')[:32]}...")
     print()
     
     # ==================== 卡密验证 ====================

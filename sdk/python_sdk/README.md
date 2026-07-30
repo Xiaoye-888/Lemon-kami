@@ -5,7 +5,7 @@
 ## 功能特性
 
 - ✅ RSA + AES 混合加密通信
-- ✅ 自动设备指纹生成与绑定
+- ✅ 自动设备 ID 采集与绑定
 - ✅ 卡密验证与激活
 - ✅ 行为事件上报
 - ✅ 心跳保持
@@ -80,7 +80,11 @@ sdk = LemonKamiSDK(
     "success": True,
     "kami_type": "month",
     "expire_time": "2026-05-23 12:00:00",
-    "device_uuid": "xxx",
+    "device_info": {
+        "device_name": "DESKTOP-EXAMPLE",
+        "device_model": "Windows-10",
+        "device_id": "8FEB0283-AE7B-4B55-B87A-9B14B6A69FD1"
+    },
     "message": "验证成功"
 }
 ```
@@ -187,10 +191,10 @@ except Exception as e:
     print(f"网络错误: {e}")
 ```
 
-## 设备指纹
+## 设备 ID
 
-SDK 会自动生成基于硬件信息的设备指纹，每次启动时都会重新计算，确保安全性。
-设备指纹由以下信息组合生成：
+SDK 会自动采集基于系统信息的设备 ID，每次启动时都会重新计算，确保同一台电脑保持稳定。
+设备 ID 由以下信息组合生成：
 - CPU 信息（machine, processor）
 - 系统节点名（计算机名）
 - 操作系统平台信息

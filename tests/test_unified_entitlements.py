@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import event
 from sqlalchemy.dialects import mysql
@@ -1524,8 +1525,7 @@ def test_sdk_verify_no_limit_device_authorization_links_card_device_and_admin_vi
     fastapi_app.dependency_overrides[routes_sdk.get_redis] = lambda: FakeRedis()
     fastapi_app.dependency_overrides[routes_sdk.get_decrypted_data] = lambda: {
         "kami": "FREEDEVICE",
-        "uuid": "device-free-1",
-        "fingerprint": "fingerprint-free-1",
+        "device_info": {"device_id": "device-free-1"},
         "_app_info": {"app_id": "app_demo", "app_secret": "secret-app_demo"},
     }
     client = TestClient(fastapi_app)
@@ -1569,8 +1569,8 @@ def test_sdk_verify_no_limit_device_authorization_links_card_device_and_admin_vi
             assert kami.redeemed_at is not None
             assert kami.bind_uuid == "device-free-1"
             assert binding.device_uuid == "device-free-1"
-            assert binding.fingerprint == "fingerprint-free-1"
-            assert device.fingerprint == "fingerprint-free-1"
+            assert binding.fingerprint == "device-free-1"
+            assert device.fingerprint == "device-free-1"
 
         kamis_response = client.get("/api/v1/admin/kamis", params={"app_id": "app_demo"})
         assert kamis_response.status_code == 200
@@ -1592,6 +1592,170 @@ def test_sdk_verify_no_limit_device_authorization_links_card_device_and_admin_vi
         fastapi_app.dependency_overrides.clear()
 
 
+def test_sdk_verify_accepts_device_info_device_id_without_legacy_identity_fields():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    device_id = "8FEB0283-AE7B-4B55-B87A-9B14B6A69FD1"
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_sdk.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_sdk.get_redis] = lambda: FakeRedis()
+    fastapi_app.dependency_overrides[routes_sdk.get_decrypted_data] = lambda: {
+        "kami": "DEVICEIDONLY",
+        "device_info": {
+            "device_name": "DESKTOP-FSQQCER",
+            "device_model": "Legion Y7000P IRX9",
+            "device_id": device_id,
+        },
+        "_app_info": {"app_id": "app_demo", "app_secret": "secret-app_demo"},
+    }
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        session.add(
+            ApiInterface(
+                name="SDK Verify",
+                interface_key="sdk.verify",
+                path="/api/v1/sdk/verify",
+                is_builtin=True,
+                status=1,
+            )
+        )
+        session.add(
+            Kami(
+                app_id="app_demo",
+                kami_code="DEVICEIDONLY",
+                kami_type=KamiType.lifetime,
+                status=KamiStatus.unused,
+                authorization_owner=AuthorizationOwnerMode.device,
+                machine_bind_mode=MachineBindMode.no_limit,
+                max_bind_devices=0,
+            )
+        )
+        session.commit()
+
+    try:
+        response = client.post("/api/v1/sdk/verify", json={})
+        assert response.status_code == 200
+
+        with Session(engine) as session:
+            kami = session.exec(select(Kami).where(Kami.kami_code == "DEVICEIDONLY")).one()
+            binding = session.exec(
+                select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code == "DEVICEIDONLY")
+            ).one()
+            device = session.exec(select(Device).where(Device.device_id == device_id)).one()
+            assert kami.status == KamiStatus.active
+            assert kami.bind_uuid == device_id
+            assert binding.device_uuid == device_id
+            assert binding.fingerprint == device_id
+            assert device.uuid == device_id
+            assert device.fingerprint == device_id
+            assert device.device_name == "DESKTOP-FSQQCER"
+            assert device.device_model == "Legion Y7000P IRX9"
+            assert device.device_id == device_id
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_sdk_consume_accepts_device_info_device_id_without_legacy_identity_fields():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    device_id = "CONSUME-DEVICE-ID"
+    fastapi_app.dependency_overrides[routes_sdk.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_sdk.get_redis] = lambda: FakeRedis()
+    fastapi_app.dependency_overrides[routes_sdk.get_decrypted_data] = lambda: {
+        "kami": "CONSUMEIDONLY",
+        "amount": 2,
+        "biz_id": "consume-device-info-id",
+        "device_info": {
+            "device_name": "DESKTOP-CONSUME",
+            "device_model": "Legion Y7000P IRX9",
+            "device_id": device_id,
+        },
+        "_app_info": {"app_id": "app_demo", "app_secret": "secret-app_demo"},
+    }
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        session.add(
+            ApiInterface(
+                name="SDK Verify",
+                interface_key="sdk.verify",
+                path="/api/v1/sdk/verify",
+                is_builtin=True,
+                status=1,
+            )
+        )
+        session.add(
+            Kami(
+                app_id="app_demo",
+                kami_code="CONSUMEIDONLY",
+                kami_type=KamiType.times,
+                status=KamiStatus.active,
+                bind_uuid=device_id,
+                times_total=10,
+                times_remaining=5,
+                authorization_owner=AuthorizationOwnerMode.device,
+                machine_bind_mode=MachineBindMode.one_card_one_device,
+                max_bind_devices=1,
+            )
+        )
+        session.add(Device(app_id="app_demo", uuid=device_id, fingerprint=device_id, device_id=device_id))
+        session.add(
+            KamiDeviceBinding(
+                app_id="app_demo",
+                kami_code="CONSUMEIDONLY",
+                device_uuid=device_id,
+                fingerprint=device_id,
+            )
+        )
+        session.commit()
+
+    try:
+        response = client.post("/api/v1/sdk/consume", json={})
+        assert response.status_code == 200
+
+        with Session(engine) as session:
+            kami = session.exec(select(Kami).where(Kami.kami_code == "CONSUMEIDONLY")).one()
+            device = session.exec(select(Device).where(Device.device_id == device_id)).one()
+            assert kami.times_remaining == 3
+            assert device.device_name == "DESKTOP-CONSUME"
+            assert device.device_model == "Legion Y7000P IRX9"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    ("path", "legacy_payload"),
+    [
+        ("/api/v1/sdk/verify", {"kami": "LEGACYONLY", "uuid": "legacy-device", "fingerprint": "legacy-fingerprint"}),
+        ("/api/v1/sdk/consume", {"kami": "LEGACYONLY", "uuid": "legacy-device", "fingerprint": "legacy-fingerprint"}),
+        ("/api/v1/sdk/release-device", {"kami": "LEGACYONLY", "uuid": "legacy-device", "fingerprint": "legacy-fingerprint"}),
+        ("/api/v1/sdk/unbind", {"kami": "LEGACYONLY", "uuid": "legacy-device", "fingerprint": "legacy-fingerprint"}),
+    ],
+)
+def test_sdk_device_identity_rejects_legacy_fields_without_device_info_device_id(path, legacy_payload):
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    legacy_payload["_app_info"] = {"app_id": "app_demo", "app_secret": "secret-app_demo"}
+    fastapi_app.dependency_overrides[routes_sdk.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_sdk.get_redis] = lambda: FakeRedis()
+    fastapi_app.dependency_overrides[routes_sdk.get_decrypted_data] = lambda: legacy_payload
+    client = TestClient(fastapi_app)
+
+    try:
+        response = client.post(path, json={})
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Missing required fields: kami and device_info.device_id"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_sdk_verify_persists_device_info_and_device_list_searches_it():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
@@ -1603,8 +1767,6 @@ def test_sdk_verify_persists_device_info_and_device_list_searches_it():
     fastapi_app.dependency_overrides[routes_sdk.get_redis] = lambda: FakeRedis()
     fastapi_app.dependency_overrides[routes_sdk.get_decrypted_data] = lambda: {
         "kami": "DEVICEINFO",
-        "uuid": "8FEB0283-AE7B-4B55-B87A-9B14B6A69FD1",
-        "fingerprint": "fingerprint-device-info",
         "device_info": {
             "device_name": "DESKTOP-FSQQCER",
             "device_model": "Legion Y7000P IRX9",
@@ -1695,8 +1857,7 @@ def test_sdk_verify_uses_forwarded_for_as_device_ip_source():
     fastapi_app.dependency_overrides[routes_sdk.get_redis] = lambda: FakeRedis()
     fastapi_app.dependency_overrides[routes_sdk.get_decrypted_data] = lambda: {
         "kami": "FORWARDED001",
-        "uuid": "device-forwarded-1",
-        "fingerprint": "fingerprint-forwarded-1",
+        "device_info": {"device_id": "device-forwarded-1"},
         "_app_info": {"app_id": "app_demo", "app_secret": "secret-app_demo"},
     }
     client = TestClient(fastapi_app)
@@ -2165,7 +2326,8 @@ def test_admin_devices_include_user_binding_strategy_ip_count_and_inferred_risk(
         assert item["username"] == "carol"
         assert item["binding_relation"] == "用户授权"
         assert item["machine_bind_mode"] == "one_card_multi_device"
-        assert item["machine_bind_mode_text"] == "一卡多机"
+        assert item["machine_bind_mode_text"] == "一卡多机(1台)"
+        assert item["device_count"] == 1
         assert item["ip_count"] == 3
         assert item["risk_level"] == 1
         assert item["risk_level_text"] == "警告"

@@ -31,7 +31,6 @@ public class LemonKamiSDK {
     private String appSecret;
     private String serverUrl;
     private String rsaPublicKey;
-    private String fingerprint;
     private Map<String, String> deviceInfo;
     private Gson gson;
     
@@ -48,7 +47,6 @@ public class LemonKamiSDK {
         this.appSecret = appSecret;
         this.serverUrl = serverUrl.replaceAll("/$", "");
         this.rsaPublicKey = rsaPublicKey;
-        this.fingerprint = generateDeviceFingerprint();
         this.gson = new Gson();
         this.deviceInfo = collectDeviceInfo();
         
@@ -70,12 +68,12 @@ public class LemonKamiSDK {
     }
     
     /**
-     * 生成设备指纹
+     * 生成设备 ID 降级哈希
      * 使用多种硬件信息组合生成唯一的设备标识符
      *
-     * @return 设备指纹哈希
+     * @return 设备 ID 哈希
      */
-    private String generateDeviceFingerprint() {
+    private String generateDeviceHash() {
         try {
             Map<String, Object> info = new LinkedHashMap<>();
             
@@ -98,8 +96,8 @@ public class LemonKamiSDK {
             info.put("system_info", getSystemUniqueId());
             
             // 生成 SHA256 哈希
-            String fingerprintStr = gson.toJson(info);
-            return sha256(fingerprintStr);
+            String identityStr = gson.toJson(info);
+            return sha256(identityStr);
             
         } catch (Exception e) {
             // 如果获取失败，使用简单的标识
@@ -487,7 +485,6 @@ public class LemonKamiSDK {
             // 构建请求数据
             Map<String, Object> requestData = new LinkedHashMap<>();
             requestData.put("kami", kamiCode);
-            requestData.put("fingerprint", fingerprint);
             requestData.put("device_info", deviceInfo);
             
             Map<String, Object> appInfo = new LinkedHashMap<>();
@@ -651,7 +648,7 @@ public class LemonKamiSDK {
         try {
             Map<String, Object> requestData = new LinkedHashMap<>();
             requestData.put("kami", kamiCode);
-            requestData.put("fingerprint", fingerprint);
+            requestData.put("device_info", deviceInfo);
 
             Map<String, Object> appInfo = new LinkedHashMap<>();
             appInfo.put("app_id", appId);

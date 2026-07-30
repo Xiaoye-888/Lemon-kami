@@ -420,10 +420,11 @@ PAGE_CONTRACTS = [
             region("table", "<el-table"),
         ],
         "card_groups": [],
-        "action_groups": [action_group("filter-actions", ("handleFilterChange",))],
+        "action_groups": [action_group("filter-actions", ("handleFilterChange", "openDeviceDetail(row)"))],
         "tables": [
-            table("device-columns", ("ID", "应用", "设备名称", "设备型号", "设备 ID", "关联卡密", "用户名", "绑定关系", "设备策略", "IP地址", "IP数量", "风险等级", "操作"))
+            table("device-columns", ("ID", "应用", "设备名称", "设备型号", "设备 ID", "关联卡密", "用户名", "绑定关系", "设备策略", "使用设备", "IP地址", "风险等级", "操作"))
         ],
+        "forbidden_tokens": ["查看设备"],
     },
     {
         "id": "admin.account.profile",
@@ -724,11 +725,12 @@ PAGE_CONTRACTS = [
         ],
         "card_groups": [],
         "action_groups": [
-            action_group("admin-row-actions", ("updateRisk(row, 0)", "updateRisk(row, 1)", "updateRisk(row, 2)")),
+            action_group("admin-detail-actions", ("openDeviceDetail(row)", "updateRisk(device, 0)", "updateRisk(device, 1)", "updateRisk(device, 2)")),
         ],
         "tables": [
-            table("device-columns", ("ID", "应用", "设备名称", "设备型号", "设备 ID", "关联卡密", "用户名", "绑定关系", "设备策略", "IP地址", "IP数量", "风险等级", "操作"))
+            table("device-columns", ("ID", "应用", "设备名称", "设备型号", "设备 ID", "关联卡密", "用户名", "绑定关系", "设备策略", "使用设备", "IP地址", "风险等级", "操作"))
         ],
+        "forbidden_tokens": ["查看设备"],
     },
     simple_contract(
         "admin.dashboard",

@@ -28,6 +28,7 @@ from commercial_service import (
 from config import settings
 from database import get_session
 from datetime_utils import to_api_beijing_iso
+from device_management_service import device_group_matches_keyword, group_device_payloads_by_kami
 from interface_docs_service import (
     dump_json as _dump_json,
     ensure_builtin_interfaces as _ensure_builtin_interfaces,
@@ -320,6 +321,29 @@ MERCHANT_INTERFACE_CONFIG_SCHEMAS: dict[str, list[dict[str, Any]]] = {
 
 def _enum_value(value):
     return value.value if hasattr(value, "value") else value
+
+
+def _merchant_machine_bind_mode_value(mode) -> str:
+    if not mode:
+        return MachineBindMode.one_card_one_device.value
+    return mode.value if hasattr(mode, "value") else str(mode)
+
+
+def _merchant_machine_bind_mode_text(mode) -> str:
+    value = _merchant_machine_bind_mode_value(mode)
+    return {
+        MachineBindMode.no_limit.value: "不限制",
+        MachineBindMode.one_card_one_device.value: "一卡一机",
+        MachineBindMode.one_card_multi_device.value: "一卡多机",
+    }.get(value, value)
+
+
+def _merchant_binding_relation_text(kami: Optional[Kami]) -> str:
+    if kami and getattr(kami, "redeemed_by_user_id", None):
+        return "用户授权"
+    if kami and _enum_value(kami.authorization_owner) == AuthorizationOwnerMode.user.value:
+        return "用户授权"
+    return "设备授权"
 
 
 def _app_is_owned_by_user(app: App, user: EndUser) -> bool:
@@ -1028,6 +1052,7 @@ def _device_matches_binding(device: object, binding: KamiDeviceBinding) -> bool:
 def _merchant_device_payload(
     *,
     device: object,
+    primary_binding: Optional[KamiDeviceBinding],
     related_kami_codes: list[str],
     kamis_by_code: dict[str, Kami],
     users_by_id: dict[int, EndUser],
@@ -1052,7 +1077,12 @@ def _merchant_device_payload(
         user_type = "admin"
 
     risk_level = getattr(device, "risk_level", 0)
-    risk_text = {0: "normal", 1: "warning", 2: "blocked"}.get(risk_level, "unknown")
+    risk_text = {0: "正常", 1: "警告", 2: "黑名单"}.get(risk_level, "未知")
+    machine_bind_mode = _merchant_machine_bind_mode_value(kami.machine_bind_mode) if kami else None
+    first_bind_at = primary_binding.first_bind_at if primary_binding else None
+    last_verify_at = primary_binding.last_verify_at if primary_binding else (
+        kami.last_verify_at if kami and kami.last_verify_at else None
+    )
     return {
         "id": getattr(device, "id", None),
         "app_id": getattr(device, "app_id", None),
@@ -1067,6 +1097,7 @@ def _merchant_device_payload(
         "kami_code": related_kami_codes[0] if related_kami_codes else None,
         "kami_codes": related_kami_codes,
         "kami_count": len(related_kami_codes),
+        "first_bind_at": to_api_beijing_iso(first_bind_at, naive="civil") if first_bind_at else None,
         "username": redeemed_user.username if redeemed_user else None,
         "user_id": redeemed_user.id if redeemed_user else None,
         "user_type": user_type,
@@ -1075,9 +1106,13 @@ def _merchant_device_payload(
         "issuer_user_id": issuing_user.id if issuing_user else None,
         "issuing_user": _compact_end_user_payload(issuing_user),
         "owning_user": _compact_end_user_payload(owning_user),
+        "binding_relation": _merchant_binding_relation_text(kami),
+        "machine_bind_mode": machine_bind_mode,
+        "machine_bind_mode_text": _merchant_machine_bind_mode_text(machine_bind_mode),
+        "max_bind_devices": kami.max_bind_devices if kami else None,
         "risk_level": risk_level,
         "risk_level_text": risk_text,
-        "last_verify_at": to_api_beijing_iso(kami.last_verify_at, naive="civil") if kami and kami.last_verify_at else None,
+        "last_verify_at": to_api_beijing_iso(last_verify_at, naive="civil") if last_verify_at else None,
     }
 
 
@@ -1558,6 +1593,7 @@ async def list_merchant_devices(
     payloads = [
         _merchant_device_payload(
             device=device,
+            primary_binding=primary_binding_by_device_id.get(device.id),
             related_kami_codes=related_codes_by_device_id.get(device.id, []),
             kamis_by_code=kamis_by_code,
             users_by_id=users_by_id,
@@ -1566,7 +1602,12 @@ async def list_merchant_devices(
         )
         for device in visible_devices
     ]
-    payloads = [payload for payload in payloads if _merchant_device_payload_matches_keyword(payload, keyword_value)]
+    payloads = group_device_payloads_by_kami(payloads)
+    payloads = [
+        payload
+        for payload in payloads
+        if device_group_matches_keyword(payload, keyword_value, _merchant_device_payload_matches_keyword)
+    ]
     payloads.sort(key=lambda item: str(item.get("id") or ""), reverse=True)
 
     total = len(payloads)

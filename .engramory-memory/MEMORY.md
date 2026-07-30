@@ -7,6 +7,6 @@
 - [spec-delete-capability-guard](2026-07-29-spec-delete-capability-guard.md): Spec deletion is blocked unless no issued kamis remain; batch deletion defaults to non-empty protection unless an explicit cascade delete is confirmed.
 - [centered-dialog-preference](2026-07-30-centered-dialog-preference.md): Prefer centered dialogs or standalone pages for admin/merchant detail and edit flows; avoid right-side drawer panels unless explicitly requested.
 - [public-domain-default](2026-07-30-public-domain-default.md): Lemon Kami public access default is `http://lemonkami.top`, while SSH deployment host should remain the VPS IP unless explicitly changed.
-- [device-info-and-merchant-admin-boundaries](2026-07-30-device-info-and-merchant-admin-boundaries.md): Device listings now prefer OS device name/model/device ID, and admin/merchant app tables have stricter ownership and secret boundaries.
+- [device-info-and-merchant-admin-boundaries](2026-07-30-device-info-and-merchant-admin-boundaries.md): Device listings are grouped by kami, SDK requests use only `device_info.device_id`, and admin/merchant ownership boundaries stay strict.
 - [admin-audit-target-user](2026-07-30-admin-audit-target-user.md): Admin audit logs should record the target merchant user when an admin operates on merchant-owned resources.
 - [full-site-qa-hardening](2026-07-31-full-site-qa-hardening.md): Full-site QA now requires router/page-contract/browser-route coverage gates and dynamic production browser contexts for role-bound pages.

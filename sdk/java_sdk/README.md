@@ -16,7 +16,7 @@
 
 ## 功能特性
 
-✅ **设备指纹生成**：基于硬件信息生成唯一设备标识  
+✅ **设备 ID 采集**：基于硬件信息生成唯一设备标识
 ✅ **RSA + AES 混合加密**：确保数据传输安全  
 ✅ **HMAC-SHA256 签名**：防止请求篡改  
 ✅ **卡密验证**：支持多种卡密类型验证  
@@ -347,9 +347,9 @@ String publicKey = "-----BEGIN PUBLIC KEY-----\n...";
 LemonKamiSDK sdk = new LemonKamiSDK(appId, appSecret, serverUrl, publicKey);
 ```
 
-### Q3: 设备指纹是如何生成的？
+### Q3: 设备 ID 是如何生成的？
 
-A: 设备指纹基于以下信息生成：
+A: 设备 ID 基于以下信息生成：
 - 操作系统名称和版本
 - CPU 架构
 - MAC 地址
@@ -416,7 +416,7 @@ java_sdk/
 ### v1.0.0 (2026-04-27)
 
 **初始版本**
-- ✅ 设备指纹生成
+- ✅ 设备 ID 采集
 - ✅ RSA + AES 混合加密
 - ✅ HMAC-SHA256 签名
 - ✅ 卡密验证

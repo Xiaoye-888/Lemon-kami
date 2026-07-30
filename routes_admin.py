@@ -88,6 +88,7 @@ from kami_spec_service import (
     infer_spec_group,
 )
 from datetime_utils import to_api_beijing_iso
+from device_management_service import device_group_matches_keyword, group_device_payloads_by_kami
 from crypto import RSACrypto
 from config import settings
 from jose import jwt, JWTError
@@ -4408,6 +4409,8 @@ def _admin_device_payload(
     risk = get_device_risk_payload(device.risk_level, ip_count)
     machine_bind_mode = get_machine_bind_mode_value(kami.machine_bind_mode) if kami else None
     redeemed_at = _kami_redeemed_at(kami) if kami else None
+    first_bind_at = binding.first_bind_at if binding else redeemed_at
+    device_last_verify_at = binding.last_verify_at if binding else None
     return {
         "id": device.id,
         "app_id": device.app_id,
@@ -4423,9 +4426,12 @@ def _admin_device_payload(
         "kami_codes": related_kami_codes,
         "kami_count": len(related_kami_codes),
         "kami_status": _enum_value(kami.status) if kami else None,
+        "first_bind_at": to_api_beijing_iso(first_bind_at, naive="civil") if first_bind_at else None,
         "redeemed_at": to_api_beijing_iso(redeemed_at, naive="civil") if redeemed_at else None,
         "activate_time": to_api_beijing_iso(kami.activate_time, naive="civil") if kami and kami.activate_time else None,
-        "last_verify_at": to_api_beijing_iso(kami.last_verify_at, naive="civil") if kami and kami.last_verify_at else None,
+        "last_verify_at": to_api_beijing_iso(device_last_verify_at, naive="civil") if device_last_verify_at else (
+            to_api_beijing_iso(kami.last_verify_at, naive="civil") if kami and kami.last_verify_at else None
+        ),
         "username": username,
         "user_id": user_id,
         "user_type": user_type,
@@ -4744,7 +4750,12 @@ async def list_devices(
         )
         for device in all_devices
     ]
-    payloads = [payload for payload in payloads if _device_payload_matches_keyword(payload, keyword_value)]
+    payloads = group_device_payloads_by_kami(payloads)
+    payloads = [
+        payload
+        for payload in payloads
+        if device_group_matches_keyword(payload, keyword_value, _device_payload_matches_keyword)
+    ]
 
     total = len(payloads)
     offset = (page - 1) * page_size

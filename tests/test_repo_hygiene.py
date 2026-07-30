@@ -47,3 +47,29 @@ def test_reset_password_script_reads_secrets_from_env_or_prompt_only():
     assert "-p{mysql_password}" not in source
     assert 'new_password = "' not in source
     assert 'mysql_password = "' not in source
+
+
+def test_builtin_sdk_clients_send_device_info_device_id_without_legacy_request_fields():
+    source_by_path = {
+        "python": Path("sdk/python_sdk/lemon_kami.py").read_text(encoding="utf-8"),
+        "js": Path("sdk/js_sdk/lemon-kami.js").read_text(encoding="utf-8"),
+        "js_complete": Path("sdk/js_sdk/lemon-kami-complete.js").read_text(encoding="utf-8"),
+        "admin_public_js": Path("admin/public/sdk/lemon-kami.js").read_text(encoding="utf-8"),
+        "java": Path("sdk/java_sdk/src/main/java/com/lemon/kami/LemonKamiSDK.java").read_text(encoding="utf-8"),
+    }
+
+    assert '"fingerprint": self.fingerprint' not in source_by_path["python"]
+    assert '"fingerprint": this.fingerprint' not in source_by_path["js"]
+    assert '"fingerprint": this.fingerprint' not in source_by_path["js_complete"]
+    assert '"fingerprint": this.fingerprint' not in source_by_path["admin_public_js"]
+    assert '"uuid": this.deviceUuid' not in source_by_path["js"]
+    assert '"uuid": this.deviceUuid' not in source_by_path["js_complete"]
+    assert '"uuid": this.deviceUuid' not in source_by_path["admin_public_js"]
+    assert 'requestData.put("fingerprint"' not in source_by_path["java"]
+    assert 'requestData.put("uuid"' not in source_by_path["java"]
+
+    assert '"device_info": self.device_info' in source_by_path["python"]
+    assert "device_info: this.deviceInfo" in source_by_path["js"]
+    assert "device_info: this.deviceInfo" in source_by_path["js_complete"]
+    assert "device_info: this.deviceInfo" in source_by_path["admin_public_js"]
+    assert 'requestData.put("device_info", deviceInfo)' in source_by_path["java"]

@@ -3697,6 +3697,125 @@ def test_admin_devices_require_admin_and_merchant_devices_are_scoped():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_device_management_groups_devices_by_kami_and_keeps_machine_details():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    first_bind_at = get_now_naive()
+    with Session(engine) as session:
+        merchant = EndUser(username="device-group-merchant", password_hash=hash_password("secret123"), status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        app = App(
+            app_id="app_device_group",
+            name="Device Group App",
+            app_secret="secret-device-group",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        session.add(app)
+        session.add(
+            Kami(
+                app_id="app_device_group",
+                kami_code="GROUPDEV001",
+                kami_type="lifetime",
+                status="active",
+                machine_bind_mode="no_limit",
+                max_bind_devices=0,
+                created_by_user_id=merchant.id,
+            )
+        )
+        machines = [
+            ("device-first", "fingerprint-first", "DESKTOP-FIRST", "Legion Y7000P IRX9", "FIRST-ID", "203.0.113.21", 0),
+            ("device-second", "fingerprint-second", "DESKTOP-SECOND", "ThinkBook 14", "SECOND-ID", "203.0.113.22", 1),
+            ("device-third", "fingerprint-third", "DESKTOP-THIRD", "Surface Pro", "THIRD-ID", "203.0.113.23", 2),
+        ]
+        for index, (uuid, fingerprint, name, model, device_id, ip, risk_level) in enumerate(machines):
+            session.add(
+                KamiDeviceBinding(
+                    app_id="app_device_group",
+                    kami_code="GROUPDEV001",
+                    device_uuid=uuid,
+                    fingerprint=fingerprint,
+                    bind_ip=ip,
+                    first_bind_at=first_bind_at + timedelta(minutes=index),
+                    last_verify_at=first_bind_at + timedelta(minutes=index),
+                )
+            )
+            session.add(
+                Device(
+                    app_id="app_device_group",
+                    uuid=uuid,
+                    fingerprint=fingerprint,
+                    device_name=name,
+                    device_model=model,
+                    device_id=device_id,
+                    last_ip=ip,
+                    risk_level=risk_level,
+                )
+            )
+        session.commit()
+        merchant_token = routes_user.create_user_access_token(merchant)
+        admin_token = routes_admin.create_access_token({"sub": "admin", "user_id": 1, "is_admin": True})
+
+    try:
+        admin_response = client.get(
+            "/api/v1/admin/devices",
+            headers=auth_headers(admin_token),
+            params={"app_id": "app_device_group"},
+        )
+        assert admin_response.status_code == 200
+        admin_items = admin_response.json()["data"]["items"]
+        assert len(admin_items) == 1
+        admin_item = admin_items[0]
+        assert admin_item["row_type"] == "kami"
+        assert admin_item["kami_code"] == "GROUPDEV001"
+        assert admin_item["device_count"] == 3
+        assert admin_item["device_name"] == "DESKTOP-FIRST"
+        assert admin_item["device_model"] == "Legion Y7000P IRX9"
+        assert admin_item["device_id"] == "FIRST-ID"
+        assert admin_item["last_ip"] == "203.0.113.21"
+        assert admin_item["machine_bind_mode"] == "no_limit"
+        assert admin_item["machine_bind_mode_text"] == "不限制(3台)"
+        assert [device["device_id"] for device in admin_item["device_items"]] == [
+            "FIRST-ID",
+            "SECOND-ID",
+            "THIRD-ID",
+        ]
+        assert [device["last_ip"] for device in admin_item["device_items"]] == [
+            "203.0.113.21",
+            "203.0.113.22",
+            "203.0.113.23",
+        ]
+        assert [device["risk_level"] for device in admin_item["device_items"]] == [0, 1, 2]
+
+        merchant_response = client.get(
+            "/api/v1/merchant/devices",
+            headers=auth_headers(merchant_token),
+            params={"app_id": "app_device_group", "keyword": "SECOND-ID"},
+        )
+        assert merchant_response.status_code == 200
+        merchant_items = merchant_response.json()["data"]["items"]
+        assert len(merchant_items) == 1
+        assert merchant_items[0]["kami_code"] == "GROUPDEV001"
+        assert merchant_items[0]["device_count"] == 3
+        assert [device["device_name"] for device in merchant_items[0]["device_items"]] == [
+            "DESKTOP-FIRST",
+            "DESKTOP-SECOND",
+            "DESKTOP-THIRD",
+        ]
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_proof_upload_runtime_has_writable_persistent_uploads_directory():
     project_root = __import__("pathlib").Path(__file__).resolve().parents[1]
     dockerfile = (project_root / "Dockerfile").read_text(encoding="utf-8")

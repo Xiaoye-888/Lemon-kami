@@ -32,7 +32,6 @@
         </el-form-item>
       </el-form>
 
-      <!-- 设备表格 -->
       <el-table
         :data="devices"
         v-loading="loading"
@@ -45,16 +44,26 @@
           <template #default="{ row }">{{ row.app_name || row.app_id || '-' }}</template>
         </el-table-column>
         <el-table-column prop="device_name" label="设备名称" min-width="170" show-overflow-tooltip>
-          <template #default="{ row }">{{ deviceInfoText(row.device_name) }}</template>
+          <template #default="{ row }">
+            <span class="clickable-text" @click="openDeviceDetail(row)">{{ deviceInfoText(row.device_name) }}</span>
+          </template>
         </el-table-column>
         <el-table-column prop="device_model" label="设备型号" min-width="190" show-overflow-tooltip>
-          <template #default="{ row }">{{ deviceInfoText(row.device_model) }}</template>
+          <template #default="{ row }">
+            <span class="clickable-text" @click="openDeviceDetail(row)">{{ deviceInfoText(row.device_model) }}</span>
+          </template>
         </el-table-column>
         <el-table-column prop="device_id" label="设备 ID" min-width="250" show-overflow-tooltip>
-          <template #default="{ row }">{{ deviceInfoText(row.device_id) }}</template>
+          <template #default="{ row }">
+            <span class="clickable-text" @click="openDeviceDetail(row)">{{ deviceInfoText(row.device_id) }}</span>
+          </template>
         </el-table-column>
         <el-table-column label="关联卡密" min-width="180" show-overflow-tooltip>
-          <template #default="{ row }">{{ getDeviceKamiText(row) }}</template>
+          <template #default="{ row }">
+            <span class="clickable-text clickable-text--strong" @click="openDeviceDetail(row)">
+              {{ getDeviceKamiText(row) }}
+            </span>
+          </template>
         </el-table-column>
         <el-table-column prop="username" label="用户名" width="140">
           <template #default="{ row }">{{ row.username || '-' }}</template>
@@ -62,47 +71,24 @@
         <el-table-column prop="binding_relation" label="绑定关系" width="120">
           <template #default="{ row }">{{ row.binding_relation || '-' }}</template>
         </el-table-column>
-        <el-table-column prop="machine_bind_mode_text" label="设备策略" width="130">
-          <template #default="{ row }">{{ row.machine_bind_mode_text || '-' }}</template>
+        <el-table-column prop="machine_bind_mode_text" label="设备策略" width="150">
+          <template #default="{ row }">
+            <span class="clickable-text" @click="openDeviceDetail(row)">{{ getDevicePolicyText(row) }}</span>
+          </template>
         </el-table-column>
-        <el-table-column prop="last_ip" label="IP地址" width="150" />
-        <el-table-column prop="ip_count" label="IP数量" width="100" />
+        <el-table-column prop="device_count" label="使用设备" width="110">
+          <template #default="{ row }">
+            <span class="clickable-text" @click="openDeviceDetail(row)">{{ getDeviceCountText(row) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="last_ip" label="IP地址" width="150">
+          <template #default="{ row }">{{ row.last_ip || '-' }}</template>
+        </el-table-column>
         <el-table-column prop="risk_level" label="风险等级" width="120">
           <template #default="{ row }">
             <el-tag :type="getRiskType(row.risk_level)">
               {{ getRiskText(row) }}
             </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
-          <template #default="{ row }">
-            <el-button 
-              v-if="!isMerchantConsole"
-              size="small" 
-              type="success" 
-              :disabled="row.risk_level === 0"
-              @click="updateRisk(row, 0)"
-            >
-              恢复正常
-            </el-button>
-            <el-button 
-              v-if="!isMerchantConsole"
-              size="small" 
-              type="warning" 
-              :disabled="row.risk_level === 1"
-              @click="updateRisk(row, 1)"
-            >
-              警告
-            </el-button>
-            <el-button 
-              v-if="!isMerchantConsole"
-              size="small" 
-              type="danger" 
-              :disabled="row.risk_level === 2"
-              @click="updateRisk(row, 2)"
-            >
-              黑名单
-            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -116,6 +102,61 @@
         style="margin-top: 20px; justify-content: flex-end"
       />
     </el-card>
+
+    <el-dialog v-model="deviceDetailVisible" :title="deviceDetailTitle" width="980px" class="device-detail-dialog">
+      <div v-if="selectedDeviceGroup" class="detail-meta">
+        <span>卡密 <strong>{{ getDeviceKamiText(selectedDeviceGroup) }}</strong></span>
+        <span>策略 <strong>{{ getDevicePolicyText(selectedDeviceGroup) }}</strong></span>
+        <span>设备 <strong>{{ getDeviceCountText(selectedDeviceGroup) }}</strong></span>
+      </div>
+      <el-table :data="selectedDeviceItems" border stripe>
+        <el-table-column label="设备名称" min-width="170" show-overflow-tooltip>
+          <template #default="{ row: device }">{{ deviceInfoText(device.device_name) }}</template>
+        </el-table-column>
+        <el-table-column label="设备型号" min-width="190" show-overflow-tooltip>
+          <template #default="{ row: device }">{{ deviceInfoText(device.device_model) }}</template>
+        </el-table-column>
+        <el-table-column label="设备 ID" min-width="250" show-overflow-tooltip>
+          <template #default="{ row: device }">{{ deviceInfoText(device.device_id) }}</template>
+        </el-table-column>
+        <el-table-column label="IP地址" width="150">
+          <template #default="{ row: device }">{{ device.last_ip || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="风险等级" width="120">
+          <template #default="{ row: device }">
+            <el-tag :type="getRiskType(device.risk_level)">{{ getRiskText(device) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="!isMerchantConsole" label="操作" width="270" fixed="right">
+          <template #default="{ row: device }">
+            <el-button
+              size="small"
+              type="success"
+              :disabled="!canManageDeviceRisk(device) || device.risk_level === 0"
+              @click="updateRisk(device, 0)"
+            >
+              恢复正常
+            </el-button>
+            <el-button
+              size="small"
+              type="warning"
+              :disabled="!canManageDeviceRisk(device) || device.risk_level === 1"
+              @click="updateRisk(device, 1)"
+            >
+              警告
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              :disabled="!canManageDeviceRisk(device) || device.risk_level === 2"
+              @click="updateRisk(device, 2)"
+            >
+              黑名单
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
@@ -133,12 +174,21 @@ const apps = ref([])
 const total = ref(0)
 const route = useRoute()
 const isMerchantConsole = computed(() => route.path.startsWith('/merchant'))
+const deviceDetailVisible = ref(false)
+const selectedDeviceGroup = ref(null)
+const selectedGroupKey = ref('')
 
 const queryParams = reactive({
   app_id: '',  // 默认为空，显示全部
   keyword: '',
   page: 1,
   page_size: 20
+})
+
+const selectedDeviceItems = computed(() => selectedDeviceGroup.value?.device_items || [])
+const deviceDetailTitle = computed(() => {
+  const code = selectedDeviceGroup.value ? getDeviceKamiText(selectedDeviceGroup.value) : ''
+  return code && code !== '-' ? `设备明细 - ${code}` : '设备明细'
 })
 
 const loadApps = async () => {
@@ -151,12 +201,21 @@ const loadApps = async () => {
   }
 }
 
+const groupIdentity = (row) => row?.group_key || row?.kami_code || row?.id
+
+const syncSelectedDeviceGroup = () => {
+  if (!deviceDetailVisible.value || !selectedGroupKey.value) return
+  const nextGroup = devices.value.find((row) => groupIdentity(row) === selectedGroupKey.value)
+  if (nextGroup) selectedDeviceGroup.value = nextGroup
+}
+
 const loadDevices = async () => {
   loading.value = true
   try {
     const res = isMerchantConsole.value ? await getMerchantDevices(queryParams) : await getDevices(queryParams)
     devices.value = res.data.items || []
     total.value = res.data.total ?? devices.value.length
+    syncSelectedDeviceGroup()
   } catch (error) {
     console.error('加载失败:', error)
     ElMessage.error('加载设备列表失败')
@@ -170,6 +229,12 @@ const handleFilterChange = () => {
   loadDevices()
 }
 
+const openDeviceDetail = (row) => {
+  selectedDeviceGroup.value = row
+  selectedGroupKey.value = groupIdentity(row)
+  deviceDetailVisible.value = true
+}
+
 const deviceInfoText = (value) => value || '等待新版SDK上报'
 
 const getDeviceKamiText = (row) => {
@@ -179,27 +244,41 @@ const getDeviceKamiText = (row) => {
   return row?.kami_code || '-'
 }
 
+const getDevicePolicyText = (row) => row?.machine_bind_mode_text || '-'
+
+const getDeviceCountText = (row) => {
+  const count = row?.device_count ?? (Array.isArray(row?.device_items) ? row.device_items.length : 0)
+  return count ? `${count}台` : '-'
+}
+
+const getDeviceIdentityText = (row) => (
+  row?.device_name || row?.device_model || row?.device_id || row?.last_ip || '该设备'
+)
+
+const canManageDeviceRisk = (row) => Number.isInteger(Number(row?.id))
+
 const updateRisk = async (row, level) => {
-  if (isMerchantConsole.value) return
+  if (isMerchantConsole.value || !canManageDeviceRisk(row)) return
   const levelText = { 0: '恢复正常', 1: '警告', 2: '黑名单' }
+  const targetText = getDeviceIdentityText(row)
   const confirmText = {
-    0: `确定要将设备 "${row.uuid}" 恢复正常吗？`,
-    1: `确定要将设备 "${row.uuid}" 设置为警告状态吗？`,
-    2: `确定要将设备 "${row.uuid}" 加入黑名单吗？这将禁止该设备使用所有卡密。`
+    0: `确定要将设备 "${targetText}" 恢复正常吗？`,
+    1: `确定要将设备 "${targetText}" 设置为警告状态吗？`,
+    2: `确定要将设备 "${targetText}" 加入黑名单吗？这将禁止该设备继续使用。`
   }
-  
+
   try {
     await ElMessageBox.confirm(confirmText[level], '提示', {
       confirmButtonText: '确定',
       cancelButtonText: '取消',
       type: level === 2 ? 'warning' : 'info'
     })
-    
+
     await updateDeviceRisk(row.id, level)
     ElMessage.success(`${levelText[level]}成功`)
-    loadDevices()
+    await loadDevices()
   } catch (error) {
-    if (error !== 'cancel') {
+    if (error !== 'cancel' && error !== 'close') {
       console.error('更新失败:', error)
       ElMessage.error('更新失败')
     }
@@ -231,5 +310,33 @@ onMounted(() => {
 
 .filter-form {
   margin-bottom: 20px;
+}
+
+.clickable-text {
+  color: #2f7df6;
+  cursor: pointer;
+  line-height: 1.5;
+}
+
+.clickable-text:hover {
+  color: #1b5fd6;
+  text-decoration: underline;
+}
+
+.clickable-text--strong {
+  font-weight: 600;
+}
+
+.detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+  margin-bottom: 14px;
+  color: #607089;
+}
+
+.detail-meta strong {
+  color: #0f172a;
+  font-weight: 700;
 }
 </style>

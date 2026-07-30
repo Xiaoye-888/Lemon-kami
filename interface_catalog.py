@@ -22,6 +22,12 @@ SDK_SECURITY_PARAMS = [
     {"name": "nonce", "type": "string", "required": True, "description": "随机串，防重放"},
 ]
 
+SDK_DEVICE_IDENTITY_PARAMS = [
+    {"name": "payload.device_info.device_name", "type": "string", "required": False, "description": "系统设备名称，用于后台设备管理展示"},
+    {"name": "payload.device_info.device_model", "type": "string", "required": False, "description": "设备型号，用于后台设备管理展示"},
+    {"name": "payload.device_info.device_id", "type": "string", "required": True, "description": "系统设备 ID，作为设备绑定身份；必须在同一台电脑上保持稳定"},
+]
+
 BUILTIN_API_INTERFACES = [
     {
         "name": "用户注册",
@@ -228,8 +234,7 @@ BUILTIN_API_INTERFACES = [
         "request_headers": [],
         "request_params": SDK_SECURITY_PARAMS + [
             {"name": "payload.kami", "type": "string", "required": True, "description": "卡密"},
-            {"name": "payload.uuid", "type": "string", "required": False, "description": "稳定设备 UUID，建议每台设备固定不变"},
-            {"name": "payload.fingerprint", "type": "string", "required": True, "description": "设备指纹"},
+            *SDK_DEVICE_IDENTITY_PARAMS,
             {"name": "payload.user_id", "type": "integer|string", "required": False, "description": "用户授权场景推荐传入；作为稳定绑定标识，用户名变更不影响授权归属"},
             {"name": "payload.username", "type": "string", "required": False, "description": "用户授权场景推荐与 user_id 同时传入；用于后台展示注册用户名并同步改名"},
         ],
@@ -242,8 +247,8 @@ BUILTIN_API_INTERFACES = [
         ],
         "success_example": {"success": True, "message": "卡密验证成功", "data": {"valid": True, "kami_type": "day", "expires_at": "2026-08-12T12:00:00"}},
         "error_example": {"success": False, "detail": "卡密无效或设备不匹配"},
-        "remark": "用户授权建议同时传 user_id 和 username：绑定识别看 user_id，后台展示看 username；设备授权不需要传用户字段。",
-        "doc_markdown": "验证接口继续沿用现有 SDK 加密请求格式，业务字段在 payload 中传输。无注册账号的软件使用默认设备授权，只传 kami、uuid、fingerprint；有账号体系的软件开启用户授权后，推荐同时传 user_id 和 username，user_id 用于稳定绑定，username 用于后台展示和改名同步。",
+        "remark": "SDK 必须传 device_info.device_id 作为设备身份。用户授权建议同时传 user_id 和 username：绑定识别看 user_id，后台展示看 username。",
+        "doc_markdown": "验证接口继续沿用现有 SDK 加密请求格式，业务字段在 payload 中传输。无注册账号的软件使用默认设备授权，只传 kami 和 device_info.device_id。有账号体系的软件开启用户授权后，推荐同时传 user_id 和 username，user_id 用于稳定绑定，username 用于后台展示和改名同步。",
         "sort_order": 90,
     },
     {
@@ -258,8 +263,7 @@ BUILTIN_API_INTERFACES = [
         "request_headers": [],
         "request_params": SDK_SECURITY_PARAMS + [
             {"name": "payload.kami", "type": "string", "required": True, "description": "卡密"},
-            {"name": "payload.uuid", "type": "string", "required": False, "description": "稳定设备 UUID，建议与 verify 保持一致"},
-            {"name": "payload.fingerprint", "type": "string", "required": True, "description": "设备指纹"},
+            *SDK_DEVICE_IDENTITY_PARAMS,
             {"name": "payload.user_id", "type": "integer|string", "required": False, "description": "用户授权场景推荐传入；必须与验证绑定的同一用户保持一致"},
             {"name": "payload.username", "type": "string", "required": False, "description": "用户授权场景推荐与 user_id 同时传入；用于后台展示注册用户名并同步改名"},
             {"name": "payload.amount", "type": "integer", "required": False, "description": "本次核销次数，默认 1"},
@@ -278,8 +282,8 @@ BUILTIN_API_INTERFACES = [
             "data": {"consume_id": "tc_xxx", "times_total": 10, "times_remaining": 9},
         },
         "error_example": {"success": False, "detail": "次数卡剩余次数不足"},
-        "remark": "推荐业务方每次核销传入稳定 biz_id；用户授权场景继续同时传 user_id 和 username。",
-        "doc_markdown": "次数卡应先调用 verify 判断授权有效，再在实际使用权益时调用 consume 扣减次数。用户授权卡密核销时，推荐继续同时传 user_id 和 username，确保扣减记录、授权明细和后台展示归属一致。",
+        "remark": "推荐业务方每次核销传入稳定 biz_id；设备身份必须传 device_info.device_id；用户授权场景继续同时传 user_id 和 username。",
+        "doc_markdown": "次数卡应先调用 verify 判断授权有效，再在实际使用权益时调用 consume 扣减次数。SDK 必须传 device_info.device_id 作为设备身份。用户授权卡密核销时，推荐继续同时传 user_id 和 username，确保扣减记录、授权明细和后台展示归属一致。",
         "sort_order": 95,
     },
     {
@@ -293,8 +297,8 @@ BUILTIN_API_INTERFACES = [
         "content_type": "application/json",
         "request_headers": [],
         "request_params": SDK_SECURITY_PARAMS + [
-            {"name": "kami_code", "type": "string", "required": True, "description": "卡密"},
-            {"name": "fingerprint", "type": "string", "required": True, "description": "设备指纹"},
+            {"name": "payload.kami", "type": "string", "required": True, "description": "卡密"},
+            *SDK_DEVICE_IDENTITY_PARAMS,
         ],
         "response_params": [
             {"name": "success", "type": "boolean", "required": True, "description": "是否解绑成功"},
@@ -302,8 +306,8 @@ BUILTIN_API_INTERFACES = [
         ],
         "success_example": {"success": True, "message": "卡密解绑成功"},
         "error_example": {"success": False, "detail": "应用未允许解绑"},
-        "remark": "仅在应用核心配置允许解绑时生效。",
-        "doc_markdown": "解绑可按配置扣减时长或次数。",
+        "remark": "仅在应用核心配置允许解绑时生效。设备身份必须传 device_info.device_id。",
+        "doc_markdown": "解绑可按配置扣减时长或次数。SDK 必须传 device_info.device_id 作为设备身份。",
         "sort_order": 100,
     },
     {
@@ -317,9 +321,8 @@ BUILTIN_API_INTERFACES = [
         "content_type": "application/json",
         "request_headers": [],
         "request_params": SDK_SECURITY_PARAMS + [
-            {"name": "kami_code", "type": "string", "required": True, "description": "卡密"},
-            {"name": "device_uuid", "type": "string", "required": False, "description": "设备 UUID"},
-            {"name": "fingerprint", "type": "string", "required": True, "description": "设备指纹"},
+            {"name": "payload.kami", "type": "string", "required": True, "description": "卡密"},
+            *SDK_DEVICE_IDENTITY_PARAMS,
         ],
         "response_params": [
             {"name": "success", "type": "boolean", "required": True, "description": "请求是否处理成功"},
@@ -335,8 +338,8 @@ BUILTIN_API_INTERFACES = [
             "max_bind_devices": 2,
         },
         "error_example": {"success": False, "message": "卡密不存在"},
-        "remark": "默认开通。关闭后批次不显示设备绑定限制，SDK 验证也不会占用设备名额。",
-        "doc_markdown": "客户端应在用户退出登录、软件正常关闭时调用；异常断开场景后续可通过心跳超时进一步自动释放。",
+        "remark": "默认开通。关闭后批次不显示设备绑定限制，SDK 验证也不会占用设备名额。设备身份必须传 device_info.device_id。",
+        "doc_markdown": "客户端应在用户退出登录、软件正常关闭时调用；异常断开场景后续可通过心跳超时进一步自动释放。SDK 必须传 device_info.device_id 作为设备身份。",
         "sort_order": 105,
     },
     {
