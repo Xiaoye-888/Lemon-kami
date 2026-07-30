@@ -1269,7 +1269,9 @@ def test_phase2_sensitive_actions_use_fixed_confirmation_texts():
     assert "deleteKamiSpec(variant.id, { confirm_text: confirmText })" in kami_batches
     assert "deleteKamiSpec(row.id, { confirm_text: confirmText })" in kami_batches
     assert "确认删除批次" in kami_batches
-    assert "deleteKamiBatch(row.id, { confirm_text: confirmText })" in kami_batches
+    assert "payload.cascade_kamis = true" in kami_batches
+    assert "deleteKamiBatch(row.id, payload)" in kami_batches
+    assert "批次已删除，并清理" in kami_batches
 
 
 def test_kami_batches_ignores_stale_route_app_id_before_loading_child_resources():

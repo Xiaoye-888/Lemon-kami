@@ -3322,6 +3322,7 @@ async def delete_kami_batch(
     batch_id: int,
     request: Request,
     confirm_text: Optional[str] = Query(None),
+    cascade_kamis: bool = Query(False),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -3344,10 +3345,10 @@ async def delete_kami_batch(
         metadata={"app_id": batch.app_id, "batch_no": batch.batch_no},
     )
 
-    existing_kami = session.exec(
+    existing_kamis = session.exec(
         select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
-    ).first()
-    if existing_kami:
+    ).all()
+    if existing_kamis and not cascade_kamis:
         error_message = "批次下仍有卡密，请先删除或转移卡密后再删除批次。"
         record_admin_audit(
             session,
@@ -3366,7 +3367,30 @@ async def delete_kami_batch(
     app_id = batch.app_id
     batch_no = batch.batch_no
     payload_data = _kami_batch_payload(batch)
+    deleted_kami_count = 0
+    deleted_device_binding_count = 0
+    detached_event_log_count = 0
     try:
+        if cascade_kamis:
+            for kami in existing_kamis:
+                bindings = session.exec(
+                    select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code == kami.kami_code)
+                ).all()
+                for binding in bindings:
+                    session.delete(binding)
+                deleted_device_binding_count += len(bindings)
+
+                related_logs = session.exec(
+                    select(EventLog).where(EventLog.kami_code == kami.kami_code)
+                ).all()
+                for log in related_logs:
+                    log.kami_code = None
+                    session.add(log)
+                detached_event_log_count += len(related_logs)
+
+                session.delete(kami)
+                deleted_kami_count += 1
+
         session.delete(batch)
         session.commit()
     except Exception as error:
@@ -3381,11 +3405,18 @@ async def delete_kami_batch(
             status="failed",
             request=request,
             before=payload_data,
-            metadata={"app_id": app_id, "batch_no": batch_no},
+            metadata={"app_id": app_id, "batch_no": batch_no, "cascade_kamis": cascade_kamis},
             error_message=error_message,
             summary=f"删除卡密批次失败：{batch_no}",
         )
         raise HTTPException(status_code=400, detail=error_message)
+    after_data = {
+        **payload_data,
+        "cascade_kamis": cascade_kamis,
+        "deleted_kami_count": deleted_kami_count,
+        "deleted_device_binding_count": deleted_device_binding_count,
+        "detached_event_log_count": detached_event_log_count,
+    }
     record_admin_audit(
         session,
         admin=current_user,
@@ -3393,7 +3424,7 @@ async def delete_kami_batch(
         resource_type="kami_batch",
         resource_id=batch_id,
         request=request,
-        after=payload_data,
+        after=after_data,
         summary=f"删除卡密批次 {batch_no}",
     )
 
@@ -3402,11 +3433,21 @@ async def delete_kami_batch(
         username=username,
         event_type="kami_batch_delete",
         app_id=app_id,
-        payload=payload_data,
+        payload=after_data,
         message=f"用户 {username} 删除了卡密批次 {batch_no}",
     )
 
-    return {"success": True, "message": "批次已删除", "data": {"id": batch_id, "batch_no": batch_no}}
+    return {
+        "success": True,
+        "message": "批次已删除",
+        "data": {
+            "id": batch_id,
+            "batch_no": batch_no,
+            "deleted_kami_count": deleted_kami_count,
+            "deleted_device_binding_count": deleted_device_binding_count,
+            "detached_event_log_count": detached_event_log_count,
+        },
+    }
 
 
 @router.post("/kamis/batch", summary="批量生成卡密")

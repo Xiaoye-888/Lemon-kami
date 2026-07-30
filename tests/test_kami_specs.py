@@ -579,6 +579,103 @@ def test_delete_empty_spec_and_reject_non_empty_spec():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_delete_kami_batch_can_cascade_delete_batch_kamis_after_confirmation():
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    def override_session():
+        with Session(engine) as session:
+            yield session
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app())
+        session.commit()
+
+    try:
+        batch_response = client.post(
+            "/api/v1/admin/kamis/batches",
+            json={
+                "app_id": "app_demo",
+                "batch_no": "cleanup-batch",
+                "kami_type": "points",
+                "points_amount": 68,
+                "machine_bind_mode": "one_card_one_device",
+                "max_bind_devices": 1,
+                "authorization_owner": "auto",
+                "user_bind_mode": "auto",
+                "status": 1,
+            },
+        )
+        assert batch_response.status_code == 200
+
+        generate_response = client.post(
+            "/api/v1/admin/kamis/batch",
+            params={"app_id": "app_demo", "batch_no": "cleanup-batch", "count": 2},
+        )
+        assert generate_response.status_code == 200
+
+        with Session(engine) as session:
+            batch = session.exec(select(KamiBatch).where(KamiBatch.batch_no == "cleanup-batch")).one()
+            kamis = session.exec(select(Kami).where(Kami.batch_no == "cleanup-batch")).all()
+            session.add(
+                KamiDeviceBinding(
+                    app_id="app_demo",
+                    kami_code=kamis[0].kami_code,
+                    device_uuid="cleanup-device",
+                    fingerprint="cleanup-fingerprint",
+                )
+            )
+            session.add(
+                EventLog(
+                    app_id="app_demo",
+                    kami_code=kamis[1].kami_code,
+                    event_type="verify",
+                    status=1,
+                )
+            )
+            session.commit()
+            batch_id = batch.id
+            kami_codes = [kami.kami_code for kami in kamis]
+
+        delete_response = client.delete(
+            f"/api/v1/admin/kamis/batches/{batch_id}",
+            params={"confirm_text": CONFIRM_DELETE_KAMI_BATCH, "cascade_kamis": True},
+        )
+
+        assert delete_response.status_code == 200
+        payload = delete_response.json()["data"]
+        assert payload["deleted_kami_count"] == 2
+        assert "deleted_codes" not in payload
+
+        with Session(engine) as session:
+            assert session.get(KamiBatch, batch_id) is None
+            assert session.exec(select(Kami).where(Kami.kami_code.in_(kami_codes))).all() == []
+            assert session.exec(
+                select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code.in_(kami_codes))
+            ).all() == []
+            stale_logs = session.exec(select(EventLog).where(EventLog.event_type == "verify")).all()
+            assert len(stale_logs) == 1
+            assert stale_logs[0].kami_code is None
+            success_audit = session.exec(
+                select(AdminAuditLog).where(
+                    AdminAuditLog.action == "delete_kami_batch",
+                    AdminAuditLog.resource_id == str(batch_id),
+                    AdminAuditLog.status == "success",
+                )
+            ).one()
+            assert success_audit.resource_type == "kami_batch"
+            assert '"deleted_kami_count": 2' in (success_audit.after_json or "")
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_delete_kami_spec_prunes_empty_batches_before_deleting_spec():
     from fastapi.testclient import TestClient
     from main import app as fastapi_app

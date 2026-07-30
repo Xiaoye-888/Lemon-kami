@@ -1633,12 +1633,19 @@ const handleSaveBatch = async () => {
 const handleDeleteBatch = async (row) => {
   if (!row) return
   try {
-    await ElMessageBox.confirm(`确定删除批次「${row.batch_no}」吗？只有空批次可以删除。`, '删除批次', {
+    const totalCount = Number(row.total_count || row.stats?.total_count || row.count || 0)
+    const confirmMessage = totalCount > 0
+      ? `批次「${row.batch_no}」下还有 ${totalCount} 张卡密，删除批次会同时删除这些卡密且不可恢复。确定继续吗？`
+      : `确定删除空批次「${row.batch_no}」吗？`
+    await ElMessageBox.confirm(confirmMessage, '删除批次', {
       type: 'warning'
     })
     const confirmText = await promptSensitiveConfirm(CONFIRM_DELETE_KAMI_BATCH, '删除批次')
-    await deleteKamiBatch(row.id, { confirm_text: confirmText })
-    ElMessage.success('批次已删除')
+    const payload = { confirm_text: confirmText }
+    if (totalCount > 0) payload.cascade_kamis = true
+    const res = await deleteKamiBatch(row.id, payload)
+    const deletedKamiCount = res?.data?.deleted_kami_count || 0
+    ElMessage.success(deletedKamiCount > 0 ? `批次已删除，并清理 ${deletedKamiCount} 张卡密` : '批次已删除')
     if (viewMode.value === 'batch' && currentBatch.value?.id === row.id) {
       if (currentSpec.value) await openSpecDetail(currentSpec.value)
       else await backFromDetail()
