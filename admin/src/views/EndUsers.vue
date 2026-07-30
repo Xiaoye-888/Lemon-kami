@@ -312,7 +312,7 @@ const normalizeParams = (params) => {
 }
 
 const loadApps = async () => {
-  const res = await getApps()
+  const res = await getApps({ owner_scope: 'admin' })
   apps.value = res.data || []
   if (apps.value.length > 0 && !queryParams.app_id) {
     queryParams.app_id = apps.value[0].app_id

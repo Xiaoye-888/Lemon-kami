@@ -1,5 +1,6 @@
 ﻿from typing import Optional
 
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -64,6 +65,7 @@ from models import (
     RechargePaymentChannel,
     UserAppAuthorization,
     UserQuotaAccount,
+    UserQuotaTransaction,
 )
 
 
@@ -626,7 +628,36 @@ async def delete_admin_scoped_merchant_kamis(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.delete_merchant_kamis(payload, current_user=merchant, session=session)
+    result = await routes_merchant.delete_merchant_kamis(payload, current_user=merchant, session=session)
+    deleted_codes = (result.get("data") or {}).get("deleted_codes") or []
+    if deleted_codes:
+        admin_username = current_user.get("sub") or current_user.get("username")
+        for code in deleted_codes:
+            transaction = session.exec(
+                select(UserQuotaTransaction).where(
+                    UserQuotaTransaction.user_id == merchant.id,
+                    UserQuotaTransaction.biz_id == f"kami_delete:{code}",
+                )
+            ).first()
+            if not transaction:
+                continue
+            metadata = {}
+            if transaction.metadata_json:
+                try:
+                    metadata = json.loads(transaction.metadata_json)
+                except Exception:
+                    metadata = {}
+            metadata.update(
+                {
+                    "admin_scoped_merchant_id": merchant.id,
+                    "admin_operator": admin_username,
+                }
+            )
+            transaction.operator = admin_username
+            transaction.metadata_json = json.dumps(metadata, ensure_ascii=False)
+            session.add(transaction)
+        session.commit()
+    return result
 
 
 @router.get("/merchants/{merchant_id}/kami-specs/{spec_id}/batches", summary="List merchant spec batches as admin")

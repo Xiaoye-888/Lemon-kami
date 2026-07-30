@@ -758,6 +758,131 @@ def test_admin_commercial_merchant_batch_scope_generates_as_target_issuer():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_admin_scoped_merchant_kami_delete_refund_records_admin_operator():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="scoped-delete-issuer", password_hash=hash_password("secret123"), status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+
+        app = App(
+            app_id="app_scoped_delete_refund",
+            name="Scoped Delete Refund",
+            app_secret="secret",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        session.add(app)
+        session.add(UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=20))
+        session.commit()
+
+        issue_user_kamis(
+            session,
+            merchant,
+            app,
+            kami_type="points",
+            count=2,
+            unit_cost=4,
+            batch_no="ADMIN-DELETE-REFUND",
+            points_amount=100,
+        )
+        session.commit()
+        codes = session.exec(
+            select(Kami.kami_code).where(
+                Kami.app_id == app.app_id,
+                Kami.batch_no == "ADMIN-DELETE-REFUND",
+            )
+        ).all()
+        merchant_id = merchant.id
+
+    try:
+        response = client.post(
+            f"/api/v1/admin/commercial/merchants/{merchant_id}/kamis/delete",
+            json={"app_id": "app_scoped_delete_refund", "kami_codes": codes},
+        )
+        assert response.status_code == 200
+
+        with Session(engine) as session:
+            refund_transactions = session.exec(
+                select(UserQuotaTransaction)
+                .where(
+                    UserQuotaTransaction.user_id == merchant_id,
+                    UserQuotaTransaction.transaction_type == UserQuotaTransactionType.refund,
+                )
+                .order_by(UserQuotaTransaction.id)
+            ).all()
+            assert [tx.amount for tx in refund_transactions] == [4, 4]
+            assert {tx.operator for tx in refund_transactions} == {"admin"}
+            metadata = [json.loads(tx.metadata_json) for tx in refund_transactions]
+            assert {item["admin_scoped_merchant_id"] for item in metadata} == {merchant_id}
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_end_users_default_and_app_filter_exclude_merchant_owned_app_users():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="app-user-owner", password_hash=hash_password("secret123"), status=1)
+        admin_app = App(
+            app_id="app_admin_users_only",
+            name="Admin Users Only",
+            app_secret="secret-admin",
+            rsa_public_key="public-admin",
+            rsa_private_key="private-admin",
+            created_by="admin",
+        )
+        session.add(merchant)
+        session.add(admin_app)
+        session.commit()
+        session.refresh(merchant)
+        merchant_app = App(
+            app_id="app_merchant_users_hidden",
+            name="Merchant Users Hidden",
+            app_secret="secret-merchant",
+            rsa_public_key="public-merchant",
+            rsa_private_key="private-merchant",
+            created_by=merchant.username,
+            owner_user_id=merchant.id,
+        )
+        session.add(merchant_app)
+        session.add_all(
+            [
+                EndUser(app_id=admin_app.app_id, username="admin-app-user", password_hash="secret123", status=1),
+                EndUser(app_id=merchant_app.app_id, username="merchant-app-user", password_hash="secret123", status=1),
+            ]
+        )
+        session.commit()
+
+    try:
+        default_response = client.get("/api/v1/admin/end-users")
+        assert default_response.status_code == 200
+        usernames = [item["username"] for item in default_response.json()["data"]["items"]]
+        assert usernames == ["admin-app-user"]
+
+        merchant_app_response = client.get(
+            "/api/v1/admin/end-users",
+            params={"app_id": "app_merchant_users_hidden"},
+        )
+        assert merchant_app_response.status_code == 403
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_manual_recharge_order_review_credits_issue_quota_and_transactions(tmp_path, monkeypatch):
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

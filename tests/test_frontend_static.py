@@ -327,6 +327,10 @@ def test_devices_page_uses_merchant_scoped_api_in_merchant_console():
     assert "getMerchantDevices(queryParams)" in source
     assert "getMerchantApps()" in source
     assert 'v-if="!isMerchantConsole"' in source
+    assert "deviceInfoText(row.device_name)" in source
+    assert "deviceInfoText(row.device_model)" in source
+    assert "deviceInfoText(row.device_id)" in source
+    assert "等待新版SDK上报" in source
 
 
 def test_application_menu_groups_info_notice_and_versions():
@@ -1534,4 +1538,31 @@ def test_phase2_audit_page_is_admin_only_and_visible():
     assert "\u7ba1\u7406\u5458" in audit_view
     assert "\u64cd\u4f5c\u7c7b\u578b" in audit_view
     assert "\u64cd\u4f5c\u7ed3\u679c" in audit_view
-    assert "delete" not in audit_view.lower()
+    assert "deleteAdminAudit" not in audit_view
+    assert "method: 'delete'" not in audit_api
+
+
+def test_audit_logs_render_localized_time_action_and_resource_labels():
+    audit_view = (PROJECT_ROOT / "admin/src/views/AdminAuditLogs.vue").read_text(encoding="utf-8")
+
+    assert "formatBeijingTime" in audit_view
+    assert "formatOptionalTime(row.created_at)" in audit_view
+    assert "resourceTypeText(row.resource_type)" in audit_view
+    assert "resourceTypeText(currentLog.resource_type)" in audit_view
+
+    for token in (
+        "delete_kami_batch",
+        "delete_kami",
+        "delete_app",
+        "kami_batch",
+        "kami_spec",
+        "app",
+    ):
+        assert token in audit_view
+
+
+def test_admin_end_users_use_admin_owned_app_scope_only():
+    end_users = (PROJECT_ROOT / "admin/src/views/EndUsers.vue").read_text(encoding="utf-8")
+
+    assert "getApps({ owner_scope: 'admin' })" in end_users
+    assert "getApps()" not in end_users

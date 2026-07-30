@@ -25,6 +25,11 @@
           <el-option label="清理凭证" value="cleanup_proof_files" />
           <el-option label="创建备份" value="create_ops_backup" />
           <el-option label="下载备份" value="download_ops_backup" />
+          <el-option label="删除卡密批次" value="delete_kami_batch" />
+          <el-option label="删除卡密/规格" value="delete_kami" />
+          <el-option label="删除应用" value="delete_app" />
+          <el-option label="删除收款码" value="delete_payment_qrcode" />
+          <el-option label="修改发卡额度配置" value="change_issue_pricing" />
         </el-select>
         <el-select v-model="query.status" clearable placeholder="操作结果" class="result-select" @change="handleSearch">
           <el-option label="成功" value="success" />
@@ -36,7 +41,9 @@
 
     <el-card shadow="never">
       <el-table :data="logs" v-loading="loading" border stripe>
-        <el-table-column prop="created_at" label="时间" width="170" />
+        <el-table-column prop="created_at" label="时间" width="170">
+          <template #default="{ row }">{{ formatOptionalTime(row.created_at) }}</template>
+        </el-table-column>
         <el-table-column prop="admin_username" label="管理员" width="130" show-overflow-tooltip />
         <el-table-column prop="action" label="操作类型" width="160">
           <template #default="{ row }">
@@ -51,7 +58,9 @@
           </template>
         </el-table-column>
         <el-table-column prop="target_username" label="对象用户" width="140" show-overflow-tooltip />
-        <el-table-column prop="resource_type" label="资源类型" width="130" />
+        <el-table-column prop="resource_type" label="资源类型" width="130">
+          <template #default="{ row }">{{ resourceTypeText(row.resource_type) }}</template>
+        </el-table-column>
         <el-table-column prop="resource_id" label="资源标识" width="150" show-overflow-tooltip />
         <el-table-column prop="summary" label="摘要" min-width="220" show-overflow-tooltip />
         <el-table-column prop="request_ip" label="IP" width="130" />
@@ -85,7 +94,7 @@
         </el-descriptions-item>
         <el-descriptions-item label="确认范围">{{ currentLog.confirm_scope || '-' }}</el-descriptions-item>
         <el-descriptions-item label="对象用户">{{ currentLog.target_username || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="资源">{{ currentLog.resource_type || '-' }} / {{ currentLog.resource_id || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="资源">{{ resourceTypeText(currentLog.resource_type) }} / {{ currentLog.resource_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="摘要">{{ currentLog.summary || '-' }}</el-descriptions-item>
         <el-descriptions-item label="错误">{{ currentLog.error_message || '-' }}</el-descriptions-item>
         <el-descriptions-item label="请求信息">
@@ -109,6 +118,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { getAdminAuditLogs } from '../api/audit'
+import { formatBeijingTime } from '../utils/datetime'
 
 const loading = ref(false)
 const logs = ref([])
@@ -135,7 +145,28 @@ const actionLabels = {
   change_recharge_config: '修改充值配置',
   cleanup_proof_files: '清理凭证',
   create_ops_backup: '创建备份',
-  download_ops_backup: '下载备份'
+  download_ops_backup: '下载备份',
+  delete_kami_batch: '删除卡密批次',
+  delete_kami: '删除卡密/规格',
+  delete_app: '删除应用',
+  delete_payment_qrcode: '删除收款码',
+  change_issue_pricing: '修改发卡额度配置'
+}
+
+const resourceTypeLabels = {
+  recharge_order: '充值订单',
+  end_user: '发卡用户',
+  app: '应用',
+  kami: '卡密',
+  kami_batch: '卡密批次',
+  kami_spec: '卡密规格',
+  payment_channel: '支付渠道',
+  payment_channel_qrcode: '收款码',
+  recharge_option: '充值选项',
+  recharge_bonus_rule: '赠送规则',
+  recharge_proof: '支付凭证',
+  issue_pricing_rule: '发卡额度规则',
+  ops_backup: '运维备份'
 }
 
 function normalizedQuery() {
@@ -171,6 +202,14 @@ function showDetail(row) {
 
 function actionText(action) {
   return actionLabels[action] || action || '-'
+}
+
+function resourceTypeText(resourceType) {
+  return resourceTypeLabels[resourceType] || resourceType || '-'
+}
+
+function formatOptionalTime(value) {
+  return value ? formatBeijingTime(value) : '-'
 }
 
 function formatJson(value) {

@@ -5190,10 +5190,30 @@ def _require_admin(current_user: dict):
         raise HTTPException(status_code=403, detail="需要管理员权限")
 
 
+def _admin_owned_app_ids(session: Session) -> list[str]:
+    merchant_usernames = [
+        username
+        for username in session.exec(select(EndUser.username).where(EndUser.app_id.is_(None))).all()
+        if username
+    ]
+    statement = select(App.app_id).where(App.owner_user_id.is_(None))
+    if merchant_usernames:
+        statement = statement.where(App.created_by.notin_(merchant_usernames))
+    return list(session.exec(statement).all())
+
+
+def _require_admin_owned_app_scope(session: Session, app_id: Optional[str]) -> list[str]:
+    admin_app_ids = _admin_owned_app_ids(session)
+    if app_id and app_id not in admin_app_ids:
+        raise HTTPException(status_code=403, detail="只能查看管理员应用下的使用用户")
+    return admin_app_ids
+
+
 def _end_user_filter_conditions(
     keyword: Optional[str] = None,
     status: Optional[int] = None,
     app_id: Optional[str] = None,
+    allowed_app_ids: Optional[list[str]] = None,
 ):
     conditions = [EndUser.app_id.is_not(None)]
     if keyword:
@@ -5220,6 +5240,24 @@ def _end_user_filter_conditions(
                 EndUser.id.in_(authorization_user_ids),
             )
         )
+    elif allowed_app_ids is not None:
+        if not allowed_app_ids:
+            conditions.append(EndUser.app_id == "__no_admin_owned_apps__")
+        else:
+            legacy_user_ids = select(PointTransaction.user_id).where(
+                PointTransaction.app_id.in_(allowed_app_ids)
+            )
+            authorization_user_ids = select(AuthorizationAccount.user_id).where(
+                AuthorizationAccount.app_id.in_(allowed_app_ids),
+                AuthorizationAccount.owner_type == AuthorizationOwnerType.user,
+            )
+            conditions.append(
+                or_(
+                    EndUser.app_id.in_(allowed_app_ids),
+                    EndUser.id.in_(legacy_user_ids),
+                    EndUser.id.in_(authorization_user_ids),
+                )
+            )
     return conditions
 
 
@@ -5233,7 +5271,8 @@ async def get_end_user_stats(
     from sqlmodel import func
 
     _require_admin(current_user)
-    base_conditions = _end_user_filter_conditions(app_id=app_id)
+    admin_app_ids = _require_admin_owned_app_scope(session, app_id)
+    base_conditions = _end_user_filter_conditions(app_id=app_id, allowed_app_ids=admin_app_ids)
     total = session.exec(select(func.count(EndUser.id)).where(*base_conditions)).one()
     active = session.exec(
         select(func.count(EndUser.id)).where(*base_conditions, EndUser.status == 1)
@@ -5313,6 +5352,7 @@ async def list_end_users(
 ):
     """获取普通用户列表"""
     _require_admin(current_user)
+    admin_app_ids = _require_admin_owned_app_scope(session, app_id)
     statement = select(EndUser)
     count_statement = select(EndUser)
 
@@ -5320,6 +5360,7 @@ async def list_end_users(
         keyword=keyword,
         status=status,
         app_id=app_id,
+        allowed_app_ids=admin_app_ids,
     )
     if conditions:
         statement = statement.where(*conditions)
@@ -5887,11 +5928,13 @@ async def export_end_users(
 ):
     """导出普通用户与授权摘要。"""
     _require_admin(current_user)
+    admin_app_ids = _require_admin_owned_app_scope(session, app_id)
     statement = select(EndUser)
     conditions = _end_user_filter_conditions(
         keyword=keyword,
         status=status,
         app_id=app_id,
+        allowed_app_ids=admin_app_ids,
     )
     if conditions:
         statement = statement.where(*conditions)
