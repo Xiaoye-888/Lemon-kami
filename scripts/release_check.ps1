@@ -105,7 +105,7 @@ function Invoke-ReleaseBoundaryStaticChecks {
         "secrets.DEPLOY_APP_DIR",
         "secrets.DEPLOY_DIR",
         "DEFAULT_SERVER_HOST: 154.12.26.231",
-        "DEFAULT_CORS_ALLOWED_ORIGINS: http://154.12.26.231",
+        "DEFAULT_CORS_ALLOWED_ORIGINS: http://lemonkami.top",
         'SERVER_HOST="${SERVER_HOST:-${DEFAULT_SERVER_HOST}}"',
         'CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-${DEFAULT_CORS_ALLOWED_ORIGINS}}"',
         "strip_leading_bom()",
@@ -148,7 +148,7 @@ function Invoke-ReleaseBoundaryStaticChecks {
         "APP_IMAGE_TAG=latest",
         "HTTP_PORT=80",
         "ENABLE_API_DOCS=false",
-        "CORS_ALLOWED_ORIGINS=http://154.12.26.231",
+        "CORS_ALLOWED_ORIGINS=http://lemonkami.top",
         "BOOTSTRAP_ADMIN_PASSWORD=CHANGE_ME_INITIAL_ADMIN_PASSWORD"
     )) {
         Assert-Contains $envExamplePath $pattern
