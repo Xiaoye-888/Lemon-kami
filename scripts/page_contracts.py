@@ -725,7 +725,8 @@ PAGE_CONTRACTS = [
         ],
         "card_groups": [],
         "action_groups": [
-            action_group("admin-detail-actions", ("openDeviceDetail(row)", "updateRisk(device, 0)", "updateRisk(device, 1)", "updateRisk(device, 2)")),
+            action_group("admin-main-row-actions", ("openDeviceDetail(row)", "updateRisk(row, 0)", "updateRisk(row, 1)", "updateRisk(row, 2)")),
+            action_group("admin-detail-actions", ("updateRisk(device, 0)", "updateRisk(device, 1)", "updateRisk(device, 2)")),
         ],
         "tables": [
             table("device-columns", ("ID", "应用", "设备名称", "设备型号", "设备 ID", "关联卡密", "用户名", "绑定关系", "设备策略", "使用设备", "IP地址", "风险等级", "操作"))

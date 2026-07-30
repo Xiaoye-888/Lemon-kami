@@ -1659,6 +1659,101 @@ def test_sdk_verify_accepts_device_info_device_id_without_legacy_identity_fields
         fastapi_app.dependency_overrides.clear()
 
 
+def test_sdk_device_blacklist_is_scoped_to_the_target_device_not_the_kami(monkeypatch):
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    request_payload = {}
+    redis_client = FakeRedis()
+    fastapi_app.dependency_overrides[routes_sdk.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_sdk.get_redis] = lambda: redis_client
+    fastapi_app.dependency_overrides[routes_sdk.get_decrypted_data] = lambda: request_payload
+    monkeypatch.setattr(routes_sdk, "encrypt_response", lambda data, _app_secret: data)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        session.add(
+            ApiInterface(
+                name="SDK Verify",
+                interface_key="sdk.verify",
+                path="/api/v1/sdk/verify",
+                is_builtin=True,
+                status=1,
+            )
+        )
+        session.add(
+            Kami(
+                app_id="app_demo",
+                kami_code="MULTIDEVRISK",
+                kami_type=KamiType.lifetime,
+                status=KamiStatus.active,
+                bind_uuid="blocked-device",
+                authorization_owner=AuthorizationOwnerMode.device,
+                machine_bind_mode=MachineBindMode.one_card_multi_device,
+                max_bind_devices=3,
+            )
+        )
+        for device_id, ip, risk_level in (
+            ("blocked-device", "198.51.100.10", 2),
+            ("allowed-device", "198.51.100.11", 0),
+        ):
+            session.add(
+                KamiDeviceBinding(
+                    app_id="app_demo",
+                    kami_code="MULTIDEVRISK",
+                    device_uuid=device_id,
+                    fingerprint=device_id,
+                    bind_ip=ip,
+                )
+            )
+            session.add(
+                Device(
+                    app_id="app_demo",
+                    uuid=device_id,
+                    fingerprint=device_id,
+                    device_id=device_id,
+                    last_ip=ip,
+                    risk_level=risk_level,
+                )
+            )
+        session.commit()
+
+    try:
+        request_payload.update(
+            {
+                "kami": "MULTIDEVRISK",
+                "device_info": {"device_id": "blocked-device"},
+                "_app_info": {"app_id": "app_demo", "app_secret": "secret-app_demo"},
+            }
+        )
+        blocked_response = client.post("/api/v1/sdk/verify", json={})
+        assert blocked_response.status_code == 200
+        assert blocked_response.json()["success"] is False
+        assert "黑名单" in blocked_response.json()["message"]
+
+        request_payload.clear()
+        request_payload.update(
+            {
+                "kami": "MULTIDEVRISK",
+                "device_info": {"device_id": "allowed-device"},
+                "_app_info": {"app_id": "app_demo", "app_secret": "secret-app_demo"},
+            }
+        )
+        allowed_response = client.post("/api/v1/sdk/verify", json={})
+        assert allowed_response.status_code == 200
+        assert allowed_response.json()["success"] is True
+
+        with Session(engine) as session:
+            devices = session.exec(
+                select(Device).where(Device.device_id.in_(["blocked-device", "allowed-device"]))
+            ).all()
+            risk_by_device = {device.device_id: device.risk_level for device in devices}
+            assert risk_by_device == {"blocked-device": 2, "allowed-device": 0}
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_sdk_consume_accepts_device_info_device_id_without_legacy_identity_fields():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

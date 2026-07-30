@@ -333,7 +333,7 @@ def test_devices_page_uses_merchant_scoped_api_in_merchant_console():
     assert "等待新版SDK上报" in source
 
 
-def test_devices_page_opens_kami_device_details_from_clickable_text_only():
+def test_devices_page_keeps_main_row_actions_and_opens_details_from_policy_text():
     source = (PROJECT_ROOT / "admin/src/views/Devices.vue").read_text(encoding="utf-8")
 
     assert "deviceDetailVisible" in source
@@ -343,6 +343,12 @@ def test_devices_page_opens_kami_device_details_from_clickable_text_only():
     assert "设备明细" in source
     assert "每台机器" not in source
     assert "查看设备" not in source
+    assert 'label="操作"' in source
+    assert '@click="updateRisk(row, 0)"' in source
+    assert '@click="updateRisk(row, 1)"' in source
+    assert '@click="updateRisk(row, 2)"' in source
+    assert "其他设备" in source
+    assert "仅影响该设备/IP" in source
     assert "设备名称" in source
     assert "设备型号" in source
     assert "设备 ID" in source
@@ -351,6 +357,15 @@ def test_devices_page_opens_kami_device_details_from_clickable_text_only():
     assert "device.device_model" in source
     assert "device.device_id" in source
     assert "device.last_ip" in source
+
+    device_name_column = source.split('prop="device_name"', 1)[1].split('<el-table-column prop="device_model"', 1)[0]
+    device_model_column = source.split('prop="device_model"', 1)[1].split('<el-table-column prop="device_id"', 1)[0]
+    device_id_column = source.split('prop="device_id"', 1)[1].split('<el-table-column label="关联卡密"', 1)[0]
+    policy_column = source.split('prop="machine_bind_mode_text"', 1)[1].split('<el-table-column prop="device_count"', 1)[0]
+    assert '@click="openDeviceDetail(row)"' not in device_name_column
+    assert '@click="openDeviceDetail(row)"' not in device_model_column
+    assert '@click="openDeviceDetail(row)"' not in device_id_column
+    assert '@click="openDeviceDetail(row)"' in policy_column
 
 
 def test_application_menu_groups_info_notice_and_versions():

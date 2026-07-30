@@ -45,24 +45,22 @@
         </el-table-column>
         <el-table-column prop="device_name" label="设备名称" min-width="170" show-overflow-tooltip>
           <template #default="{ row }">
-            <span class="clickable-text" @click="openDeviceDetail(row)">{{ deviceInfoText(row.device_name) }}</span>
+            {{ deviceInfoText(row.device_name) }}
           </template>
         </el-table-column>
         <el-table-column prop="device_model" label="设备型号" min-width="190" show-overflow-tooltip>
           <template #default="{ row }">
-            <span class="clickable-text" @click="openDeviceDetail(row)">{{ deviceInfoText(row.device_model) }}</span>
+            {{ deviceInfoText(row.device_model) }}
           </template>
         </el-table-column>
         <el-table-column prop="device_id" label="设备 ID" min-width="250" show-overflow-tooltip>
           <template #default="{ row }">
-            <span class="clickable-text" @click="openDeviceDetail(row)">{{ deviceInfoText(row.device_id) }}</span>
+            {{ deviceInfoText(row.device_id) }}
           </template>
         </el-table-column>
         <el-table-column label="关联卡密" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
-            <span class="clickable-text clickable-text--strong" @click="openDeviceDetail(row)">
-              {{ getDeviceKamiText(row) }}
-            </span>
+            <span class="device-code">{{ getDeviceKamiText(row) }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="username" label="用户名" width="140">
@@ -78,7 +76,7 @@
         </el-table-column>
         <el-table-column prop="device_count" label="使用设备" width="110">
           <template #default="{ row }">
-            <span class="clickable-text" @click="openDeviceDetail(row)">{{ getDeviceCountText(row) }}</span>
+            {{ getDeviceCountText(row) }}
           </template>
         </el-table-column>
         <el-table-column prop="last_ip" label="IP地址" width="150">
@@ -89,6 +87,34 @@
             <el-tag :type="getRiskType(row.risk_level)">
               {{ getRiskText(row) }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="!isMerchantConsole" label="操作" width="270" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              size="small"
+              type="success"
+              :disabled="!canManageDeviceRisk(row) || row.risk_level === 0"
+              @click="updateRisk(row, 0)"
+            >
+              恢复正常
+            </el-button>
+            <el-button
+              size="small"
+              type="warning"
+              :disabled="!canManageDeviceRisk(row) || row.risk_level === 1"
+              @click="updateRisk(row, 1)"
+            >
+              警告
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              :disabled="!canManageDeviceRisk(row) || row.risk_level === 2"
+              @click="updateRisk(row, 2)"
+            >
+              黑名单
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -107,9 +133,10 @@
       <div v-if="selectedDeviceGroup" class="detail-meta">
         <span>卡密 <strong>{{ getDeviceKamiText(selectedDeviceGroup) }}</strong></span>
         <span>策略 <strong>{{ getDevicePolicyText(selectedDeviceGroup) }}</strong></span>
-        <span>设备 <strong>{{ getDeviceCountText(selectedDeviceGroup) }}</strong></span>
+        <span>总设备 <strong>{{ getDeviceCountText(selectedDeviceGroup) }}</strong></span>
+        <span>其他设备 <strong>{{ getDetailDeviceCountText(selectedDeviceGroup) }}</strong></span>
       </div>
-      <el-table :data="selectedDeviceItems" border stripe>
+      <el-table :data="selectedDeviceItems" border stripe empty-text="暂无其他设备">
         <el-table-column label="设备名称" min-width="170" show-overflow-tooltip>
           <template #default="{ row: device }">{{ deviceInfoText(device.device_name) }}</template>
         </el-table-column>
@@ -251,6 +278,11 @@ const getDeviceCountText = (row) => {
   return count ? `${count}台` : '-'
 }
 
+const getDetailDeviceCountText = (row) => {
+  const count = row?.detail_device_count ?? (Array.isArray(row?.device_items) ? row.device_items.length : 0)
+  return `${count}台`
+}
+
 const getDeviceIdentityText = (row) => (
   row?.device_name || row?.device_model || row?.device_id || row?.last_ip || '该设备'
 )
@@ -264,7 +296,7 @@ const updateRisk = async (row, level) => {
   const confirmText = {
     0: `确定要将设备 "${targetText}" 恢复正常吗？`,
     1: `确定要将设备 "${targetText}" 设置为警告状态吗？`,
-    2: `确定要将设备 "${targetText}" 加入黑名单吗？这将禁止该设备继续使用。`
+    2: `确定要将设备 "${targetText}" 加入黑名单吗？仅影响该设备/IP，不影响同一卡密的其他设备。`
   }
 
   try {
@@ -323,7 +355,7 @@ onMounted(() => {
   text-decoration: underline;
 }
 
-.clickable-text--strong {
+.device-code {
   font-weight: 600;
 }
 

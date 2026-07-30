@@ -35,25 +35,6 @@ def _device_detail_payload(payload: dict) -> dict:
     return detail
 
 
-def _risk_summary(device_items: list[dict]) -> dict:
-    risk_text_by_level = {
-        0: "正常",
-        1: "警告",
-        2: "黑名单",
-    }
-    max_level = 0
-    max_text = risk_text_by_level[0]
-    for item in device_items:
-        try:
-            level = int(item.get("risk_level") or 0)
-        except (TypeError, ValueError):
-            level = 0
-        if level >= max_level:
-            max_level = level
-            max_text = item.get("risk_level_text") or risk_text_by_level.get(level, "未知")
-    return {"risk_level": max_level, "risk_level_text": max_text}
-
-
 def _with_device_count(policy_text: Optional[str], device_count: int) -> Optional[str]:
     if not policy_text:
         return policy_text
@@ -86,18 +67,19 @@ def group_device_payloads_by_kami(payloads: list[dict]) -> list[dict]:
     grouped_payloads: list[dict] = []
     for key in ordered_keys:
         group = groups[key]
-        device_items = sorted(group["device_items"], key=_detail_sort_key)
-        first_device = device_items[0] if device_items else {}
-        device_count = len(device_items)
+        all_device_items = sorted(group["device_items"], key=_detail_sort_key)
+        first_device = all_device_items[0] if all_device_items else {}
+        detail_device_items = all_device_items[1:]
+        device_count = len(all_device_items)
 
         for field in DETAIL_FIELDS:
             if field in first_device:
                 group[field] = first_device.get(field)
-        group["device_items"] = device_items
+        group["device_items"] = detail_device_items
         group["device_count"] = device_count
-        group["ip_count"] = sum(int(item.get("ip_count") or 0) for item in device_items)
+        group["detail_device_count"] = len(detail_device_items)
+        group["ip_count"] = int(first_device.get("ip_count") or 0) if first_device else 0
         group["machine_bind_mode_text"] = _with_device_count(group.get("machine_bind_mode_text"), device_count)
-        group.update(_risk_summary(device_items))
         grouped_payloads.append(group)
 
     return grouped_payloads
