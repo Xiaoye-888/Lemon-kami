@@ -219,6 +219,20 @@ def test_config_from_env_rejects_missing_credentials_and_confirmation(monkeypatc
         raise AssertionError("config accepted missing env values")
 
 
+def test_config_from_env_allows_read_only_preflight_without_credentials(monkeypatch):
+    qa = load_qa_module()
+    monkeypatch.setenv("LEMON_QA_BASE_URL", "https://qa.example.invalid")
+    monkeypatch.delenv("LEMON_QA_ADMIN_USERNAME", raising=False)
+    monkeypatch.delenv("LEMON_QA_ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("LEMON_QA_CONFIRM_PRODUCTION", raising=False)
+
+    config = qa.QAConfig.from_env(require_confirmation=False, require_credentials=False)
+
+    assert config.base_url == "https://qa.example.invalid"
+    assert config.admin_username == ""
+    assert config.admin_password == ""
+
+
 def test_config_from_env_builds_config_without_printing_values(monkeypatch, capsys):
     qa = load_qa_module()
     env = {

@@ -1,57 +1,78 @@
-"""
-快速重置管理员密码为 admin123
-"""
+"""Reset the local development admin password without printing secrets."""
+
+import getpass
+import os
 import subprocess
 import sys
 
-def reset_admin_password():
-    """重置 admin 用户密码为 admin123"""
-    
-    print("=" * 60)
-    print("重置管理员密码")
-    print("=" * 60)
-    
-    # 使用 Python 生成新的密码哈希
-    import hashlib
-    import os
-    
-    new_password = "admin123"
-    salt = os.urandom(32).hex()
-    password_hash = hashlib.sha256((new_password + salt).encode('utf-8')).hexdigest()
-    full_hash = f"{salt}${password_hash}"
-    
-    print(f"\n新密码: {new_password}")
-    print(f"正在更新数据库...")
-    
-    # 执行 SQL 更新命令
+from auth_utils import hash_password
+
+
+def _sql_quote(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _read_secret(name: str, prompt: str) -> str:
+    value = os.environ.get(name)
+    if value:
+        return value
+    return getpass.getpass(prompt)
+
+
+def reset_admin_password() -> int:
+    admin_username = os.environ.get("RESET_ADMIN_USERNAME", "admin")
+    mysql_container = os.environ.get("RESET_MYSQL_CONTAINER", "lemon_kami_mysql")
+    mysql_database = os.environ.get("RESET_MYSQL_DATABASE", "lemon_kami")
+    mysql_user = os.environ.get("RESET_MYSQL_USER", "root")
+    mysql_password = _read_secret("RESET_MYSQL_PASSWORD", "MySQL password: ")
+    new_password = _read_secret("RESET_ADMIN_PASSWORD", "New admin password: ")
+
+    if not mysql_password or not new_password:
+        print("Missing required password input.", file=sys.stderr)
+        return 1
+
+    password_hash = hash_password(new_password)
+    sql = (
+        "UPDATE admin_users SET "
+        f"password_hash={_sql_quote(password_hash)} "
+        f"WHERE username={_sql_quote(admin_username)};"
+    )
     cmd = [
-        'docker', 'exec', 'lemon_kami_mysql',
-        'mysql', '-u', 'root', '-proot_password_123',
-        'lemon_kami',
-        '-e', f"UPDATE admin_users SET password_hash='{full_hash}' WHERE username='admin';"
+        "docker",
+        "exec",
+        "-i",
+        "-e",
+        "MYSQL_PWD",
+        mysql_container,
+        "mysql",
+        "-u",
+        mysql_user,
+        mysql_database,
     ]
-    
+    env = os.environ.copy()
+    env["MYSQL_PWD"] = mysql_password
+
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        
-        if result.returncode == 0:
-            print("✅ 密码重置成功！")
-            print("\n登录信息：")
-            print(f"  用户名: admin")
-            print(f"  密码: {new_password}")
-            print(f"  地址: http://localhost:3001")
-            print("\n请立即登录并修改密码！")
-        else:
-            print(f"❌ 更新失败: {result.stderr}")
-            
-    except subprocess.CalledProcessError as e:
-        print(f"❌ 执行失败: {e}")
-        print(f"错误信息: {e.stderr}")
-        print("\n请确保 Docker 容器正在运行：")
-        print("  docker compose ps")
+        subprocess.run(
+            cmd,
+            input=f"{sql}\n",
+            env=env,
+            text=True,
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as error:
+        print("Failed to reset admin password. Check Docker/MySQL status.", file=sys.stderr)
+        if error.stderr:
+            print(error.stderr.strip(), file=sys.stderr)
+        return error.returncode or 1
     except FileNotFoundError:
-        print("❌ 未找到 docker 命令，请确保已安装 Docker")
-        sys.exit(1)
+        print("Docker command was not found.", file=sys.stderr)
+        return 1
+
+    print(f"Admin password reset for user {admin_username}.")
+    return 0
+
 
 if __name__ == "__main__":
-    reset_admin_password()
+    raise SystemExit(reset_admin_password())

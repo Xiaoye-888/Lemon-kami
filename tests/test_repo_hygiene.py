@@ -35,3 +35,15 @@ def test_app_model_and_database_bootstrap_do_not_keep_legacy_app_content_fields(
 
 def test_legacy_app_field_migration_script_is_removed():
     assert not Path("migrate_add_app_fields.py").exists()
+
+
+def test_reset_password_script_reads_secrets_from_env_or_prompt_only():
+    source = Path("reset_password.py").read_text(encoding="utf-8")
+
+    assert "getpass.getpass" in source
+    assert "RESET_ADMIN_PASSWORD" in source
+    assert "RESET_MYSQL_PASSWORD" in source
+    assert "MYSQL_PWD" in source
+    assert "-p{mysql_password}" not in source
+    assert 'new_password = "' not in source
+    assert 'mysql_password = "' not in source

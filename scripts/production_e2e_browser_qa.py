@@ -186,7 +186,7 @@ class QAConfig:
             self.browser_base_url = self.base_url
 
     @classmethod
-    def from_env(cls, require_confirmation=True):
+    def from_env(cls, require_confirmation=True, require_credentials=True):
         base_url = os.environ.get("LEMON_QA_BASE_URL", "")
         api_base_url = os.environ.get("LEMON_QA_API_BASE_URL", "") or base_url
         browser_base_url = os.environ.get("LEMON_QA_BROWSER_BASE_URL", "") or base_url
@@ -201,9 +201,9 @@ class QAConfig:
             errors.append("LEMON_QA_API_BASE_URL must start with http:// or https://")
         if not (browser_base_url.startswith("http://") or browser_base_url.startswith("https://")):
             errors.append("LEMON_QA_BROWSER_BASE_URL must start with http:// or https://")
-        if not admin_username.strip():
+        if require_credentials and not admin_username.strip():
             errors.append("LEMON_QA_ADMIN_USERNAME must be non-empty")
-        if not admin_password:
+        if require_credentials and not admin_password:
             errors.append("LEMON_QA_ADMIN_PASSWORD must be non-empty")
         if require_confirmation and confirmation != PRODUCTION_CONFIRMATION:
             errors.append("LEMON_QA_CONFIRM_PRODUCTION must match the required production confirmation")
@@ -2445,7 +2445,7 @@ def main(argv=None):
     if selected > 1:
         raise QASafetyError("Choose only one mode")
     if args.preflight:
-        result = run_preflight(QAConfig.from_env(require_confirmation=False))
+        result = run_preflight(QAConfig.from_env(require_confirmation=False, require_credentials=False))
         print(_format_report_line({"preflight": "ok", **result}))
         return 0
     if args.run_production:
