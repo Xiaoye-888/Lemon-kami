@@ -75,6 +75,7 @@ CONFIRM_APPROVE_RECHARGE_ORDER = "确认审核入账"
 CONFIRM_EXPIRE_RECHARGE_ORDER = "确认关闭订单"
 CONFIRM_CLEANUP_PROOF_FILES = "确认清理凭证"
 CONFIRM_DELETE_MERCHANT = "确认删除用户"
+CONFIRM_DELETE_APP = "确认删除应用"
 
 
 CONFIRM_CHANGE_ISSUE_PRICING = "确认修改发卡额度"
@@ -503,7 +504,9 @@ def test_admin_apps_owner_scope_admin_excludes_merchant_self_owned_apps():
     SQLModel.metadata.create_all(engine)
 
     fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
     fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
     client = TestClient(fastapi_app)
 
     with Session(engine) as session:
@@ -544,6 +547,71 @@ def test_admin_apps_owner_scope_admin_excludes_merchant_self_owned_apps():
         assert unscoped.status_code == 200
         all_ids = {item["app_id"] for item in unscoped.json()["data"]}
         assert {"app_admin_owned", "app_merchant_owned"}.issubset(all_ids)
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_commercial_merchant_delete_self_owned_app_requires_confirmation_and_scope():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="delete-app-merchant", password_hash=hash_password("secret123"), status=1)
+        other = EndUser(username="other-delete-app-merchant", password_hash=hash_password("secret123"), status=1)
+        session.add_all([merchant, other])
+        session.commit()
+        session.refresh(merchant)
+        session.refresh(other)
+        session.add_all(
+            [
+                App(
+                    app_id="app_delete_owned",
+                    name="Delete Owned",
+                    app_secret="secret-owned",
+                    rsa_public_key="public-owned",
+                    rsa_private_key="private-owned",
+                    created_by=merchant.username,
+                    owner_user_id=merchant.id,
+                ),
+                App(
+                    app_id="app_delete_other",
+                    name="Delete Other",
+                    app_secret="secret-other",
+                    rsa_public_key="public-other",
+                    rsa_private_key="private-other",
+                    created_by=other.username,
+                    owner_user_id=other.id,
+                ),
+            ]
+        )
+        session.commit()
+        merchant_id = merchant.id
+
+    try:
+        missing_confirm = client.delete(
+            f"/api/v1/admin/commercial/merchants/{merchant_id}/apps/app_delete_owned"
+        )
+        assert missing_confirm.status_code == 400
+
+        wrong_scope = client.delete(
+            f"/api/v1/admin/commercial/merchants/{merchant_id}/apps/app_delete_other",
+            params={"confirm_text": CONFIRM_DELETE_APP},
+        )
+        assert wrong_scope.status_code == 404
+
+        deleted = client.delete(
+            f"/api/v1/admin/commercial/merchants/{merchant_id}/apps/app_delete_owned",
+            params={"confirm_text": CONFIRM_DELETE_APP},
+        )
+        assert deleted.status_code == 200
+
+        with Session(engine) as session:
+            assert session.exec(select(App).where(App.app_id == "app_delete_owned")).first() is None
+            assert session.exec(select(App).where(App.app_id == "app_delete_other")).first() is not None
     finally:
         fastapi_app.dependency_overrides.clear()
 

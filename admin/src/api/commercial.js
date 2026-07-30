@@ -103,6 +103,23 @@ export function getCommercialMerchantBatchApps(merchantId) {
   })
 }
 
+export function updateCommercialMerchantApp(merchantId, appId, data) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/apps/${appId}`,
+    method: 'put',
+    data
+  })
+}
+
+export function deleteCommercialMerchantApp(merchantId, appId, data = {}) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/apps/${appId}`,
+    method: 'delete',
+    params: data,
+    data
+  })
+}
+
 export function getCommercialMerchantQuotas(merchantId) {
   return request({
     url: `/admin/commercial/merchants/${merchantId}/quotas`,

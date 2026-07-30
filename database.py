@@ -880,6 +880,61 @@ def _ensure_phase2_recharge_order_schema():
             conn.commit()
 
 
+def _ensure_devices_schema():
+    """Backfill readable device identity columns on existing device tables."""
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        if engine.dialect.name == "sqlite":
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT name FROM sqlite_master WHERE type='table'")
+                ).fetchall()
+            }
+            if "devices" not in tables:
+                return
+            columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(devices)")).fetchall()
+            }
+            extra_columns = {
+                "device_name": "VARCHAR(255) DEFAULT NULL",
+                "device_model": "VARCHAR(255) DEFAULT NULL",
+                "device_id": "VARCHAR(255) DEFAULT NULL",
+            }
+            for column, ddl in extra_columns.items():
+                if column not in columns:
+                    conn.execute(text(f"ALTER TABLE devices ADD COLUMN {column} {ddl}"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_devices_device_id ON devices (device_id)"))
+            conn.commit()
+            return
+
+        tables = {row[0] for row in conn.execute(text("SHOW TABLES")).fetchall()}
+        if "devices" not in tables:
+            return
+        columns = {
+            row[0]
+            for row in conn.execute(text("SHOW COLUMNS FROM devices")).fetchall()
+        }
+        extra_columns = {
+            "device_name": "ALTER TABLE devices ADD COLUMN device_name VARCHAR(255) DEFAULT NULL",
+            "device_model": "ALTER TABLE devices ADD COLUMN device_model VARCHAR(255) DEFAULT NULL",
+            "device_id": "ALTER TABLE devices ADD COLUMN device_id VARCHAR(255) DEFAULT NULL",
+        }
+        for column, ddl in extra_columns.items():
+            if column not in columns:
+                conn.execute(text(ddl))
+                conn.commit()
+        indexes = {
+            row[2]
+            for row in conn.execute(text("SHOW INDEX FROM devices")).fetchall()
+        }
+        if "idx_devices_device_id" not in indexes:
+            conn.execute(text("CREATE INDEX idx_devices_device_id ON devices (device_id)"))
+            conn.commit()
+
+
 def wait_for_db(max_retries=30, retry_interval=2):
     """
     等待数据库就绪
@@ -937,6 +992,7 @@ def _init_db_unlocked():
     if engine.dialect.name == "sqlite":
         SQLModel.metadata.create_all(engine)
         _ensure_sqlite_schema()
+        _ensure_devices_schema()
         _ensure_phase2_recharge_order_schema()
         from kami_spec_service import backfill_specs_for_session
         with Session(engine) as session:
@@ -1178,6 +1234,7 @@ def _init_db_unlocked():
     # create_all is non-destructive and adds newer SQLModel tables that are not
     # covered by the legacy hand-written bootstrap path.
     SQLModel.metadata.create_all(engine)
+    _ensure_devices_schema()
     _ensure_phase2_recharge_order_schema()
     
     _ensure_points_schema()

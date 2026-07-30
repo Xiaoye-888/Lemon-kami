@@ -186,23 +186,37 @@ def _merchant_user_payload(user: EndUser, account: Optional[UserQuotaAccount]) -
 
 
 def _merchant_detail_app_payload(app: App, *, source: str, authorization: Optional[UserAppAuthorization] = None) -> dict:
-    return {
+    is_owned = source == "self_owned"
+    capabilities = {
+        "can_view": True,
+        "can_generate_kamis": True,
+        "can_manage_batches": True,
+        "can_rename": is_owned,
+        "can_delete": is_owned,
+        "can_manage_interfaces": is_owned,
+    }
+    payload = {
+        "id": app.id,
         "app_id": app.app_id,
         "name": app.name,
         "source": source,
+        "is_owned": is_owned,
         "status": app.status,
         "created_by": app.created_by,
         "owner_user_id": app.owner_user_id,
+        "created_at": to_api_beijing_iso(app.created_at, naive="civil") if app.created_at else None,
         "authorization_id": authorization.id if authorization else None,
+        "granted_by": authorization.granted_by if authorization else None,
         "authorized_at": (
             to_api_beijing_iso(authorization.created_at, naive="civil")
             if authorization and authorization.created_at
             else None
         ),
         "can_view_kamis": True,
-        "can_generate_kamis": True,
-        "can_manage_batches": True,
+        "capabilities": capabilities,
+        **capabilities,
     }
+    return payload
 
 
 def _usage_user_payload(user: EndUser, app_name_by_id: dict[str, str]) -> dict:
@@ -386,6 +400,69 @@ async def list_admin_scoped_merchant_batch_apps(
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
     items = _merchant_batch_apps(session, merchant)
     return {"success": True, "data": items, "items": items}
+
+
+@router.delete("/merchants/{merchant_id}/apps/{app_id}", summary="Delete merchant self-owned app as admin")
+async def delete_admin_scoped_merchant_app(
+    merchant_id: int,
+    app_id: str,
+    request: Request,
+    payload: Optional[routes_admin.SensitiveConfirmRequest] = None,
+    confirm_text: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    effective_confirm_text = (
+        payload.confirm_text
+        if payload is not None and payload.confirm_text is not None
+        else confirm_text
+    )
+    require_sensitive_confirmation(
+        session,
+        admin=current_user,
+        action="delete_app",
+        confirm_text=effective_confirm_text,
+        resource_type="app",
+        resource_id=app_id,
+        request=request,
+    )
+
+    app = session.exec(
+        select(App).where(
+            App.app_id == app_id,
+            (App.owner_user_id == merchant.id) | (App.created_by == merchant.username),
+        )
+    ).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="Merchant app not found")
+
+    request.state.skip_delete_app_confirmation = True
+    return await routes_admin.delete_app(
+        app_id=app_id,
+        request=request,
+        payload=None,
+        confirm_text=effective_confirm_text,
+        current_user=current_user,
+        session=session,
+    )
+
+
+@router.put("/merchants/{merchant_id}/apps/{app_id}", summary="Rename merchant self-owned app as admin")
+async def update_admin_scoped_merchant_app(
+    merchant_id: int,
+    app_id: str,
+    payload: routes_merchant.MerchantAppUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.update_merchant_app(
+        app_id=app_id,
+        payload=payload,
+        current_user=merchant,
+        session=session,
+    )
 
 
 @router.get("/merchants/{merchant_id}/quotas", summary="Get merchant quota as admin")

@@ -135,7 +135,7 @@ const CONFIRM_DELETE_APP = '确认删除应用'
 const loadApps = async () => {
   loading.value = true
   try {
-    const res = await getApps()
+    const res = await getApps({ owner_scope: 'admin' })
     apps.value = res.data || []
   } catch (error) {
     console.error('加载应用失败:', error)

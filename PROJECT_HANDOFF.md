@@ -111,9 +111,9 @@ git push origin main
 
 ## 默认线上信息
 
-- 公开访问地址：`http://154.12.26.231/`
-- 健康检查：`http://154.12.26.231/health`
-- 公开接口文档：`http://154.12.26.231/docs/api#basic-info`
+- 公开访问地址：`http://lemonkami.top/`
+- 健康检查：`http://lemonkami.top/health`
+- 公开接口文档：`http://lemonkami.top/docs/api#basic-info`
 - 默认服务器应用目录：`/opt/lemon-kami`
 - 默认临时上传目录：`/tmp/lemon-kami-deploy`
 
@@ -127,9 +127,9 @@ git push origin main
 GitHub Actions 成功后，检查：
 
 ```powershell
-Invoke-WebRequest -Uri "http://154.12.26.231/health" -UseBasicParsing
-Invoke-WebRequest -Uri "http://154.12.26.231/docs/api#basic-info" -UseBasicParsing
-Invoke-WebRequest -Uri "http://154.12.26.231/api/v1/docs/interfaces?page=1&page_size=3" -Headers @{ Accept = "application/json" } -UseBasicParsing
+Invoke-WebRequest -Uri "http://lemonkami.top/health" -UseBasicParsing
+Invoke-WebRequest -Uri "http://lemonkami.top/docs/api#basic-info" -UseBasicParsing
+Invoke-WebRequest -Uri "http://lemonkami.top/api/v1/docs/interfaces?page=1&page_size=3" -Headers @{ Accept = "application/json" } -UseBasicParsing
 ```
 
 预期结果：

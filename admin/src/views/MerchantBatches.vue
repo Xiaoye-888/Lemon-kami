@@ -43,16 +43,6 @@
           <el-button :icon="Refresh" @click="resetListFilters">重置</el-button>
         </div>
 
-        <el-alert
-          v-if="lowBalanceWarning"
-          class="quota-warning"
-          type="warning"
-          :closable="false"
-          show-icon
-          title="低额度提醒"
-          :description="`当前发卡额度 ${issueCardQuota.balance}，低于预警值 ${issueCardQuota.warning_threshold}`"
-        />
-
         <el-empty v-if="!queryParams.app_id" description="请先选择应用" />
         <template v-else>
           <div class="overview-strip">
@@ -1207,7 +1197,6 @@ const appendForm = reactive({
 
 const selectedApp = computed(() => apps.value.find((item) => item.app_id === queryParams.app_id))
 const canManageSelectedApp = computed(() => selectedApp.value?.is_owned === true)
-const lowBalanceWarning = computed(() => issueCardQuota.value.low_balance_warning)
 const canIssueInputs = computed(() => Boolean(selectedApp.value?.app_id && selectedSpec.value?.id && generateForm.count > 0))
 const canIssue = computed(() => canIssueInputs.value && issuePreview.value?.can_issue !== false)
 const specGroups = computed(() => groupMerchantSpecs(specRows.value))
@@ -2442,10 +2431,6 @@ onMounted(loadAll)
   width: 280px;
 }
 
-.quota-warning {
-  border-radius: 8px;
-}
-
 .overview-strip {
   padding: 18px 28px 6px;
   display: grid;
@@ -2546,13 +2531,18 @@ onMounted(loadAll)
 }
 
 .variant-panel {
-  padding: 10px 0;
+  margin: 0 18px 18px 42px;
+  padding: 14px 16px 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
 }
 
 .variant-title {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   color: #334155;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .stat-inline {
@@ -2568,33 +2558,35 @@ onMounted(loadAll)
 
 .count-pills {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: nowrap;
 }
 
 .count-pill {
+  min-width: 30px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: #eef2ff;
-  color: #334155;
-  font-size: 12px;
+  justify-content: center;
+  border-radius: 8px;
+  color: #fff;
+  font-weight: 700;
 }
 
 .count-pill.is-total {
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: #64748b;
 }
 
 .count-pill.is-used {
-  background: #fef3c7;
-  color: #b45309;
+  background: #f59e0b;
 }
 
 .count-pill.is-left {
-  background: #dcfce7;
-  color: #15803d;
+  background: #059669;
 }
 
 .batch-title-link {
@@ -2609,10 +2601,12 @@ onMounted(loadAll)
 .type-badge {
   display: inline-flex;
   align-items: center;
-  padding: 2px 10px;
-  border-radius: 999px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 8px;
   border: 1px solid transparent;
-  font-size: 12px;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .type-badge.is-points {
@@ -2635,9 +2629,30 @@ onMounted(loadAll)
 
 .type-badge.is-lifetime,
 .type-badge.is-default {
-  background: #f8fafc;
-  border-color: #cbd5e1;
-  color: #334155;
+  background: #fce7f3;
+  border-color: #f9a8d4;
+  color: #be185d;
+}
+
+.spec-section :deep(.el-table__header .el-table__cell) {
+  padding: 10px 0;
+}
+
+.spec-section :deep(.el-table__body .el-table__cell) {
+  padding: 8px 0;
+}
+
+.spec-section .type-badge {
+  min-height: 24px;
+  padding: 3px 8px;
+  font-size: 13px;
+}
+
+.spec-section .count-pill {
+  min-width: 28px;
+  height: 26px;
+  border-radius: 7px;
+  font-size: 13px;
 }
 
 .tooltip-action-wrap {

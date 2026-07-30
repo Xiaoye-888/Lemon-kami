@@ -408,7 +408,7 @@ PAGE_CONTRACTS = [
         "card_groups": [],
         "action_groups": [action_group("filter-actions", ("handleFilterChange",))],
         "tables": [
-            table("device-columns", ("ID", "应用", "设备UUID", "指纹", "关联卡密", "用户名", "绑定关系", "设备策略", "IP地址", "IP数量", "风险等级", "操作"))
+            table("device-columns", ("ID", "应用", "设备名称", "设备型号", "设备 ID", "关联卡密", "用户名", "绑定关系", "设备策略", "IP地址", "IP数量", "风险等级", "操作"))
         ],
     },
     {
@@ -713,7 +713,7 @@ PAGE_CONTRACTS = [
             action_group("admin-row-actions", ("updateRisk(row, 0)", "updateRisk(row, 1)", "updateRisk(row, 2)")),
         ],
         "tables": [
-            table("device-columns", ("ID", "应用", "设备UUID", "指纹", "关联卡密", "用户名", "绑定关系", "设备策略", "IP地址", "IP数量", "风险等级", "操作"))
+            table("device-columns", ("ID", "应用", "设备名称", "设备型号", "设备 ID", "关联卡密", "用户名", "绑定关系", "设备策略", "IP地址", "IP数量", "风险等级", "操作"))
         ],
     },
 ]

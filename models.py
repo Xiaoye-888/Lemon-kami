@@ -746,6 +746,9 @@ class Device(SQLModel, table=True):
     app_id: str = Field(sa_column=app_id_fk_column(), description="所属应用ID")
     uuid: str = Field(index=True, description="设备UUID")
     fingerprint: str = Field(description="硬件特征码")
+    device_name: Optional[str] = Field(default=None, max_length=255, description="设备名称")
+    device_model: Optional[str] = Field(default=None, max_length=255, description="设备型号")
+    device_id: Optional[str] = Field(default=None, max_length=255, index=True, description="系统设备ID")
     last_ip: Optional[str] = Field(default=None, description="最后登录IP")
     risk_level: int = Field(default=0, description="风险等级：0正常，1警告，2黑名单")
 

@@ -402,8 +402,18 @@ def _upsert_device(
     uuid: str,
     fingerprint: str,
     client_ip: str,
+    device_info: Optional[dict] = None,
 ) -> Device:
     device_uuid = uuid if uuid else fingerprint
+    device_info = device_info if isinstance(device_info, dict) else {}
+
+    def clean_device_text(key: str) -> Optional[str]:
+        value = device_info.get(key)
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text[:255] if text else None
+
     device = session.exec(
         select(Device).where(
             Device.app_id == app_id,
@@ -421,6 +431,10 @@ def _upsert_device(
             last_ip=client_ip,
             risk_level=0,
         )
+    for field in ("device_name", "device_model", "device_id"):
+        value = clean_device_text(field)
+        if value:
+            setattr(device, field, value)
     session.add(device)
     return device
 
@@ -474,8 +488,9 @@ def _record_kami_device_usage(
     now_naive: datetime,
     *,
     set_primary_bind_uuid: bool = False,
+    device_info: Optional[dict] = None,
 ) -> None:
-    _upsert_device(session, app_id, uuid, fingerprint, client_ip)
+    _upsert_device(session, app_id, uuid, fingerprint, client_ip, device_info)
     _upsert_kami_device_binding(
         session, app_id, kami.kami_code, uuid, fingerprint, client_ip, now_naive
     )
@@ -612,6 +627,7 @@ async def verify_kami(
     kami_code = data.get("kami")
     uuid = data.get("uuid", "")  # 兼容旧版本，可能为空
     fingerprint = data.get("fingerprint")
+    device_info = data.get("device_info")
     app_info = data.get("_app_info", {})
     app_id = app_info.get("app_id")
     
@@ -756,6 +772,7 @@ async def verify_kami(
             client_ip,
             now_naive,
             set_primary_bind_uuid=True,
+            device_info=device_info,
         )
 
         if ip_lock_enabled and kami.bind_ip and client_ip and kami.bind_ip != client_ip:
@@ -837,6 +854,7 @@ async def verify_kami(
             fingerprint,
             client_ip,
             now_naive,
+            device_info=device_info,
         )
 
         # 缓存设备绑定信息到 Redis
@@ -944,6 +962,7 @@ async def verify_kami(
         fingerprint,
         client_ip,
         now_naive,
+        device_info=device_info,
     )
     _ensure_kami_redeemed_at(kami, now_naive)
     kami.last_verify_at = now_naive
@@ -971,6 +990,7 @@ async def consume_kami(
     kami_code = data.get("kami")
     uuid = data.get("uuid", "")
     fingerprint = data.get("fingerprint")
+    device_info = data.get("device_info")
     app_info = data.get("_app_info", {})
     app_id = app_info.get("app_id")
     amount = int(data.get("amount") or 1)
@@ -1094,6 +1114,7 @@ async def consume_kami(
             client_ip,
             now_naive,
             set_primary_bind_uuid=True,
+            device_info=device_info,
         )
     elif machine_bind_mode == MachineBindMode.one_card_one_device:
         current_uuid = _device_uuid(uuid, fingerprint)
@@ -1123,6 +1144,7 @@ async def consume_kami(
             fingerprint,
             client_ip,
             now_naive,
+            device_info=device_info,
         )
     else:
         _record_kami_device_usage(
@@ -1134,6 +1156,7 @@ async def consume_kami(
             client_ip,
             now_naive,
             set_primary_bind_uuid=True,
+            device_info=device_info,
         )
 
     ip_lock_enabled = _config_bool(verify_config, "ip_lock_enabled", app.ip_lock_enabled)

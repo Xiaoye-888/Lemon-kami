@@ -44,10 +44,16 @@
             <el-table-column prop="created_at" label="创建时间" width="180">
               <template #default="{ row }">{{ formatOptionalTime(row.created_at) }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="220" fixed="right">
+            <el-table-column label="操作" width="420" fixed="right">
               <template #default="{ row }">
-                <el-button size="small" type="primary" plain @click="showGenerateForApp(row)">生成卡密</el-button>
-                <el-button size="small" plain @click="showBatchesForApp(row)">批次管理</el-button>
+                <div class="row-actions">
+                  <el-button size="small" type="primary" plain @click="showGenerateForApp(row)">生成卡密</el-button>
+                  <el-button size="small" plain @click="showBatchesForApp(row)">批次管理</el-button>
+                  <el-button size="small" type="primary" plain @click="goAppInterfaces(row)">接口列表</el-button>
+                  <el-button size="small" type="primary" plain @click="openEditApp(row)">改名</el-button>
+                  <el-button size="small" type="info" @click="viewAppDetail(row)">详情</el-button>
+                  <el-button size="small" type="danger" @click="handleDeleteApp(row)">删除</el-button>
+                </div>
               </template>
             </el-table-column>
           </el-table>
@@ -61,10 +67,14 @@
             <el-table-column prop="authorized_at" label="授权时间" width="180">
               <template #default="{ row }">{{ formatOptionalTime(row.authorized_at) }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="220" fixed="right">
+            <el-table-column label="操作" width="300" fixed="right">
               <template #default="{ row }">
-                <el-button size="small" type="primary" plain @click="showGenerateForApp(row)">生成卡密</el-button>
-                <el-button size="small" plain @click="showBatchesForApp(row)">批次管理</el-button>
+                <div class="row-actions">
+                  <el-button size="small" type="primary" plain @click="showGenerateForApp(row)">生成卡密</el-button>
+                  <el-button size="small" plain @click="showBatchesForApp(row)">批次管理</el-button>
+                  <el-button size="small" type="primary" plain @click="goAppInterfaces(row)">接口列表</el-button>
+                  <el-button size="small" type="info" @click="viewAppDetail(row)">详情</el-button>
+                </div>
               </template>
             </el-table-column>
           </el-table>
@@ -82,20 +92,59 @@
         </el-tab-pane>
       </el-tabs>
     </el-card>
+
+    <el-dialog v-model="editDialogVisible" title="修改自建应用名称" width="500px">
+      <el-form :model="editForm" label-width="100px">
+        <el-form-item label="应用名称" required>
+          <el-input v-model="editForm.name" maxlength="80" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="updatingApp" @click="submitEditApp">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="detailDialogVisible" title="应用详情" width="700px">
+      <el-descriptions :column="1" border v-if="currentApp">
+        <el-descriptions-item label="应用名称">{{ currentApp.name }}</el-descriptions-item>
+        <el-descriptions-item label="App ID">{{ currentApp.app_id }}</el-descriptions-item>
+        <el-descriptions-item label="归属">{{ currentApp.is_owned ? '自建应用' : '授权应用' }}</el-descriptions-item>
+        <el-descriptions-item label="状态">{{ currentApp.status === 1 ? '启用' : '禁用' }}</el-descriptions-item>
+        <el-descriptions-item label="创建人">{{ currentApp.created_by || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="创建时间">{{ formatOptionalTime(currentApp.created_at) }}</el-descriptions-item>
+        <el-descriptions-item v-if="currentApp.is_owned" label="RSA 公钥">
+          <el-input :model-value="currentApp.rsa_public_key || ''" type="textarea" :rows="5" readonly />
+        </el-descriptions-item>
+      </el-descriptions>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Refresh } from '@element-plus/icons-vue'
-import { getCommercialMerchantDetail } from '../api/commercial'
+import {
+  deleteCommercialMerchantApp,
+  getCommercialMerchantDetail,
+  updateCommercialMerchantApp
+} from '../api/commercial'
 import { formatBeijingTime } from '../utils/datetime'
 
 const route = useRoute()
 const router = useRouter()
 const merchantDetailLoading = ref(false)
 const merchantDetailTabs = ref('self_owned_apps')
+const editDialogVisible = ref(false)
+const detailDialogVisible = ref(false)
+const updatingApp = ref(false)
+const currentApp = ref(null)
+const editForm = reactive({
+  app_id: '',
+  name: ''
+})
 const merchantDetail = ref({
   profile: null,
   quota: {},
@@ -103,6 +152,7 @@ const merchantDetail = ref({
   authorized_apps: [],
   usage_users: []
 })
+const CONFIRM_DELETE_APP = '确认删除应用'
 
 const merchantId = computed(() => String(route.params.merchantId || ''))
 const merchantIssueBalance = computed(
@@ -137,12 +187,69 @@ function showGenerateForApp(row) {
   router.push(batchManagementRoute(row, 'generate'))
 }
 
-function openMerchantAppBatches(row) {
-  showBatchesForApp(row)
+function goAppInterfaces(row) {
+  if (!row?.app_id) return
+  router.push({
+    path: `/admin/apps/${row.app_id}/interfaces`,
+    query: { app_name: row.name, merchant_id: merchantId.value }
+  })
 }
 
-function openMerchantAppKamis(row) {
-  showGenerateForApp(row)
+function openEditApp(row) {
+  if (!row?.can_rename) return
+  editForm.app_id = row.app_id
+  editForm.name = row.name || ''
+  editDialogVisible.value = true
+}
+
+function viewAppDetail(row) {
+  currentApp.value = row
+  detailDialogVisible.value = true
+}
+
+async function submitEditApp() {
+  const name = editForm.name.trim()
+  if (!name) {
+    ElMessage.warning('请输入应用名称')
+    return
+  }
+  updatingApp.value = true
+  try {
+    await updateCommercialMerchantApp(merchantId.value, editForm.app_id, { name })
+    ElMessage.success('应用名称已更新')
+    editDialogVisible.value = false
+    await loadDetail()
+  } finally {
+    updatingApp.value = false
+  }
+}
+
+async function handleDeleteApp(row) {
+  if (!row?.can_delete) return
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除自建应用“${row.name}”吗？此操作会删除该应用下的卡密、批次、规格、公告、版本、接口配置、设备和日志记录。`,
+      '警告',
+      {
+        confirmButtonText: '继续',
+        cancelButtonText: '取消',
+        type: 'error',
+        distinguishCancelAndClose: true
+      }
+    )
+    const { value } = await ElMessageBox.prompt(`请输入「${CONFIRM_DELETE_APP}」以确认`, '删除应用确认', {
+      inputValue: '',
+      inputValidator: (value) => value === CONFIRM_DELETE_APP || `请输入${CONFIRM_DELETE_APP}`,
+      type: 'error'
+    })
+    await deleteCommercialMerchantApp(merchantId.value, row.app_id, { confirm_text: value })
+    ElMessage.success('应用已删除')
+    await loadDetail()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      console.error('删除发卡用户自建应用失败:', error)
+    }
+  }
 }
 
 async function loadDetail() {
@@ -216,6 +323,19 @@ onMounted(loadDetail)
 
 .detail-panel {
   border-radius: 8px;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.row-actions :deep(.el-button) {
+  margin-left: 0;
+  border-radius: 8px;
+  font-weight: 600;
 }
 
 .merchant-detail-tabs {

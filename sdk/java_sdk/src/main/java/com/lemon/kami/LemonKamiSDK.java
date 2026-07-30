@@ -32,6 +32,7 @@ public class LemonKamiSDK {
     private String serverUrl;
     private String rsaPublicKey;
     private String fingerprint;
+    private Map<String, String> deviceInfo;
     private Gson gson;
     
     /**
@@ -49,6 +50,7 @@ public class LemonKamiSDK {
         this.rsaPublicKey = rsaPublicKey;
         this.fingerprint = generateDeviceFingerprint();
         this.gson = new Gson();
+        this.deviceInfo = collectDeviceInfo();
         
         // 如果未提供公钥，自动获取
         if (this.rsaPublicKey == null || this.rsaPublicKey.isEmpty()) {
@@ -218,6 +220,128 @@ public class LemonKamiSDK {
         // 如果所有方法都失败，返回一个基于平台信息的标识符
         return System.getProperty("os.name") + "_" + System.getProperty("os.version") + "_" + System.getProperty("os.arch");
     }
+
+    /**
+     * 获取可读设备信息，用于后台设备管理展示。
+     *
+     * @return 设备名称、设备型号、设备 ID
+     */
+    public Map<String, String> getDeviceInfo() {
+        return new LinkedHashMap<>(deviceInfo);
+    }
+
+    private Map<String, String> collectDeviceInfo() {
+        Map<String, String> info = new LinkedHashMap<>();
+        String os = System.getProperty("os.name", "").toLowerCase();
+        String deviceName = firstNonBlank(
+            System.getenv("COMPUTERNAME"),
+            System.getenv("HOSTNAME"),
+            System.getProperty("user.name")
+        );
+        String deviceModel;
+        String deviceId;
+
+        if (os.contains("win")) {
+            deviceModel = firstNonBlank(
+                runCommand("powershell", "-NoProfile", "-Command",
+                    "(Get-CimInstance Win32_ComputerSystemProduct).Version"),
+                runCommand("powershell", "-NoProfile", "-Command",
+                    "(Get-CimInstance Win32_ComputerSystem).SystemSKUNumber"),
+                runCommand("powershell", "-NoProfile", "-Command",
+                    "(Get-CimInstance Win32_ComputerSystem).Model")
+            );
+            deviceId = stripBraces(firstNonBlank(
+                runCommand("powershell", "-NoProfile", "-Command",
+                    "(Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\SQMClient').MachineId"),
+                runCommand("powershell", "-NoProfile", "-Command",
+                    "(Get-CimInstance Win32_ComputerSystemProduct).UUID"),
+                getSystemUniqueId()
+            ));
+        } else if (os.contains("mac") || os.contains("darwin")) {
+            deviceModel = firstNonBlank(
+                runCommand("sh", "-c", "sysctl -n hw.model"),
+                System.getProperty("os.name") + " " + System.getProperty("os.version")
+            );
+            deviceId = firstNonBlank(
+                runCommand("sh", "-c", "ioreg -rd1 -c IOPlatformExpertDevice | awk -F'\\\"' '/IOPlatformUUID/{print $4}'"),
+                getSystemUniqueId()
+            );
+        } else {
+            deviceModel = firstNonBlank(
+                runCommand("sh", "-c", "cat /sys/class/dmi/id/product_name 2>/dev/null"),
+                System.getProperty("os.name") + " " + System.getProperty("os.version")
+            );
+            deviceId = firstNonBlank(
+                runCommand("sh", "-c", "cat /etc/machine-id 2>/dev/null"),
+                getSystemUniqueId()
+            );
+        }
+
+        putIfPresent(info, "device_name", deviceName);
+        putIfPresent(info, "device_model", deviceModel);
+        putIfPresent(info, "device_id", deviceId);
+        return info;
+    }
+
+    private void putIfPresent(Map<String, String> info, String key, String value) {
+        String normalized = normalizeDeviceText(value);
+        if (normalized != null) {
+            info.put(key, normalized);
+        }
+    }
+
+    private String normalizeDeviceText(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim();
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        return normalized.length() > 255 ? normalized.substring(0, 255) : normalized;
+    }
+
+    private String stripBraces(String value) {
+        String normalized = normalizeDeviceText(value);
+        if (normalized == null) {
+            return null;
+        }
+        if (normalized.startsWith("{") && normalized.endsWith("}") && normalized.length() > 2) {
+            return normalized.substring(1, normalized.length() - 1);
+        }
+        return normalized;
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            String normalized = normalizeDeviceText(value);
+            if (normalized != null) {
+                return normalized;
+            }
+        }
+        return null;
+    }
+
+    private String runCommand(String... command) {
+        try {
+            Process process = Runtime.getRuntime().exec(command);
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String normalized = normalizeDeviceText(line);
+                if (normalized != null && !normalized.equalsIgnoreCase("UUID")) {
+                    reader.close();
+                    process.waitFor();
+                    return normalized;
+                }
+            }
+            reader.close();
+            process.waitFor();
+        } catch (Exception e) {
+            // 忽略采集失败，后续使用降级字段。
+        }
+        return null;
+    }
     
     /**
      * SHA256 哈希
@@ -364,6 +488,7 @@ public class LemonKamiSDK {
             Map<String, Object> requestData = new LinkedHashMap<>();
             requestData.put("kami", kamiCode);
             requestData.put("fingerprint", fingerprint);
+            requestData.put("device_info", deviceInfo);
             
             Map<String, Object> appInfo = new LinkedHashMap<>();
             appInfo.put("app_id", appId);

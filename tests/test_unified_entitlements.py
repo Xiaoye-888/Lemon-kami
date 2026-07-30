@@ -1592,6 +1592,69 @@ def test_sdk_verify_no_limit_device_authorization_links_card_device_and_admin_vi
         fastapi_app.dependency_overrides.clear()
 
 
+def test_sdk_verify_persists_device_info_and_device_list_searches_it():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_sdk.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_sdk.get_redis] = lambda: FakeRedis()
+    fastapi_app.dependency_overrides[routes_sdk.get_decrypted_data] = lambda: {
+        "kami": "DEVICEINFO",
+        "uuid": "8FEB0283-AE7B-4B55-B87A-9B14B6A69FD1",
+        "fingerprint": "fingerprint-device-info",
+        "device_info": {
+            "device_name": "DESKTOP-FSQQCER",
+            "device_model": "Legion Y7000P IRX9",
+            "device_id": "8FEB0283-AE7B-4B55-B87A-9B14B6A69FD1",
+        },
+        "_app_info": {"app_id": "app_demo", "app_secret": "secret-app_demo"},
+    }
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        session.add(
+            ApiInterface(
+                name="SDK Verify",
+                interface_key="sdk.verify",
+                path="/api/v1/sdk/verify",
+                is_builtin=True,
+                status=1,
+            )
+        )
+        session.add(
+            Kami(
+                app_id="app_demo",
+                kami_code="DEVICEINFO",
+                kami_type=KamiType.lifetime,
+                status=KamiStatus.unused,
+                authorization_owner=AuthorizationOwnerMode.device,
+                machine_bind_mode=MachineBindMode.no_limit,
+                max_bind_devices=0,
+            )
+        )
+        session.commit()
+
+    try:
+        response = client.post("/api/v1/sdk/verify", json={})
+        assert response.status_code == 200
+
+        devices_response = client.get(
+            "/api/v1/admin/devices",
+            params={"app_id": "app_demo", "keyword": "Y7000P"},
+        )
+        assert devices_response.status_code == 200
+        items = devices_response.json()["data"]["items"]
+        assert len(items) == 1
+        assert items[0]["device_name"] == "DESKTOP-FSQQCER"
+        assert items[0]["device_model"] == "Legion Y7000P IRX9"
+        assert items[0]["device_id"] == "8FEB0283-AE7B-4B55-B87A-9B14B6A69FD1"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_sdk_verify_uses_forwarded_for_as_device_ip_source():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

@@ -52,7 +52,7 @@ Do not commit real secret values to the repository. Use `.env.example` only as a
 - `DEPLOY_APP_DIR`: server app directory, defaults to `/opt/lemon-kami`
 - `DEPLOY_DIR`: temporary upload directory, defaults to `/tmp/lemon-kami-deploy`
 - `HTTP_PORT`: public frontend port, defaults to `80`
-- `CORS_ALLOWED_ORIGINS`: CORS origin list, defaults to `http://154.12.26.231`
+- `CORS_ALLOWED_ORIGINS`: CORS origin list, defaults to `http://lemonkami.top`
 - `MYSQL_DATABASE`: defaults to `lemon_kami`
 - `MYSQL_USER`: defaults to `lemon_user`
 - `REDIS_URL`: defaults to `redis://redis:6379/0`

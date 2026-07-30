@@ -20,7 +20,7 @@
         <el-form-item label="搜索">
           <el-input
             v-model="queryParams.keyword"
-            placeholder="搜索卡密/设备"
+            placeholder="搜索卡密/设备信息"
             clearable
             style="width: 240px"
             @keyup.enter="handleFilterChange"
@@ -44,8 +44,15 @@
         <el-table-column prop="app_name" label="应用" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">{{ row.app_name || row.app_id || '-' }}</template>
         </el-table-column>
-        <el-table-column prop="uuid" label="设备UUID" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="fingerprint" label="指纹" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="device_name" label="设备名称" min-width="170" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.device_name || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="device_model" label="设备型号" min-width="190" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.device_model || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="device_id" label="设备 ID" min-width="250" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.device_id || '-' }}</template>
+        </el-table-column>
         <el-table-column label="关联卡密" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">{{ getDeviceKamiText(row) }}</template>
         </el-table-column>

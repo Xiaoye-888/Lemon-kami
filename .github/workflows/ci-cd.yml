@@ -20,7 +20,7 @@ env:
   BACKEND_IMAGE: lemon-kami-fastapi
   FRONTEND_IMAGE: lemon-kami-frontend
   DEFAULT_SERVER_HOST: 154.12.26.231
-  DEFAULT_CORS_ALLOWED_ORIGINS: http://154.12.26.231
+  DEFAULT_CORS_ALLOWED_ORIGINS: http://lemonkami.top
 
 jobs:
   test:

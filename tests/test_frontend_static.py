@@ -1111,7 +1111,8 @@ def test_merchant_batch_generation_dialog_exposes_admin_grade_code_controls_and_
         assert token in merchant_batches
 
     assert "当前额度" not in merchant_batches
-    assert "当前发卡额度" in merchant_batches
+    assert "当前发卡额度" not in merchant_batches
+    assert "lowBalanceWarning" not in merchant_batches
 
 
 def test_merchant_batch_generation_defaults_match_admin_batch_number_logic():
@@ -1449,8 +1450,8 @@ def test_phase2_merchant_card_search_export_and_batch_stats_are_visible():
     assert ':disabled="!query.app_id"' not in merchant_cards
     assert "\u5bfc\u51fa" in merchant_cards
     assert "normalizedParams(false)" in merchant_cards
-    assert "\u4f4e\u989d\u5ea6\u63d0\u9192" in merchant_batches
-    assert "lowBalanceWarning" in merchant_batches
+    assert "\u4f4e\u989d\u5ea6\u63d0\u9192" not in merchant_batches
+    assert "lowBalanceWarning" not in merchant_batches
     assert "unused_count" in merchant_batches
     assert "active_count" in merchant_batches
     assert "device_bound_count" in merchant_batches
@@ -1475,8 +1476,11 @@ def test_admin_merchants_username_drilldown_exposes_apps_users_and_quick_actions
     assert "self_owned_apps" in admin_merchant_detail
     assert "authorized_apps" in admin_merchant_detail
     assert "usage_users" in admin_merchant_detail
-    assert "openMerchantAppBatches" in admin_merchant_detail
-    assert "openMerchantAppKamis" in admin_merchant_detail
+    assert "showBatchesForApp" in admin_merchant_detail
+    assert "showGenerateForApp" in admin_merchant_detail
+    assert "goAppInterfaces" in admin_merchant_detail
+    assert "openEditApp" in admin_merchant_detail
+    assert "handleDeleteApp" in admin_merchant_detail
     assert "AdminMerchantBatches" in router
     assert "getCommercialMerchantBatchApps" in commercial_api
     assert "isAdminMerchantScope" in merchant_batches
