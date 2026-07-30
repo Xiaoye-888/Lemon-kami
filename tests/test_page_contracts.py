@@ -1,9 +1,13 @@
 from pathlib import Path
+import importlib.util
+import re
 
 from scripts import page_contracts
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ROUTER_SOURCE = PROJECT_ROOT / "admin/src/router/index.js"
+PRODUCTION_QA_SOURCE = PROJECT_ROOT / "scripts/production_e2e_browser_qa.py"
 
 
 def _read_contract_source(contract):
@@ -18,6 +22,57 @@ def _assert_tokens_in_order(source, tokens, contract_id, group_name):
         index = source.find(token, cursor)
         assert index != -1, f"{contract_id}.{group_name} missing or misordered token: {token}"
         cursor = index + len(token)
+
+
+def _load_production_qa_module():
+    spec = importlib.util.spec_from_file_location("production_e2e_browser_qa", PRODUCTION_QA_SOURCE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _normalize_route(route):
+    route = route.split("?", 1)[0]
+    route = re.sub(r"/<[^/]+>", "/:param", route)
+    route = re.sub(r"/:[^/]+", "/:param", route)
+    return route.rstrip("/") or "/"
+
+
+def _component_routes_from_router():
+    source = ROUTER_SOURCE.read_text(encoding="utf-8")
+    route_map = {}
+    sections = {
+        "admin": source.split("const adminChildren = [", 1)[1].split("const merchantChildren = [", 1)[0],
+        "merchant": source.split("const merchantChildren = [", 1)[1].split("const legacyAdminRedirects", 1)[0],
+    }
+
+    for role, section in sections.items():
+        prefix = f"/{role}"
+        for match in re.finditer(r"\{\s*path: '([^']+)',\s*name: '([^']+)'[^{}]*component:", section):
+            path, name = match.groups()
+            if name.startswith("AdminAccount"):
+                full_path = f"/admin/account/{path}"
+            elif name.startswith("MerchantAccount"):
+                full_path = f"/merchant/account/{path}"
+            else:
+                full_path = f"{prefix}/{path}"
+            route_map[_normalize_route(full_path)] = role
+
+    public_routes = {
+        "/login": "public",
+        "/404": "public",
+        "/docs/api": "public",
+    }
+    route_map.update(public_routes)
+    return route_map
+
+
+def _contract_route_map():
+    return {
+        _normalize_route(contract["route"]): contract["id"]
+        for contract in page_contracts.PAGE_CONTRACTS
+        if contract["id"].split(".", 1)[0] != "layout"
+    }
 
 
 def test_page_contract_registry_covers_primary_admin_and_merchant_surfaces():
@@ -48,12 +103,64 @@ def test_page_contract_registry_covers_primary_admin_and_merchant_surfaces():
         "admin.merchants.scoped_batches",
         "admin.recharge_orders",
         "admin.devices",
+        "admin.dashboard",
+        "admin.commercial_overview",
+        "admin.recharge_settings",
+        "admin.issue_pricing",
+        "admin.finance",
+        "admin.audit_logs",
+        "admin.ops",
+        "admin.quota_transactions",
+        "admin.apps.info",
+        "admin.apps.notices",
+        "admin.apps.versions",
+        "admin.apps.interfaces",
+        "admin.kamis.list",
+        "admin.logs",
+        "admin.users",
+        "admin.end_users",
+        "admin.interfaces.new",
+        "admin.interfaces.list",
+        "public.login",
+        "public.docs.api",
+        "public.not_found",
     }.issubset(contract_ids)
 
     for contract in page_contracts.PAGE_CONTRACTS:
-        assert contract["role"] in {"admin", "merchant", "shared"}
+        assert contract["role"] in {"admin", "merchant", "public", "shared"}
         assert contract["source"]
         assert contract["regions"], f"{contract['id']} must declare functional regions"
+
+
+def test_vue_component_routes_have_page_contracts():
+    router_routes = _component_routes_from_router()
+    contract_routes = _contract_route_map()
+
+    missing = {
+        route: role
+        for route, role in router_routes.items()
+        if route not in contract_routes
+    }
+
+    assert missing == {}, f"router routes missing page contracts: {missing}"
+
+
+def test_static_component_routes_are_in_production_browser_sweep():
+    production_qa = _load_production_qa_module()
+    route_groups = production_qa.browser_routes()
+    browser_routes = {route for routes in route_groups.values() for route in routes}
+
+    router_routes = _component_routes_from_router()
+    dynamic_routes = {route for route in router_routes if ":param" in route}
+    expected_static_routes = {
+        route
+        for route in router_routes
+        if route not in dynamic_routes and route not in {"/404"}
+    }
+    expected_static_routes.add("/interface-docs")
+
+    missing = sorted(expected_static_routes - browser_routes)
+    assert missing == [], f"static routes missing from production browser sweep: {missing}"
 
 
 def test_page_contracts_validate_regions_cards_tables_and_action_order():

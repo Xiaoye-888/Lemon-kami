@@ -1549,6 +1549,8 @@ def test_audit_logs_render_localized_time_action_and_resource_labels():
     assert "formatOptionalTime(row.created_at)" in audit_view
     assert "resourceTypeText(row.resource_type)" in audit_view
     assert "resourceTypeText(currentLog.resource_type)" in audit_view
+    assert "targetUserText(row)" in audit_view
+    assert "targetUserText(currentLog)" in audit_view
 
     for token in (
         "delete_kami_batch",

@@ -846,10 +846,22 @@ def test_browser_routes_for_roles_are_declared():
     qa = load_qa_module()
     routes = qa.browser_routes()
     assert "/login" in routes["public"]
+    assert "/interface-docs" in routes["public"]
     assert "/admin/dashboard" in routes["admin"]
+    assert "/admin/commercial" in routes["admin"]
     assert "/admin/commercial/recharge-settings" in routes["admin"]
     assert "/merchant/dashboard" in routes["merchant"]
+    assert "/merchant/apps/notices" in routes["merchant"]
+    assert "/merchant/apps/versions" in routes["merchant"]
     assert "/merchant/batches" in routes["merchant"]
+    assert all(":merchantId" not in route and ":app_id" not in route for route in routes["admin"])
+
+    contextual_routes = qa.browser_routes(
+        {"adminMerchantId": 42, "adminInterfaceAppId": "app_admin"}
+    )
+    assert "/admin/commercial/merchants/42/detail" in contextual_routes["admin"]
+    assert "/admin/commercial/merchants/42/batches" in contextual_routes["admin"]
+    assert "/admin/apps/app_admin/interfaces" in contextual_routes["admin"]
 
 
 def test_browser_result_evaluation_flags_layout_and_runtime_failures():
@@ -2878,6 +2890,8 @@ def test_run_production_flow_preserves_completed_sections_when_browser_sweep_fai
     ]
     assert browser_contexts == [
         {
+            "adminMerchantId": 42,
+            "adminInterfaceAppId": "app_admin",
             "adminBatchAppId": "app_admin",
             "merchantBatchAppId": "app_self",
             "merchantCardsAppId": "app_self",

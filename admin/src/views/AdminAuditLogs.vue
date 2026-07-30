@@ -57,7 +57,9 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="target_username" label="对象用户" width="140" show-overflow-tooltip />
+        <el-table-column prop="target_username" label="对象用户" width="140" show-overflow-tooltip>
+          <template #default="{ row }">{{ targetUserText(row) }}</template>
+        </el-table-column>
         <el-table-column prop="resource_type" label="资源类型" width="130">
           <template #default="{ row }">{{ resourceTypeText(row.resource_type) }}</template>
         </el-table-column>
@@ -93,7 +95,7 @@
           </el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="确认范围">{{ currentLog.confirm_scope || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="对象用户">{{ currentLog.target_username || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="对象用户">{{ targetUserText(currentLog) }}</el-descriptions-item>
         <el-descriptions-item label="资源">{{ resourceTypeText(currentLog.resource_type) }} / {{ currentLog.resource_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="摘要">{{ currentLog.summary || '-' }}</el-descriptions-item>
         <el-descriptions-item label="错误">{{ currentLog.error_message || '-' }}</el-descriptions-item>
@@ -206,6 +208,10 @@ function actionText(action) {
 
 function resourceTypeText(resourceType) {
   return resourceTypeLabels[resourceType] || resourceType || '-'
+}
+
+function targetUserText(log) {
+  return log?.target_username || '-'
 }
 
 function formatOptionalTime(value) {

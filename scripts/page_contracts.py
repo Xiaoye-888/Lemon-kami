@@ -22,6 +22,20 @@ def table(table_id, columns):
     return {"id": table_id, "columns": list(columns)}
 
 
+def simple_contract(contract_id, role, route, source, tokens):
+    return {
+        "id": contract_id,
+        "role": role,
+        "route": route,
+        "source": source,
+        "regions": [region(f"region-{index + 1}", token) for index, token in enumerate(tokens)],
+        "ordered_regions": [],
+        "card_groups": [],
+        "action_groups": [],
+        "tables": [],
+    }
+
+
 PAGE_CONTRACTS = [
     {
         "id": "layout.admin.navigation",
@@ -716,6 +730,153 @@ PAGE_CONTRACTS = [
             table("device-columns", ("ID", "应用", "设备名称", "设备型号", "设备 ID", "关联卡密", "用户名", "绑定关系", "设备策略", "IP地址", "IP数量", "风险等级", "操作"))
         ],
     },
+    simple_contract(
+        "admin.dashboard",
+        "admin",
+        "/admin/dashboard",
+        "admin/src/views/Dashboard.vue",
+        ("class=\"dashboard\"", "loadDashboard", "metric-grid", "dashboard-board"),
+    ),
+    simple_contract(
+        "admin.commercial_overview",
+        "admin",
+        "/admin/commercial",
+        "admin/src/views/AdminCommercialOverview.vue",
+        ("class=\"commercial-page\"", "loadData", "metric-grid", "action-grid"),
+    ),
+    simple_contract(
+        "admin.recharge_settings",
+        "admin",
+        "/admin/commercial/recharge-settings",
+        "admin/src/views/AdminRechargeSettings.vue",
+        ("class=\"settings-page\"", "loadConfig", "handleSavePaymentChannel", "handleSaveRechargeOption"),
+    ),
+    simple_contract(
+        "admin.issue_pricing",
+        "admin",
+        "/admin/commercial/issue-pricing",
+        "admin/src/views/AdminIssuePricing.vue",
+        ("class=\"pricing-page\"", "loadAll", "handleSave", "handleDelete"),
+    ),
+    simple_contract(
+        "admin.finance",
+        "admin",
+        "/admin/commercial/finance",
+        "admin/src/views/AdminFinance.vue",
+        ("class=\"finance-page\"", "loadData", "downloadOrders", "downloadTransactions"),
+    ),
+    simple_contract(
+        "admin.audit_logs",
+        "admin",
+        "/admin/commercial/audit-logs",
+        "admin/src/views/AdminAuditLogs.vue",
+        ("class=\"audit-page\"", "formatOptionalTime(row.created_at)", "actionText(row.action)", "resourceTypeText(row.resource_type)", "target_username"),
+    ),
+    simple_contract(
+        "admin.ops",
+        "admin",
+        "/admin/ops",
+        "admin/src/views/AdminOps.vue",
+        ("class=\"ops-page\"", "loadAll", "handleCreateBackup", "handleCleanupProofs"),
+    ),
+    simple_contract(
+        "admin.quota_transactions",
+        "admin",
+        "/admin/commercial/quota-transactions",
+        "admin/src/views/AdminQuotaTransactions.vue",
+        ("class=\"admin-page\"", "loadData", "operator", "openTransactionDetail"),
+    ),
+    simple_contract(
+        "admin.apps.info",
+        "admin",
+        "/admin/apps/info",
+        "admin/src/views/Apps.vue",
+        ("class=\"apps-container\"", "getApps({ owner_scope: 'admin' })", "handleCreate", "handleDelete"),
+    ),
+    simple_contract(
+        "admin.apps.notices",
+        "admin",
+        "/admin/apps/notices",
+        "admin/src/views/AppNotices.vue",
+        ("class=\"page-card\"", "loadNotices", "openCreate", "deleteNotice"),
+    ),
+    simple_contract(
+        "admin.apps.versions",
+        "admin",
+        "/admin/apps/versions",
+        "admin/src/views/AppVersions.vue",
+        ("class=\"page-header\"", "loadVersions", "openCreate", "deleteVersion"),
+    ),
+    simple_contract(
+        "admin.apps.interfaces",
+        "admin",
+        "/admin/apps/<app_id>/interfaces",
+        "admin/src/views/AppInterfaces.vue",
+        ("class=\"app-interfaces\"", "loadAppInterfaces", "openConfig", "saveInterface"),
+    ),
+    simple_contract(
+        "admin.kamis.list",
+        "admin",
+        "/admin/kamis/list",
+        "admin/src/views/Kamis.vue",
+        ("class=\"kamis-page\"", "loadKamis", "handleExportKamis", "handleDeleteSelected"),
+    ),
+    simple_contract(
+        "admin.logs",
+        "admin",
+        "/admin/logs",
+        "admin/src/views/EventLogs.vue",
+        ("class=\"logs-container\"", "loadLogs", "getEventTypeText", "showDetail"),
+    ),
+    simple_contract(
+        "admin.users",
+        "admin",
+        "/admin/users",
+        "admin/src/views/Users.vue",
+        ("class=\"users-container\"", "loadUsers", "handleSubmit", "handleResetPassword"),
+    ),
+    simple_contract(
+        "admin.end_users",
+        "admin",
+        "/admin/end-users",
+        "admin/src/views/EndUsers.vue",
+        ("class=\"end-users-container\"", "getApps({ owner_scope: 'admin' })", "loadData", "showUserKamisDialog"),
+    ),
+    simple_contract(
+        "admin.interfaces.new",
+        "admin",
+        "/admin/interfaces/new",
+        "admin/src/views/InterfaceCreate.vue",
+        ("class=\"interface-create\"", "handleSubmit", "form.interface_key", "form.path"),
+    ),
+    simple_contract(
+        "admin.interfaces.list",
+        "admin",
+        "/admin/interfaces/list",
+        "admin/src/views/InterfaceList.vue",
+        ("class=\"interface-list\"", "loadInterfaces", "showEdit", "handleUpdate"),
+    ),
+    simple_contract(
+        "public.login",
+        "public",
+        "/login",
+        "admin/src/views/Login.vue",
+        ("class=\"login-left\"", "class=\"login-right\"", "handleLogin", "loginForm.password"),
+    ),
+    simple_contract(
+        "public.docs.api",
+        "public",
+        "/docs/api",
+        "admin/src/views/ApiDocs.vue",
+        ("class=\"api-docs-page\"", "loadDocs", "interfaces", "origin"),
+    ),
+    simple_contract(
+        "public.not_found",
+        "public",
+        "/404",
+        "admin/src/views/NotFound.vue",
+        ("class=\"not-found\"", "not-found__card"),
+    ),
 ]
 
 

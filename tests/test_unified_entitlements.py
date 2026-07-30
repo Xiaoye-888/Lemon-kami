@@ -1597,6 +1597,7 @@ def test_sdk_verify_persists_device_info_and_device_list_searches_it():
     SQLModel.metadata.create_all(engine)
 
     fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
     fastapi_app.dependency_overrides[routes_sdk.get_session] = override_session_factory(engine)
     fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
     fastapi_app.dependency_overrides[routes_sdk.get_redis] = lambda: FakeRedis()
@@ -1614,7 +1615,17 @@ def test_sdk_verify_persists_device_info_and_device_list_searches_it():
     client = TestClient(fastapi_app)
 
     with Session(engine) as session:
-        session.add(make_app("app_demo", "Demo"))
+        merchant = EndUser(username="device-issuer", password_hash="hashed", status=1)
+        session.add(merchant)
+        session.commit()
+        session.refresh(merchant)
+        merchant_id = merchant.id
+        merchant_user = merchant
+
+        app = make_app("app_demo", "Demo")
+        app.created_by = merchant.username
+        app.owner_user_id = merchant.id
+        session.add(app)
         session.add(
             ApiInterface(
                 name="SDK Verify",
@@ -1633,9 +1644,15 @@ def test_sdk_verify_persists_device_info_and_device_list_searches_it():
                 authorization_owner=AuthorizationOwnerMode.device,
                 machine_bind_mode=MachineBindMode.no_limit,
                 max_bind_devices=0,
+                created_by_user_id=merchant.id,
             )
         )
         session.commit()
+
+    async def override_merchant_user():
+        return merchant_user
+
+    fastapi_app.dependency_overrides[routes_merchant.get_current_merchant] = override_merchant_user
 
     try:
         response = client.post("/api/v1/sdk/verify", json={})
@@ -1651,6 +1668,19 @@ def test_sdk_verify_persists_device_info_and_device_list_searches_it():
         assert items[0]["device_name"] == "DESKTOP-FSQQCER"
         assert items[0]["device_model"] == "Legion Y7000P IRX9"
         assert items[0]["device_id"] == "8FEB0283-AE7B-4B55-B87A-9B14B6A69FD1"
+
+        merchant_devices_response = client.get(
+            "/api/v1/merchant/devices",
+            params={"app_id": "app_demo", "keyword": "8FEB0283"},
+            headers={"Authorization": "Bearer merchant-token"},
+        )
+        assert merchant_devices_response.status_code == 200
+        merchant_items = merchant_devices_response.json()["data"]["items"]
+        assert len(merchant_items) == 1
+        assert merchant_items[0]["device_name"] == "DESKTOP-FSQQCER"
+        assert merchant_items[0]["device_model"] == "Legion Y7000P IRX9"
+        assert merchant_items[0]["device_id"] == "8FEB0283-AE7B-4B55-B87A-9B14B6A69FD1"
+        assert merchant_items[0]["issuer_user_id"] == merchant_id
     finally:
         fastapi_app.dependency_overrides.clear()
 

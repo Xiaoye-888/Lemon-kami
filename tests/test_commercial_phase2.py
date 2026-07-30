@@ -773,6 +773,7 @@ def test_recharge_approval_requires_confirmation_and_writes_audit():
             assert success_log.resource_type == "recharge_order"
             assert success_log.resource_id == "RC_CONFIRM_APPROVE"
             assert success_log.target_user_id == merchant_id
+            assert success_log.target_username == "merchant-a"
     finally:
         fastapi_app.dependency_overrides.clear()
 
@@ -846,6 +847,7 @@ def test_recharge_approval_business_failure_writes_failed_audit_without_mutation
             assert failed_log.resource_type == "recharge_order"
             assert failed_log.resource_id == "RC_ALREADY_APPROVED"
             assert failed_log.target_user_id == merchant_id
+            assert failed_log.target_username == "merchant-approved"
             assert failed_log.error_message
     finally:
         fastapi_app.dependency_overrides.clear()

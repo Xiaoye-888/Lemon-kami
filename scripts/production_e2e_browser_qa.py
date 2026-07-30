@@ -405,11 +405,13 @@ def login(base_url: str, username: str, password: str) -> AuthSession:
     )
 
 
-def browser_routes():
-    return {
-        "public": ["/", "/login", "/docs/api"],
+def browser_routes(context: dict[str, Any] | None = None):
+    context = context or {}
+    routes = {
+        "public": ["/", "/login", "/docs/api", "/interface-docs"],
         "admin": [
             "/admin/dashboard",
+            "/admin/commercial",
             "/admin/commercial/merchants",
             "/admin/commercial/recharge-orders",
             "/admin/commercial/recharge-settings",
@@ -439,6 +441,8 @@ def browser_routes():
             "/merchant/orders",
             "/merchant/transactions",
             "/merchant/apps",
+            "/merchant/apps/notices",
+            "/merchant/apps/versions",
             "/merchant/batches",
             "/merchant/cards",
             "/merchant/devices",
@@ -446,6 +450,18 @@ def browser_routes():
             "/merchant/account/password",
         ],
     }
+    admin_merchant_id = context.get("adminMerchantId")
+    admin_interface_app_id = context.get("adminInterfaceAppId")
+    if admin_merchant_id:
+        routes["admin"].extend(
+            [
+                f"/admin/commercial/merchants/{admin_merchant_id}/detail",
+                f"/admin/commercial/merchants/{admin_merchant_id}/batches",
+            ]
+        )
+    if admin_interface_app_id:
+        routes["admin"].append(f"/admin/apps/{admin_interface_app_id}/interfaces")
+    return routes
 
 
 def run_browser_sweep(
@@ -463,7 +479,7 @@ def run_browser_sweep(
         "baseUrl": base_url,
         "artifactDir": str(artifact_dir),
         "viewports": VIEWPORTS,
-        "routes": browser_routes(),
+        "routes": browser_routes(context),
         "sessions": {
             "admin": admin_session,
             "merchant": merchant_session,
@@ -2342,6 +2358,8 @@ def run_production_flow(config: QAConfig):
             admin_auth.as_browser_storage(),
             merchant.auth.as_browser_storage(),
             context={
+                "adminMerchantId": merchant.user_id,
+                "adminInterfaceAppId": admin_app.app_id,
                 "adminBatchAppId": admin_app.app_id,
                 "merchantBatchAppId": self_app.app_id,
                 "merchantCardsAppId": self_app.app_id,
