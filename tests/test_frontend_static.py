@@ -390,6 +390,17 @@ def test_application_menu_groups_info_notice_and_versions():
     assert "path: 'apps/versions'" in router
 
 
+def test_main_layout_uses_explicit_router_push_for_menu_selection():
+    layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
+
+    assert ':router="true"' not in layout
+    assert '@select="handleMenuSelect"' in layout
+    assert "import { useRoute, useRouter } from 'vue-router'" in layout
+    assert "const router = useRouter()" in layout
+    assert "function handleMenuSelect(index)" in layout
+    assert "router.push(index)" in layout
+
+
 def test_merchant_menu_exposes_notice_and_version_management_without_admin_core_config():
     layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
     router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")

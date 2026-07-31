@@ -890,6 +890,95 @@ async function openFirstBatchDetail(cdp, sessionId) {
   return evaluateLayout(cdp, sessionId);
 }
 
+function menuNavigationChecksFor(routeCase, viewport) {
+  if ((viewport?.width || 0) < 900) {
+    return [];
+  }
+  if (routeCase.route === "/admin/dashboard") {
+    return [
+      { groupLabel: "\u5e94\u7528\u7ba1\u7406", itemLabel: "\u516c\u544a\u7ba1\u7406", expectedPath: "/admin/apps/notices" },
+      { groupLabel: "\u5361\u5bc6\u7ba1\u7406", itemLabel: "\u5361\u5bc6\u5217\u8868", expectedPath: "/admin/kamis/list" },
+    ];
+  }
+  if (routeCase.route === "/merchant/dashboard") {
+    return [
+      { groupLabel: "\u5e94\u7528\u8bbe\u7f6e", itemLabel: "\u516c\u544a\u7ba1\u7406", expectedPath: "/merchant/apps/notices" },
+      { groupLabel: "\u5361\u5bc6\u7ba1\u7406", itemLabel: "\u6211\u7684\u5361\u5bc6", expectedPath: "/merchant/cards" },
+    ];
+  }
+  return [];
+}
+
+async function clickMenuNavigationItem(cdp, sessionId, check) {
+  const expression = `(async () => {
+  const check = ${JSON.stringify(check)};
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const normalize = (value) => String(value || '').replace(/\\s+/g, '');
+  const isVisible = (el) => {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+  };
+  const byText = (selector, label) => Array.from(document.querySelectorAll(selector))
+    .filter(isVisible)
+    .find((el) => normalize(el.innerText || el.textContent).includes(normalize(label)));
+  const openGroup = () => {
+    const group = byText('.el-sub-menu__title', check.groupLabel);
+    if (!group) return false;
+    group.click();
+    return true;
+  };
+  let item = byText('.el-menu-item', check.itemLabel);
+  for (let attempt = 0; !item && attempt < 5; attempt += 1) {
+    if (!openGroup()) break;
+    await wait(250);
+    item = byText('.el-menu-item', check.itemLabel);
+  }
+  if (!item) {
+    return {
+      ok: false,
+      reason: 'menu item not visible',
+      groupLabel: check.groupLabel,
+      itemLabel: check.itemLabel,
+      expectedPath: check.expectedPath,
+      actualPath: window.location.pathname,
+    };
+  }
+  item.click();
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (window.location.pathname === check.expectedPath) {
+      return { ok: true, expectedPath: check.expectedPath, actualPath: window.location.pathname };
+    }
+    await wait(150);
+  }
+  return {
+    ok: false,
+    reason: 'route did not change to expected path',
+    groupLabel: check.groupLabel,
+    itemLabel: check.itemLabel,
+    expectedPath: check.expectedPath,
+    actualPath: window.location.pathname,
+  };
+})()`;
+  const result = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
+  return result.result?.value || { ok: false, reason: "unable to read menu navigation result", ...check };
+}
+
+async function evaluateMenuNavigation(cdp, sessionId, routeCase, viewport) {
+  const checks = menuNavigationChecksFor(routeCase, viewport);
+  const failures = [];
+  for (const check of checks) {
+    const result = await clickMenuNavigationItem(cdp, sessionId, check);
+    if (!result.ok) {
+      failures.push(result);
+    }
+    await sleep(350);
+  }
+  return failures;
+}
+
 async function sweepPage(cdp, payload, routeCase, viewport) {
   return withNewPage(cdp, routeCase, async (sessionId) => {
     const pageState = {
@@ -991,6 +1080,7 @@ async function sweepPage(cdp, payload, routeCase, viewport) {
           await captureScreenshot(cdp, sessionId, detailScreenshotPath);
         }
       }
+      const menuNavigationFailures = await evaluateMenuNavigation(cdp, sessionId, routeCase, viewport);
 
       return {
         role: routeCase.role,
@@ -1007,6 +1097,7 @@ async function sweepPage(cdp, payload, routeCase, viewport) {
         bodyTextSample: layout.bodyTextSample ?? "",
         layout,
         detailScreenshot: detailScreenshotPath,
+        menuNavigationFailures,
         toastText: layout.toastText ?? [],
       };
     } finally {

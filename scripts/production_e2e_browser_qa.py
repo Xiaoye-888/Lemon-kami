@@ -1483,6 +1483,13 @@ def evaluate_browser_result(result):
     merchant_batch_detail_url_has_batch_no = layout.get("merchant_batch_detail_url_has_batch_no")
     if merchant_batch_detail_url_has_batch_no is None:
         merchant_batch_detail_url_has_batch_no = layout.get("merchantBatchDetailUrlHasBatchNo")
+    menu_navigation_failures = result.get("menu_navigation_failures")
+    if menu_navigation_failures is None:
+        menu_navigation_failures = result.get("menuNavigationFailures")
+    if menu_navigation_failures is None:
+        menu_navigation_failures = layout.get("menu_navigation_failures")
+    if menu_navigation_failures is None:
+        menu_navigation_failures = layout.get("menuNavigationFailures")
 
     if horizontal_overflow:
         findings.append(_finding("P2", route, viewport, "Horizontal overflow detected"))
@@ -1510,6 +1517,8 @@ def evaluate_browser_result(result):
         findings.append(_finding("P1", route, viewport, "Merchant batch detail opened as drawer instead of standalone detail page"))
     if merchant_batch_detail_url_has_batch_no is False and route.startswith("/merchant/") and route.endswith("/batches"):
         findings.append(_finding("P1", route, viewport, "Merchant batch detail route did not retain batch_no context"))
+    if menu_navigation_failures:
+        findings.append(_finding("P1", route, viewport, "Menu navigation failed", {"failures": menu_navigation_failures}))
     for group in action_groups or []:
         if not isinstance(group, dict):
             continue

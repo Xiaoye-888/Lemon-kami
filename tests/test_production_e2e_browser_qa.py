@@ -905,6 +905,20 @@ def test_browser_result_evaluation_flags_layout_and_runtime_failures():
         ({"layout": {"overwide_cards": [".card"]}}, "P2", "Overwide cards detected"),
         ({"layout": {"action_groups": [{"button_count": 3, "max_gap": 84, "spread_ratio": 1.8}]}}, "P1", "Action button group is overly dispersed"),
         ({"layout": {"action_groups": [{"button_count": 4, "wrapped": True, "max_top_delta": 18}]}}, "P1", "Action button group wraps across rows"),
+        (
+            {
+                "menuNavigationFailures": [
+                    {
+                        "groupLabel": "应用管理",
+                        "itemLabel": "公告管理",
+                        "expectedPath": "/admin/apps/notices",
+                        "actualPath": "/admin/dashboard",
+                    }
+                ]
+            },
+            "P1",
+            "Menu navigation failed",
+        ),
     ]
 
     for patch, severity, message in cases:
@@ -1158,6 +1172,11 @@ def test_browser_cdp_helper_exports_detail_summary_rect_and_mismatch_checks():
     assert "encodeURIComponent(payload.context.merchantBatchAppId)" in helper
     assert "merchantCardsAppId" in helper
     assert "encodeURIComponent(payload.context.merchantCardsAppId)" in helper
+    assert "evaluateMenuNavigation" in helper
+    assert "menuNavigationChecksFor" in helper
+    assert "menuNavigationFailures" in helper
+    assert "/admin/apps/notices" in helper
+    assert "/merchant/cards" in helper
     assert "const hasMerchantBatchAppContext" in helper
     assert "const hasUnboundMerchantAppSelection" in helper
     assert "waiting for merchant batch app selection" in helper

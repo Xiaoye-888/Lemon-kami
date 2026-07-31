@@ -14,9 +14,9 @@
         :default-openeds="openMenuIndexes"
         :collapse="isMenuCollapsed"
         :collapse-transition="true"
-        :router="true"
         :unique-opened="true"
         class="side-menu"
+        @select="handleMenuSelect"
       >
         <template v-for="item in menuItems" :key="item.index">
           <el-sub-menu v-if="item.children" :index="item.index">
@@ -92,7 +92,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
   Box,
@@ -119,6 +119,7 @@ import { useUserStore } from '../stores/user'
 
 const publicBase = import.meta.env.BASE_URL
 const route = useRoute()
+const router = useRouter()
 const userStore = useUserStore()
 const themeStore = useThemeStore()
 const isNarrowViewport = ref(typeof window !== 'undefined' ? window.innerWidth <= 720 : false)
@@ -245,6 +246,11 @@ function syncViewport() {
 function toggleCollapsed() {
   if (isNarrowViewport.value) return
   collapsed.value = !collapsed.value
+}
+
+function handleMenuSelect(index) {
+  if (!index || index === route.path) return
+  router.push(index)
 }
 
 const handleCommand = (command) => {
