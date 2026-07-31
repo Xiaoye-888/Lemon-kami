@@ -67,6 +67,7 @@ from models import (
     AppVersion,
     ApiInterface,
     Device,
+    DeviceIpRisk,
     EndUser,
     EventLog,
     Kami,
@@ -1058,6 +1059,7 @@ def _merchant_device_payload(
     users_by_id: dict[int, EndUser],
     apps_by_id: dict[str, App],
     current_user: EndUser,
+    ip_risks_by_app_ip: Optional[dict] = None,
 ) -> dict:
     related_kami_codes = list(dict.fromkeys([code for code in related_kami_codes if code]))
     related_kamis = [kamis_by_code[code] for code in related_kami_codes if code in kamis_by_code]
@@ -1076,7 +1078,9 @@ def _merchant_device_payload(
     else:
         user_type = "admin"
 
-    risk_level = getattr(device, "risk_level", 0)
+    risk_level = int(getattr(device, "risk_level", 0) or 0)
+    if ip_risks_by_app_ip and getattr(device, "last_ip", None):
+        risk_level = max(risk_level, int(ip_risks_by_app_ip.get((device.app_id, device.last_ip), 0) or 0))
     risk_text = {0: "正常", 1: "警告", 2: "黑名单"}.get(risk_level, "未知")
     machine_bind_mode = _merchant_machine_bind_mode_value(kami.machine_bind_mode) if kami else None
     first_bind_at = primary_binding.first_bind_at if primary_binding else None
@@ -1537,8 +1541,6 @@ async def list_merchant_devices(
             kamis_by_code.update({kami.kami_code: kami for kami in extra_kamis})
 
     device_statement = select(Device).where(Device.app_id.in_(list(allowed_app_ids)))
-    if risk_level is not None:
-        device_statement = device_statement.where(Device.risk_level == risk_level)
     physical_devices = session.exec(device_statement).all()
 
     related_codes_by_device_id = {}
@@ -1589,6 +1591,20 @@ async def list_merchant_devices(
     users = session.exec(select(EndUser).where(EndUser.id.in_(list(user_ids)))).all() if user_ids else []
     users_by_id = {user.id: user for user in users}
 
+    ip_values = sorted({device.last_ip for device in visible_devices if getattr(device, "last_ip", None)})
+    ip_risks_by_app_ip = {}
+    if allowed_app_ids and ip_values:
+        ip_risks = session.exec(
+            select(DeviceIpRisk).where(
+                DeviceIpRisk.app_id.in_(list(allowed_app_ids)),
+                DeviceIpRisk.ip_address.in_(ip_values),
+            )
+        ).all()
+        ip_risks_by_app_ip = {
+            (risk.app_id, risk.ip_address): risk.risk_level
+            for risk in ip_risks
+        }
+
     keyword_value = keyword.strip() if keyword else None
     payloads = [
         _merchant_device_payload(
@@ -1599,10 +1615,18 @@ async def list_merchant_devices(
             users_by_id=users_by_id,
             apps_by_id=apps_by_id,
             current_user=current_user,
+            ip_risks_by_app_ip=ip_risks_by_app_ip,
         )
         for device in visible_devices
     ]
     payloads = group_device_payloads_by_kami(payloads)
+    if risk_level is not None:
+        payloads = [
+            payload
+            for payload in payloads
+            if payload.get("risk_level") == risk_level
+            or any(device.get("risk_level") == risk_level for device in payload.get("device_items") or [])
+        ]
     payloads = [
         payload
         for payload in payloads

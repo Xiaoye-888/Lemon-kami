@@ -39,6 +39,7 @@ from models import (
     Kami,
     EventLog,
     Device,
+    DeviceIpRisk,
     AdminUser,
     EndUser,
     UserPointAccount,
@@ -2354,11 +2355,17 @@ def _point_source_display_payload(kami: Kami, source_summaries: dict[str, dict[s
 def get_device_risk_payload(manual_risk_level: int, ip_count: int) -> dict:
     if manual_risk_level >= 2:
         return {"risk_level": 2, "risk_level_text": "黑名单"}
-    if ip_count > 5:
-        return {"risk_level": 2, "risk_level_text": "高风险"}
-    if ip_count >= 3 or manual_risk_level == 1:
+    if manual_risk_level == 1:
         return {"risk_level": 1, "risk_level_text": "警告"}
     return {"risk_level": 0, "risk_level_text": "正常"}
+
+
+def get_effective_device_risk_level(device: Device, ip_risks_by_app_ip: Optional[dict] = None) -> int:
+    device_level = int(getattr(device, "risk_level", 0) or 0)
+    ip_level = 0
+    if ip_risks_by_app_ip and getattr(device, "last_ip", None):
+        ip_level = int(ip_risks_by_app_ip.get((device.app_id, device.last_ip), 0) or 0)
+    return max(device_level, ip_level)
 
 
 def _code_validity_text(days: Optional[int]) -> str:
@@ -4386,6 +4393,7 @@ def _admin_device_payload(
     event_user_by_device_key: Optional[dict] = None,
     related_kami_codes: Optional[list[str]] = None,
     apps_by_id: Optional[dict] = None,
+    ip_risks_by_app_ip: Optional[dict] = None,
 ) -> dict:
     related_kami_codes = list(dict.fromkeys(related_kami_codes or ([] if not binding else [binding.kami_code])))
     related_kamis = [kamis_by_code[code] for code in related_kami_codes if code in kamis_by_code]
@@ -4406,7 +4414,8 @@ def _admin_device_payload(
         user_type = "merchant"
     else:
         user_type = "admin"
-    risk = get_device_risk_payload(device.risk_level, ip_count)
+    risk_level = get_effective_device_risk_level(device, ip_risks_by_app_ip)
+    risk = get_device_risk_payload(risk_level, ip_count)
     machine_bind_mode = get_machine_bind_mode_value(kami.machine_bind_mode) if kami else None
     redeemed_at = _kami_redeemed_at(kami) if kami else None
     first_bind_at = binding.first_bind_at if binding else redeemed_at
@@ -4607,9 +4616,6 @@ async def list_devices(
     if selected_app_id:
         statement = statement.where(Device.app_id == selected_app_id)
 
-    if risk_level is not None:
-        statement = statement.where(Device.risk_level == risk_level)
-
     physical_devices = session.exec(statement).all()
     all_devices = physical_devices
     if risk_level in (None, 0):
@@ -4737,6 +4743,19 @@ async def list_devices(
         if device.last_ip:
             ip_sets_by_device_key.setdefault((device.app_id, device.uuid), set()).add(device.last_ip)
 
+    ip_values = sorted({device.last_ip for device in all_devices if getattr(device, "last_ip", None)})
+    ip_risks_by_app_ip = {}
+    if app_ids and ip_values:
+        ip_risk_statement = select(DeviceIpRisk).where(
+            DeviceIpRisk.app_id.in_(app_ids),
+            DeviceIpRisk.ip_address.in_(ip_values),
+        )
+        ip_risks = session.exec(ip_risk_statement).all()
+        ip_risks_by_app_ip = {
+            (risk.app_id, risk.ip_address): risk.risk_level
+            for risk in ip_risks
+        }
+
     payloads = [
         _admin_device_payload(
             device,
@@ -4747,10 +4766,18 @@ async def list_devices(
             event_user_by_device_key,
             related_codes_by_device_id.get(device.id, []),
             apps_by_id,
+            ip_risks_by_app_ip,
         )
         for device in all_devices
     ]
     payloads = group_device_payloads_by_kami(payloads)
+    if risk_level is not None:
+        payloads = [
+            payload
+            for payload in payloads
+            if payload.get("risk_level") == risk_level
+            or any(device.get("risk_level") == risk_level for device in payload.get("device_items") or [])
+        ]
     payloads = [
         payload
         for payload in payloads
@@ -4781,15 +4808,33 @@ async def update_device_risk(
 ):
     """更新设备风险等级（0正常，1警告，2黑名单）- 全局共享"""
     _require_admin(current_user)
+    if risk_level not in {0, 1, 2}:
+        raise HTTPException(status_code=400, detail="Invalid risk_level")
     statement = select(Device).where(Device.id == device_id)
     device = session.exec(statement).first()
 
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
     
-    # 移除权限检查，所有人可以更新设备风险
     device.risk_level = risk_level
     session.add(device)
+    if device.last_ip:
+        ip_risk = session.exec(
+            select(DeviceIpRisk).where(
+                DeviceIpRisk.app_id == device.app_id,
+                DeviceIpRisk.ip_address == device.last_ip,
+            )
+        ).first()
+        if not ip_risk:
+            ip_risk = DeviceIpRisk(
+                app_id=device.app_id,
+                ip_address=device.last_ip,
+                risk_level=risk_level,
+            )
+        else:
+            ip_risk.risk_level = risk_level
+            ip_risk.updated_at = get_now().replace(tzinfo=None)
+        session.add(ip_risk)
     session.commit()
 
     return {"success": True, "message": "设备风险等级已更新"}

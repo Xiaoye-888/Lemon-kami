@@ -133,8 +133,7 @@
       <div v-if="selectedDeviceGroup" class="detail-meta">
         <span>卡密 <strong>{{ getDeviceKamiText(selectedDeviceGroup) }}</strong></span>
         <span>策略 <strong>{{ getDevicePolicyText(selectedDeviceGroup) }}</strong></span>
-        <span>总设备 <strong>{{ getDeviceCountText(selectedDeviceGroup) }}</strong></span>
-        <span>其他设备 <strong>{{ getDetailDeviceCountText(selectedDeviceGroup) }}</strong></span>
+        <span>明细设备 <strong>{{ getDetailDeviceCountText(selectedDeviceGroup) }}</strong></span>
       </div>
       <el-table :data="selectedDeviceItems" border stripe empty-text="暂无其他设备">
         <el-table-column label="设备名称" min-width="170" show-overflow-tooltip>
@@ -296,7 +295,7 @@ const updateRisk = async (row, level) => {
   const confirmText = {
     0: `确定要将设备 "${targetText}" 恢复正常吗？`,
     1: `确定要将设备 "${targetText}" 设置为警告状态吗？`,
-    2: `确定要将设备 "${targetText}" 加入黑名单吗？仅影响该设备/IP，不影响同一卡密的其他设备。`
+    2: `确定要将设备 "${targetText}" 加入黑名单吗？将同时拉黑该设备 ID 和当前 IP。`
   }
 
   try {

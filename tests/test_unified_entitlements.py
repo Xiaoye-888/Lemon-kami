@@ -27,6 +27,7 @@ from models import (
     AuthorizationTransaction,
     AuthorizationTransactionType,
     Device,
+    DeviceIpRisk,
     EndUser,
     EventLog,
     Kami,
@@ -1659,12 +1660,14 @@ def test_sdk_verify_accepts_device_info_device_id_without_legacy_identity_fields
         fastapi_app.dependency_overrides.clear()
 
 
-def test_sdk_device_blacklist_is_scoped_to_the_target_device_not_the_kami(monkeypatch):
+def test_sdk_blacklist_blocks_target_device_id_and_ip_not_the_entire_kami(monkeypatch):
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
 
     request_payload = {}
     redis_client = FakeRedis()
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
     fastapi_app.dependency_overrides[routes_sdk.get_session] = override_session_factory(engine)
     fastapi_app.dependency_overrides[routes_sdk.get_redis] = lambda: redis_client
     fastapi_app.dependency_overrides[routes_sdk.get_decrypted_data] = lambda: request_payload
@@ -1694,8 +1697,9 @@ def test_sdk_device_blacklist_is_scoped_to_the_target_device_not_the_kami(monkey
                 max_bind_devices=3,
             )
         )
+        device_ids = {}
         for device_id, ip, risk_level in (
-            ("blocked-device", "198.51.100.10", 2),
+            ("blocked-device", "198.51.100.10", 0),
             ("allowed-device", "198.51.100.11", 0),
         ):
             session.add(
@@ -1718,8 +1722,24 @@ def test_sdk_device_blacklist_is_scoped_to_the_target_device_not_the_kami(monkey
                 )
             )
         session.commit()
+        for device in session.exec(select(Device)).all():
+            device_ids[device.device_id] = device.id
 
     try:
+        risk_response = client.put(
+            f"/api/v1/admin/devices/{device_ids['blocked-device']}/risk",
+            params={"risk_level": 2},
+        )
+        assert risk_response.status_code == 200
+        with Session(engine) as session:
+            ip_risk = session.exec(
+                select(DeviceIpRisk).where(
+                    DeviceIpRisk.app_id == "app_demo",
+                    DeviceIpRisk.ip_address == "198.51.100.10",
+                )
+            ).one()
+            assert ip_risk.risk_level == 2
+
         request_payload.update(
             {
                 "kami": "MULTIDEVRISK",
@@ -1727,10 +1747,15 @@ def test_sdk_device_blacklist_is_scoped_to_the_target_device_not_the_kami(monkey
                 "_app_info": {"app_id": "app_demo", "app_secret": "secret-app_demo"},
             }
         )
-        blocked_response = client.post("/api/v1/sdk/verify", json={})
-        assert blocked_response.status_code == 200
-        assert blocked_response.json()["success"] is False
-        assert "黑名单" in blocked_response.json()["message"]
+        blocked_device_response = client.post(
+            "/api/v1/sdk/verify",
+            json={},
+            headers={"x-forwarded-for": "198.51.100.77"},
+        )
+        assert blocked_device_response.status_code == 200
+        assert blocked_device_response.json()["success"] is False
+        assert "设备" in blocked_device_response.json()["message"]
+        assert "黑名单" in blocked_device_response.json()["message"]
 
         request_payload.clear()
         request_payload.update(
@@ -1740,16 +1765,58 @@ def test_sdk_device_blacklist_is_scoped_to_the_target_device_not_the_kami(monkey
                 "_app_info": {"app_id": "app_demo", "app_secret": "secret-app_demo"},
             }
         )
-        allowed_response = client.post("/api/v1/sdk/verify", json={})
+        blocked_ip_response = client.post(
+            "/api/v1/sdk/verify",
+            json={},
+            headers={"x-forwarded-for": "198.51.100.10"},
+        )
+        assert blocked_ip_response.status_code == 200
+        assert blocked_ip_response.json()["success"] is False
+        assert "IP" in blocked_ip_response.json()["message"]
+        assert "黑名单" in blocked_ip_response.json()["message"]
+
+        request_payload.clear()
+        request_payload.update(
+            {
+                "kami": "MULTIDEVRISK",
+                "device_info": {"device_id": "allowed-device"},
+                "_app_info": {"app_id": "app_demo", "app_secret": "secret-app_demo"},
+            }
+        )
+        allowed_response = client.post(
+            "/api/v1/sdk/verify",
+            json={},
+            headers={"x-forwarded-for": "198.51.100.11"},
+        )
         assert allowed_response.status_code == 200
         assert allowed_response.json()["success"] is True
+
+        restore_response = client.put(
+            f"/api/v1/admin/devices/{device_ids['blocked-device']}/risk",
+            params={"risk_level": 0},
+        )
+        assert restore_response.status_code == 200
+        allowed_after_restore_response = client.post(
+            "/api/v1/sdk/verify",
+            json={},
+            headers={"x-forwarded-for": "198.51.100.10"},
+        )
+        assert allowed_after_restore_response.status_code == 200
+        assert allowed_after_restore_response.json()["success"] is True
 
         with Session(engine) as session:
             devices = session.exec(
                 select(Device).where(Device.device_id.in_(["blocked-device", "allowed-device"]))
             ).all()
             risk_by_device = {device.device_id: device.risk_level for device in devices}
-            assert risk_by_device == {"blocked-device": 2, "allowed-device": 0}
+            assert risk_by_device == {"blocked-device": 0, "allowed-device": 0}
+            ip_risk = session.exec(
+                select(DeviceIpRisk).where(
+                    DeviceIpRisk.app_id == "app_demo",
+                    DeviceIpRisk.ip_address == "198.51.100.10",
+                )
+            ).one()
+            assert ip_risk.risk_level == 0
     finally:
         fastapi_app.dependency_overrides.clear()
 
@@ -2355,7 +2422,7 @@ def test_admin_authorization_grant_with_source_kami_links_card_to_user():
         fastapi_app.dependency_overrides.clear()
 
 
-def test_admin_devices_include_user_binding_strategy_ip_count_and_inferred_risk():
+def test_admin_devices_keep_manual_risk_separate_from_ip_count_history():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
 
@@ -2421,10 +2488,26 @@ def test_admin_devices_include_user_binding_strategy_ip_count_and_inferred_risk(
         assert item["username"] == "carol"
         assert item["binding_relation"] == "用户授权"
         assert item["machine_bind_mode"] == "one_card_multi_device"
-        assert item["machine_bind_mode_text"] == "一卡多机(1台)"
+        assert item["machine_bind_mode_text"] == "一卡多机(0台)"
         assert item["device_count"] == 1
+        assert item["detail_device_count"] == 0
         assert item["ip_count"] == 3
-        assert item["risk_level"] == 1
-        assert item["risk_level_text"] == "警告"
+        assert item["risk_level"] == 0
+        assert item["risk_level_text"] == "正常"
+
+        risk_response = client.put("/api/v1/admin/devices/1/risk", params={"risk_level": 1})
+        assert risk_response.status_code == 200
+        warned_response = client.get("/api/v1/admin/devices", params={"app_id": "app_demo"})
+        warned_item = warned_response.json()["data"]["items"][0]
+        assert warned_item["risk_level"] == 1
+        assert warned_item["risk_level_text"] == "警告"
+
+        restore_response = client.put("/api/v1/admin/devices/1/risk", params={"risk_level": 0})
+        assert restore_response.status_code == 200
+        restored_response = client.get("/api/v1/admin/devices", params={"app_id": "app_demo"})
+        restored_item = restored_response.json()["data"]["items"][0]
+        assert restored_item["ip_count"] == 3
+        assert restored_item["risk_level"] == 0
+        assert restored_item["risk_level_text"] == "正常"
     finally:
         fastapi_app.dependency_overrides.clear()

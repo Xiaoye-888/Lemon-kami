@@ -14,6 +14,7 @@ import routes_commercial
 import routes_merchant
 import routes_user
 from auth_utils import hash_password
+from device_management_service import group_device_payloads_by_kami
 from main import app as fastapi_app
 from models import (
     AdminUser,
@@ -3785,7 +3786,8 @@ def test_device_management_groups_devices_by_kami_and_keeps_machine_details():
         assert admin_item["last_ip"] == "203.0.113.21"
         assert admin_item["risk_level"] == 0
         assert admin_item["machine_bind_mode"] == "no_limit"
-        assert admin_item["machine_bind_mode_text"] == "不限制(3台)"
+        assert admin_item["machine_bind_mode_text"] == "不限制(2台)"
+        assert admin_item["detail_device_count"] == 2
         assert [device["device_id"] for device in admin_item["device_items"]] == [
             "SECOND-ID",
             "THIRD-ID",
@@ -3836,6 +3838,70 @@ def test_device_management_groups_devices_by_kami_and_keeps_machine_details():
         ]
     finally:
         fastapi_app.dependency_overrides.clear()
+
+
+def test_device_management_deduplicates_first_device_before_detail_split():
+    payloads = [
+        {
+            "id": "historical:app_device_group:FIRST-ID",
+            "app_id": "app_device_group",
+            "kami_code": "GROUPDEV001",
+            "kami_codes": ["GROUPDEV001"],
+            "uuid": "FIRST-ID",
+            "fingerprint": "FIRST-ID",
+            "device_name": None,
+            "device_model": None,
+            "device_id": None,
+            "last_ip": "203.0.113.21",
+            "risk_level": 0,
+            "risk_level_text": "正常",
+            "first_bind_at": "2026-07-30T10:00:00",
+            "machine_bind_mode_text": "不限制",
+        },
+        {
+            "id": 1,
+            "app_id": "app_device_group",
+            "kami_code": "GROUPDEV001",
+            "kami_codes": ["GROUPDEV001"],
+            "uuid": "legacy-first-uuid",
+            "fingerprint": "legacy-first-fingerprint",
+            "device_name": "DESKTOP-FSQQCER",
+            "device_model": "Legion Y7000P IRX9",
+            "device_id": "FIRST-ID",
+            "last_ip": "203.0.113.21",
+            "risk_level": 0,
+            "risk_level_text": "正常",
+            "first_bind_at": "2026-07-30T10:00:00",
+            "machine_bind_mode_text": "不限制",
+        },
+        {
+            "id": 2,
+            "app_id": "app_device_group",
+            "kami_code": "GROUPDEV001",
+            "kami_codes": ["GROUPDEV001"],
+            "uuid": "SECOND-ID",
+            "fingerprint": "SECOND-ID",
+            "device_name": "DESKTOP-SECOND",
+            "device_model": "ThinkBook 14",
+            "device_id": "SECOND-ID",
+            "last_ip": "203.0.113.22",
+            "risk_level": 0,
+            "risk_level_text": "正常",
+            "first_bind_at": "2026-07-30T10:01:00",
+            "machine_bind_mode_text": "不限制",
+        },
+    ]
+
+    grouped = group_device_payloads_by_kami(payloads)
+
+    assert len(grouped) == 1
+    item = grouped[0]
+    assert item["device_count"] == 2
+    assert item["detail_device_count"] == 1
+    assert item["machine_bind_mode_text"] == "不限制(1台)"
+    assert item["device_name"] == "DESKTOP-FSQQCER"
+    assert item["device_id"] == "FIRST-ID"
+    assert [device["device_id"] for device in item["device_items"]] == ["SECOND-ID"]
 
 
 def test_proof_upload_runtime_has_writable_persistent_uploads_directory():

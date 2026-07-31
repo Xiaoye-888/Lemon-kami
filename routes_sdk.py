@@ -12,6 +12,7 @@ from models import (
     App,
     Kami,
     Device,
+    DeviceIpRisk,
     EndUser,
     EventLog,
     KamiStatus,
@@ -520,19 +521,57 @@ def _device_block_response(
     client_ip: str,
     uuid: str,
     user_agent: str,
+    *,
+    event_type: str = "verify",
+    action_text: str = "使用",
 ) -> Optional[dict]:
+    ip_risk = None
+    if client_ip:
+        ip_risk = session.exec(
+            select(DeviceIpRisk).where(
+                DeviceIpRisk.app_id == app_id,
+                DeviceIpRisk.ip_address == client_ip,
+            )
+        ).first()
+        if ip_risk and ip_risk.risk_level == 2:
+            _record_event_log(
+                session,
+                app_id,
+                kami_code,
+                event_type,
+                client_ip,
+                uuid,
+                user_agent,
+                status=0,
+                message="IP已被拉黑",
+            )
+            return {"success": False, "message": f"该 IP 已被加入黑名单，禁止{action_text}"}
+        if ip_risk and ip_risk.risk_level == 1:
+            _record_event_log(
+                session,
+                app_id,
+                kami_code,
+                event_type,
+                client_ip,
+                uuid,
+                user_agent,
+                status=1,
+                message="IP处于警告状态",
+            )
+
     device = session.exec(
         select(Device).where(
             Device.app_id == app_id,
             Device.fingerprint == fingerprint,
         )
     ).first()
-    if device and device.risk_level == 2:
-        _record_event_log(session, app_id, kami_code, "verify", client_ip, uuid, user_agent,
+    device_risk_applies = bool(device and device.risk_level)
+    if device_risk_applies and device.risk_level == 2:
+        _record_event_log(session, app_id, kami_code, event_type, client_ip, uuid, user_agent,
                          status=0, message="设备已被拉黑")
-        return {"success": False, "message": "该设备已被加入黑名单，禁止使用"}
-    if device and device.risk_level == 1:
-        _record_event_log(session, app_id, kami_code, "verify", client_ip, uuid, user_agent,
+        return {"success": False, "message": f"该设备已被加入黑名单，禁止{action_text}"}
+    if device_risk_applies and device.risk_level == 1 and not (ip_risk and ip_risk.risk_level == 1):
+        _record_event_log(session, app_id, kami_code, event_type, client_ip, uuid, user_agent,
                          status=1, message="设备处于警告状态")
     return None
 
@@ -723,8 +762,17 @@ async def verify_kami(
     if not device_limit_enabled:
         machine_bind_mode = MachineBindMode.no_limit
     if machine_bind_mode in {MachineBindMode.no_limit, MachineBindMode.one_card_multi_device}:
+        is_first_activation = kami.status == KamiStatus.unused
         block_response = _device_block_response(
-            session, app_id, kami_code, fingerprint, client_ip, uuid, user_agent
+            session,
+            app_id,
+            kami_code,
+            fingerprint,
+            client_ip,
+            uuid,
+            user_agent,
+            event_type="activate" if is_first_activation else "verify",
+            action_text="激活卡密" if is_first_activation else "使用",
         )
         if block_response:
             return encrypt_response(block_response, app_info.get("app_secret", ""))
@@ -735,7 +783,6 @@ async def verify_kami(
                              status=0, message=times_error["message"])
             return encrypt_response(times_error, app_info.get("app_secret", ""))
 
-        is_first_activation = kami.status == KamiStatus.unused
         if is_first_activation:
             kami.activate_time = now_naive
             kami.expire_time = calculate_expire_time(kami.kami_type)
@@ -829,23 +876,19 @@ async def verify_kami(
                              status=0, message=times_error["message"])
             return encrypt_response(times_error, app_info.get("app_secret", ""))
 
-        # 检查设备是否已被拉黑（通过指纹）
-        existing_device = session.exec(
-            select(Device).where(
-                Device.app_id == app_id,
-                Device.fingerprint == fingerprint
-            )
-        ).first()
-        
-        if existing_device and existing_device.risk_level == 2:
-            # 设备在黑名单中，拒绝激活
-            _record_event_log(session, app_id, kami_code, "activate", client_ip, uuid, user_agent,
-                             status=0, message="设备已被拉黑，禁止激活")
-            response_data = {
-                "success": False,
-                "message": "该设备已被加入黑名单，禁止激活卡密"
-            }
-            return encrypt_response(response_data, app_info.get("app_secret", ""))
+        block_response = _device_block_response(
+            session,
+            app_id,
+            kami_code,
+            fingerprint,
+            client_ip,
+            uuid,
+            user_agent,
+            event_type="activate",
+            action_text="激活卡密",
+        )
+        if block_response:
+            return encrypt_response(block_response, app_info.get("app_secret", ""))
         
         if kami.status == KamiStatus.unused:
             kami.activate_time = now_naive
@@ -941,27 +984,17 @@ async def verify_kami(
         response_data = {"success": False, "message": "IP 不匹配，禁止在其他网络环境使用"}
         return encrypt_response(response_data, app_info.get("app_secret", ""))
     
-    # 检查设备风险等级
-    device_statement = select(Device).where(
-        Device.app_id == app_id,
-        Device.fingerprint == fingerprint
+    block_response = _device_block_response(
+        session,
+        app_id,
+        kami_code,
+        fingerprint,
+        client_ip,
+        uuid,
+        user_agent,
     )
-    device = session.exec(device_statement).first()
-    
-    if device and device.risk_level == 2:
-        # 设备在黑名单中，拒绝验证
-        _record_event_log(session, app_id, kami_code, "verify", client_ip, uuid, user_agent,
-                         status=0, message="设备已被拉黑")
-        response_data = {
-            "success": False,
-            "message": "该设备已被加入黑名单，禁止使用"
-        }
-        return encrypt_response(response_data, app_info.get("app_secret", ""))
-    
-    if device and device.risk_level == 1:
-        # 设备被警告，记录日志但允许使用
-        _record_event_log(session, app_id, kami_code, "verify", client_ip, uuid, user_agent,
-                         status=1, message="设备处于警告状态")
+    if block_response:
+        return encrypt_response(block_response, app_info.get("app_secret", ""))
 
     times_error = _times_available_error(kami)
     if times_error:
@@ -1102,7 +1135,15 @@ async def consume_kami(
     )
     machine_bind_mode = _machine_bind_mode(kami) if device_limit_enabled else MachineBindMode.no_limit
     block_response = _device_block_response(
-        session, app_id, kami_code, fingerprint, client_ip, uuid, user_agent
+        session,
+        app_id,
+        kami_code,
+        fingerprint,
+        client_ip,
+        uuid,
+        user_agent,
+        event_type="consume",
+        action_text="核销",
     )
     if block_response:
         return encrypt_response(block_response, app_info.get("app_secret", ""))

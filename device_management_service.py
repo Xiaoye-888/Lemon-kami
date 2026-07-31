@@ -35,6 +35,62 @@ def _device_detail_payload(payload: dict) -> dict:
     return detail
 
 
+def _device_identities(item: dict) -> set[str]:
+    return {
+        str(value).strip()
+        for value in (item.get("device_id"), item.get("uuid"), item.get("fingerprint"))
+        if value and str(value).strip()
+    }
+
+
+def _detail_quality_score(item: dict) -> int:
+    score = 0
+    if isinstance(item.get("id"), int):
+        score += 8
+    for field in ("device_name", "device_model", "device_id", "last_ip"):
+        if item.get(field):
+            score += 1
+    return score
+
+
+def _merge_device_detail(left: dict, right: dict) -> dict:
+    primary, secondary = (right, left) if _detail_quality_score(right) > _detail_quality_score(left) else (left, right)
+    merged = deepcopy(primary)
+    for field in DETAIL_FIELDS:
+        if merged.get(field) in (None, "") and secondary.get(field) not in (None, ""):
+            merged[field] = secondary.get(field)
+
+    merged["can_manage_risk"] = bool(primary.get("can_manage_risk") or secondary.get("can_manage_risk"))
+    merged["first_bind_at"] = min(
+        (value for value in (left.get("first_bind_at"), right.get("first_bind_at")) if value),
+        default=merged.get("first_bind_at"),
+    )
+    merged["ip_count"] = max(int(left.get("ip_count") or 0), int(right.get("ip_count") or 0))
+    return merged
+
+
+def _dedupe_device_items(device_items: list[dict]) -> list[dict]:
+    deduped: list[dict] = []
+    identity_sets: list[set[str]] = []
+
+    for item in device_items:
+        identities = _device_identities(item)
+        matched_index = None
+        for index, existing_identities in enumerate(identity_sets):
+            if identities and existing_identities and identities.intersection(existing_identities):
+                matched_index = index
+                break
+        if matched_index is None:
+            deduped.append(item)
+            identity_sets.append(set(identities))
+            continue
+
+        deduped[matched_index] = _merge_device_detail(deduped[matched_index], item)
+        identity_sets[matched_index].update(identities)
+
+    return sorted(deduped, key=_detail_sort_key)
+
+
 def _with_device_count(policy_text: Optional[str], device_count: int) -> Optional[str]:
     if not policy_text:
         return policy_text
@@ -67,7 +123,7 @@ def group_device_payloads_by_kami(payloads: list[dict]) -> list[dict]:
     grouped_payloads: list[dict] = []
     for key in ordered_keys:
         group = groups[key]
-        all_device_items = sorted(group["device_items"], key=_detail_sort_key)
+        all_device_items = _dedupe_device_items(sorted(group["device_items"], key=_detail_sort_key))
         first_device = all_device_items[0] if all_device_items else {}
         detail_device_items = all_device_items[1:]
         device_count = len(all_device_items)
@@ -79,7 +135,10 @@ def group_device_payloads_by_kami(payloads: list[dict]) -> list[dict]:
         group["device_count"] = device_count
         group["detail_device_count"] = len(detail_device_items)
         group["ip_count"] = int(first_device.get("ip_count") or 0) if first_device else 0
-        group["machine_bind_mode_text"] = _with_device_count(group.get("machine_bind_mode_text"), device_count)
+        group["machine_bind_mode_text"] = _with_device_count(
+            group.get("machine_bind_mode_text"),
+            len(detail_device_items),
+        )
         grouped_payloads.append(group)
 
     return grouped_payloads

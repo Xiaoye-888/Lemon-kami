@@ -756,6 +756,19 @@ class Device(SQLModel, table=True):
     app: Optional[App] = Relationship(back_populates="devices")
 
 
+class DeviceIpRisk(SQLModel, table=True):
+    __tablename__ = "device_ip_risks"
+    __table_args__ = (
+        UniqueConstraint("app_id", "ip_address", name="uk_device_ip_risk_app_ip"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    app_id: str = Field(sa_column=app_id_fk_column(), description="所属应用ID")
+    ip_address: str = Field(index=True, max_length=255, description="设备风险IP")
+    risk_level: int = Field(default=0, description="风险等级：0正常，1警告，2黑名单")
+    updated_at: datetime = Field(default_factory=get_now_naive, description="更新时间")
+
+
 class EventLog(SQLModel, table=True):
     __tablename__ = "event_logs"
 

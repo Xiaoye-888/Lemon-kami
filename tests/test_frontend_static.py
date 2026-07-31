@@ -347,8 +347,9 @@ def test_devices_page_keeps_main_row_actions_and_opens_details_from_policy_text(
     assert '@click="updateRisk(row, 0)"' in source
     assert '@click="updateRisk(row, 1)"' in source
     assert '@click="updateRisk(row, 2)"' in source
-    assert "其他设备" in source
-    assert "仅影响该设备/IP" in source
+    assert "明细设备" in source
+    assert "总设备" not in source
+    assert "同时拉黑该设备 ID 和当前 IP" in source
     assert "设备名称" in source
     assert "设备型号" in source
     assert "设备 ID" in source
