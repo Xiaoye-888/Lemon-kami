@@ -1821,6 +1821,183 @@ def test_sdk_blacklist_blocks_target_device_id_and_ip_not_the_entire_kami(monkey
         fastapi_app.dependency_overrides.clear()
 
 
+def test_sdk_warning_risk_is_passed_through_to_business_software(monkeypatch):
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    request_payload = {}
+    redis_client = FakeRedis()
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_sdk.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_sdk.get_redis] = lambda: redis_client
+    fastapi_app.dependency_overrides[routes_sdk.get_decrypted_data] = lambda: request_payload
+    monkeypatch.setattr(routes_sdk, "encrypt_response", lambda data, _app_secret: data)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        session.add(
+            ApiInterface(
+                name="SDK Verify",
+                interface_key="sdk.verify",
+                path="/api/v1/sdk/verify",
+                is_builtin=True,
+                status=1,
+            )
+        )
+        session.add(
+            Kami(
+                app_id="app_demo",
+                kami_code="WARNDEVICE",
+                kami_type=KamiType.lifetime,
+                status=KamiStatus.active,
+                bind_uuid="warn-device",
+                authorization_owner=AuthorizationOwnerMode.device,
+                machine_bind_mode=MachineBindMode.no_limit,
+                max_bind_devices=0,
+            )
+        )
+        session.add(
+            KamiDeviceBinding(
+                app_id="app_demo",
+                kami_code="WARNDEVICE",
+                device_uuid="warn-device",
+                fingerprint="warn-device",
+                bind_ip="198.51.100.50",
+            )
+        )
+        session.add(
+            Device(
+                app_id="app_demo",
+                uuid="warn-device",
+                fingerprint="warn-device",
+                device_id="warn-device",
+                last_ip="198.51.100.50",
+                risk_level=0,
+            )
+        )
+        session.commit()
+        device_id = session.exec(select(Device).where(Device.device_id == "warn-device")).one().id
+
+    try:
+        risk_response = client.put(
+            f"/api/v1/admin/devices/{device_id}/risk",
+            params={"risk_level": 1},
+        )
+        assert risk_response.status_code == 200
+
+        request_payload.update(
+            {
+                "kami": "WARNDEVICE",
+                "device_info": {"device_id": "warn-device"},
+                "_app_info": {"app_id": "app_demo", "app_secret": "secret-app_demo"},
+            }
+        )
+        response = client.post(
+            "/api/v1/sdk/verify",
+            json={},
+            headers={"x-forwarded-for": "198.51.100.50"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["success"] is True
+        assert payload["warning"] is True
+        assert payload["message"] == "该设备和 IP 多人使用存在风险，请注意"
+        assert payload["warning_message"] == payload["message"]
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_sdk_consume_warning_risk_is_passed_through_to_business_software(monkeypatch):
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_sdk.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_sdk.get_redis] = lambda: FakeRedis()
+    fastapi_app.dependency_overrides[routes_sdk.get_decrypted_data] = lambda: {
+        "kami": "WARNCONSUME",
+        "amount": 1,
+        "biz_id": "warn-consume-1",
+        "device_info": {"device_id": "warn-consume-device"},
+        "_app_info": {"app_id": "app_demo", "app_secret": "secret-app_demo"},
+    }
+    monkeypatch.setattr(routes_sdk, "encrypt_response", lambda data, _app_secret: data)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        session.add(
+            ApiInterface(
+                name="SDK Verify",
+                interface_key="sdk.verify",
+                path="/api/v1/sdk/verify",
+                is_builtin=True,
+                status=1,
+            )
+        )
+        session.add(
+            Kami(
+                app_id="app_demo",
+                kami_code="WARNCONSUME",
+                kami_type=KamiType.times,
+                status=KamiStatus.active,
+                bind_uuid="warn-consume-device",
+                times_total=5,
+                times_remaining=5,
+                authorization_owner=AuthorizationOwnerMode.device,
+                machine_bind_mode=MachineBindMode.one_card_one_device,
+                max_bind_devices=1,
+            )
+        )
+        session.add(
+            Device(
+                app_id="app_demo",
+                uuid="warn-consume-device",
+                fingerprint="warn-consume-device",
+                device_id="warn-consume-device",
+                last_ip="198.51.100.60",
+            )
+        )
+        session.add(
+            KamiDeviceBinding(
+                app_id="app_demo",
+                kami_code="WARNCONSUME",
+                device_uuid="warn-consume-device",
+                fingerprint="warn-consume-device",
+            )
+        )
+        session.commit()
+        device_id = session.exec(select(Device).where(Device.device_id == "warn-consume-device")).one().id
+
+    try:
+        risk_response = client.put(
+            f"/api/v1/admin/devices/{device_id}/risk",
+            params={"risk_level": 1},
+        )
+        assert risk_response.status_code == 200
+
+        response = client.post(
+            "/api/v1/sdk/consume",
+            json={},
+            headers={"x-forwarded-for": "198.51.100.60"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["success"] is True
+        assert payload["warning"] is True
+        assert payload["message"] == "该设备和 IP 多人使用存在风险，请注意"
+        assert payload["warning_message"] == payload["message"]
+
+        with Session(engine) as session:
+            kami = session.exec(select(Kami).where(Kami.kami_code == "WARNCONSUME")).one()
+            assert kami.times_remaining == 4
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_sdk_consume_accepts_device_info_device_id_without_legacy_identity_fields():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

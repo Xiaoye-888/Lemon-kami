@@ -34,3 +34,11 @@ export function updateDeviceRisk(deviceId, riskLevel) {
     params: { risk_level: riskLevel }
   })
 }
+
+export function updateMerchantDeviceRisk(deviceId, riskLevel) {
+  return request({
+    url: `/merchant/devices/${deviceId}/risk`,
+    method: 'put',
+    params: { risk_level: riskLevel }
+  })
+}

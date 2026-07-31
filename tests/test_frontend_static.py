@@ -326,7 +326,11 @@ def test_devices_page_uses_merchant_scoped_api_in_merchant_console():
     assert "isMerchantConsole" in source
     assert "getMerchantDevices(queryParams)" in source
     assert "getMerchantApps()" in source
-    assert 'v-if="!isMerchantConsole"' in source
+    assert "updateMerchantDeviceRisk" in device_api
+    assert "url: `/merchant/devices/${deviceId}/risk`" in device_api
+    assert 'v-if="showRiskActionColumn"' in source
+    assert "row?.can_manage_risk === true" in source
+    assert "isMerchantConsole.value ? await updateMerchantDeviceRisk(row.id, level) : await updateDeviceRisk(row.id, level)" in source
     assert "deviceInfoText(row.device_name)" in source
     assert "deviceInfoText(row.device_model)" in source
     assert "deviceInfoText(row.device_id)" in source

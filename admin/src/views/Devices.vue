@@ -89,32 +89,35 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="!isMerchantConsole" label="操作" width="270" fixed="right">
+        <el-table-column v-if="showRiskActionColumn" label="操作" width="270" fixed="right">
           <template #default="{ row }">
-            <el-button
-              size="small"
-              type="success"
-              :disabled="!canManageDeviceRisk(row) || row.risk_level === 0"
-              @click="updateRisk(row, 0)"
-            >
-              恢复正常
-            </el-button>
-            <el-button
-              size="small"
-              type="warning"
-              :disabled="!canManageDeviceRisk(row) || row.risk_level === 1"
-              @click="updateRisk(row, 1)"
-            >
-              警告
-            </el-button>
-            <el-button
-              size="small"
-              type="danger"
-              :disabled="!canManageDeviceRisk(row) || row.risk_level === 2"
-              @click="updateRisk(row, 2)"
-            >
-              黑名单
-            </el-button>
+            <template v-if="canManageDeviceRisk(row)">
+              <el-button
+                size="small"
+                type="success"
+                :disabled="row.risk_level === 0"
+                @click="updateRisk(row, 0)"
+              >
+                恢复正常
+              </el-button>
+              <el-button
+                size="small"
+                type="warning"
+                :disabled="row.risk_level === 1"
+                @click="updateRisk(row, 1)"
+              >
+                警告
+              </el-button>
+              <el-button
+                size="small"
+                type="danger"
+                :disabled="row.risk_level === 2"
+                @click="updateRisk(row, 2)"
+              >
+                黑名单
+              </el-button>
+            </template>
+            <span v-else>-</span>
           </template>
         </el-table-column>
       </el-table>
@@ -153,32 +156,35 @@
             <el-tag :type="getRiskType(device.risk_level)">{{ getRiskText(device) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="!isMerchantConsole" label="操作" width="270" fixed="right">
+        <el-table-column v-if="showDetailRiskActionColumn" label="操作" width="270" fixed="right">
           <template #default="{ row: device }">
-            <el-button
-              size="small"
-              type="success"
-              :disabled="!canManageDeviceRisk(device) || device.risk_level === 0"
-              @click="updateRisk(device, 0)"
-            >
-              恢复正常
-            </el-button>
-            <el-button
-              size="small"
-              type="warning"
-              :disabled="!canManageDeviceRisk(device) || device.risk_level === 1"
-              @click="updateRisk(device, 1)"
-            >
-              警告
-            </el-button>
-            <el-button
-              size="small"
-              type="danger"
-              :disabled="!canManageDeviceRisk(device) || device.risk_level === 2"
-              @click="updateRisk(device, 2)"
-            >
-              黑名单
-            </el-button>
+            <template v-if="canManageDeviceRisk(device)">
+              <el-button
+                size="small"
+                type="success"
+                :disabled="device.risk_level === 0"
+                @click="updateRisk(device, 0)"
+              >
+                恢复正常
+              </el-button>
+              <el-button
+                size="small"
+                type="warning"
+                :disabled="device.risk_level === 1"
+                @click="updateRisk(device, 1)"
+              >
+                警告
+              </el-button>
+              <el-button
+                size="small"
+                type="danger"
+                :disabled="device.risk_level === 2"
+                @click="updateRisk(device, 2)"
+              >
+                黑名单
+              </el-button>
+            </template>
+            <span v-else>-</span>
           </template>
         </el-table-column>
       </el-table>
@@ -190,7 +196,7 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getDevices, getMerchantDevices, updateDeviceRisk } from '../api/device'
+import { getDevices, getMerchantDevices, updateDeviceRisk, updateMerchantDeviceRisk } from '../api/device'
 import { getApps } from '../api/admin'
 import { getMerchantApps } from '../api/merchant'
 
@@ -212,6 +218,12 @@ const queryParams = reactive({
 })
 
 const selectedDeviceItems = computed(() => selectedDeviceGroup.value?.device_items || [])
+const hasManageableDeviceRows = computed(() => devices.value.some((row) => (
+  canManageDeviceRisk(row) || (row.device_items || []).some((device) => canManageDeviceRisk(device))
+)))
+const hasManageableDetailRows = computed(() => selectedDeviceItems.value.some((device) => canManageDeviceRisk(device)))
+const showRiskActionColumn = computed(() => !isMerchantConsole.value || hasManageableDeviceRows.value)
+const showDetailRiskActionColumn = computed(() => !isMerchantConsole.value || hasManageableDetailRows.value)
 const deviceDetailTitle = computed(() => {
   const code = selectedDeviceGroup.value ? getDeviceKamiText(selectedDeviceGroup.value) : ''
   return code && code !== '-' ? `设备明细 - ${code}` : '设备明细'
@@ -286,10 +298,12 @@ const getDeviceIdentityText = (row) => (
   row?.device_name || row?.device_model || row?.device_id || row?.last_ip || '该设备'
 )
 
-const canManageDeviceRisk = (row) => Number.isInteger(Number(row?.id))
+const canManageDeviceRisk = (row) => (
+  Number.isInteger(Number(row?.id)) && (!isMerchantConsole.value || row?.can_manage_risk === true)
+)
 
 const updateRisk = async (row, level) => {
-  if (isMerchantConsole.value || !canManageDeviceRisk(row)) return
+  if (!canManageDeviceRisk(row)) return
   const levelText = { 0: '恢复正常', 1: '警告', 2: '黑名单' }
   const targetText = getDeviceIdentityText(row)
   const confirmText = {
@@ -305,7 +319,7 @@ const updateRisk = async (row, level) => {
       type: level === 2 ? 'warning' : 'info'
     })
 
-    await updateDeviceRisk(row.id, level)
+    isMerchantConsole.value ? await updateMerchantDeviceRisk(row.id, level) : await updateDeviceRisk(row.id, level)
     ElMessage.success(`${levelText[level]}成功`)
     await loadDevices()
   } catch (error) {

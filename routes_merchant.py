@@ -1087,6 +1087,11 @@ def _merchant_device_payload(
     last_verify_at = primary_binding.last_verify_at if primary_binding else (
         kami.last_verify_at if kami and kami.last_verify_at else None
     )
+    can_manage_risk = (
+        isinstance(getattr(device, "id", None), int)
+        and app is not None
+        and _app_is_owned_by_user(app, current_user)
+    )
     return {
         "id": getattr(device, "id", None),
         "app_id": getattr(device, "app_id", None),
@@ -1116,6 +1121,7 @@ def _merchant_device_payload(
         "max_bind_devices": kami.max_bind_devices if kami else None,
         "risk_level": risk_level,
         "risk_level_text": risk_text,
+        "can_manage_risk": can_manage_risk,
         "last_verify_at": to_api_beijing_iso(last_verify_at, naive="civil") if last_verify_at else None,
     }
 
@@ -1645,6 +1651,48 @@ async def list_merchant_devices(
             "items": payloads[offset:offset + page_size],
         },
     }
+
+
+@router.put("/devices/{device_id}/risk", summary="Update self-owned app device risk")
+async def update_merchant_device_risk(
+    device_id: int,
+    risk_level: int,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    if risk_level not in {0, 1, 2}:
+        raise HTTPException(status_code=400, detail="Invalid risk_level")
+
+    device = session.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    app = session.exec(select(App).where(App.app_id == device.app_id)).first()
+    if not app or not _app_is_owned_by_user(app, current_user):
+        raise HTTPException(status_code=403, detail="Only self-owned app devices can be managed")
+
+    device.risk_level = risk_level
+    session.add(device)
+    if device.last_ip:
+        ip_risk = session.exec(
+            select(DeviceIpRisk).where(
+                DeviceIpRisk.app_id == device.app_id,
+                DeviceIpRisk.ip_address == device.last_ip,
+            )
+        ).first()
+        if not ip_risk:
+            ip_risk = DeviceIpRisk(
+                app_id=device.app_id,
+                ip_address=device.last_ip,
+                risk_level=risk_level,
+            )
+        else:
+            ip_risk.risk_level = risk_level
+            ip_risk.updated_at = get_now_naive()
+        session.add(ip_risk)
+    session.commit()
+
+    return {"success": True, "message": "设备风险等级已更新"}
 
 
 @router.get("/recharge/config", summary="Get merchant recharge config")

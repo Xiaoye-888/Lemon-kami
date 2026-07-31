@@ -139,6 +139,43 @@ def test_public_docs_sdk_device_info_device_id_replaces_required_fingerprint():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_public_docs_sdk_warning_response_fields_are_documented():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    def override_session():
+        with Session(engine) as session:
+            yield session
+
+    fastapi_app.dependency_overrides[routes_docs.get_session] = override_session
+    client = TestClient(fastapi_app)
+
+    try:
+        response = client.get(
+            "/api/v1/docs/interfaces",
+            params={"page_size": 100},
+            headers={"accept": "application/json"},
+        )
+
+        assert response.status_code == 200
+        items = response.json()["data"]["items"]
+        by_key = {item["interface_key"]: item for item in items}
+
+        for interface_key in ("sdk.verify", "sdk.consume"):
+            response_params = {
+                item["name"]: item
+                for item in by_key[interface_key]["response_params"]
+            }
+            assert response_params["warning"]["required"] is False
+            assert response_params["warning_message"]["required"] is False
+            assert "警告" in response_params["warning"]["description"]
+            assert "业务软件" in response_params["warning_message"]["description"]
+            assert "warning_message" in by_key[interface_key]["doc_markdown"]
+            assert "多人使用存在风险" in by_key[interface_key]["doc_markdown"]
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_legacy_app_config_interface_is_not_exposed():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

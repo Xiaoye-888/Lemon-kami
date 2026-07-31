@@ -513,7 +513,25 @@ def _record_kami_device_usage(
         kami.bind_uuid = _device_uuid(uuid, fingerprint)
 
 
-def _device_block_response(
+def _device_risk_warning_message(device_warning: bool, ip_warning: bool) -> Optional[str]:
+    if device_warning and ip_warning:
+        return "该设备和 IP 多人使用存在风险，请注意"
+    if device_warning:
+        return "该设备多人使用存在风险，请注意"
+    if ip_warning:
+        return "该 IP 多人使用存在风险，请注意"
+    return None
+
+
+def _apply_warning_payload(response_data: dict, warning_message: Optional[str]) -> dict:
+    if warning_message:
+        response_data["message"] = warning_message
+        response_data["warning"] = True
+        response_data["warning_message"] = warning_message
+    return response_data
+
+
+def _device_risk_response(
     session: Session,
     app_id: str,
     kami_code: str,
@@ -524,8 +542,9 @@ def _device_block_response(
     *,
     event_type: str = "verify",
     action_text: str = "使用",
-) -> Optional[dict]:
+) -> tuple[Optional[dict], Optional[str]]:
     ip_risk = None
+    ip_warning = False
     if client_ip:
         ip_risk = session.exec(
             select(DeviceIpRisk).where(
@@ -545,19 +564,9 @@ def _device_block_response(
                 status=0,
                 message="IP已被拉黑",
             )
-            return {"success": False, "message": f"该 IP 已被加入黑名单，禁止{action_text}"}
+            return {"success": False, "message": f"该 IP 已被加入黑名单，禁止{action_text}"}, None
         if ip_risk and ip_risk.risk_level == 1:
-            _record_event_log(
-                session,
-                app_id,
-                kami_code,
-                event_type,
-                client_ip,
-                uuid,
-                user_agent,
-                status=1,
-                message="IP处于警告状态",
-            )
+            ip_warning = True
 
     device = session.exec(
         select(Device).where(
@@ -569,11 +578,14 @@ def _device_block_response(
     if device_risk_applies and device.risk_level == 2:
         _record_event_log(session, app_id, kami_code, event_type, client_ip, uuid, user_agent,
                          status=0, message="设备已被拉黑")
-        return {"success": False, "message": f"该设备已被加入黑名单，禁止{action_text}"}
-    if device_risk_applies and device.risk_level == 1 and not (ip_risk and ip_risk.risk_level == 1):
+        return {"success": False, "message": f"该设备已被加入黑名单，禁止{action_text}"}, None
+
+    device_warning = bool(device_risk_applies and device.risk_level == 1)
+    warning_message = _device_risk_warning_message(device_warning, ip_warning)
+    if warning_message:
         _record_event_log(session, app_id, kami_code, event_type, client_ip, uuid, user_agent,
-                         status=1, message="设备处于警告状态")
-    return None
+                         status=1, message=warning_message)
+    return None, warning_message
 
 
 def _user_bind_mode(kami: Kami) -> UserBindMode:
@@ -763,7 +775,7 @@ async def verify_kami(
         machine_bind_mode = MachineBindMode.no_limit
     if machine_bind_mode in {MachineBindMode.no_limit, MachineBindMode.one_card_multi_device}:
         is_first_activation = kami.status == KamiStatus.unused
-        block_response = _device_block_response(
+        block_response, warning_message = _device_risk_response(
             session,
             app_id,
             kami_code,
@@ -861,7 +873,7 @@ async def verify_kami(
             message="卡密激活成功" if is_first_activation else "验证成功",
         )
 
-        response_data = _build_verify_response(kami)
+        response_data = _apply_warning_payload(_build_verify_response(kami), warning_message)
         return encrypt_response(response_data, app_info.get("app_secret", ""))
 
     needs_binding = kami.status == KamiStatus.unused or (
@@ -876,7 +888,7 @@ async def verify_kami(
                              status=0, message=times_error["message"])
             return encrypt_response(times_error, app_info.get("app_secret", ""))
 
-        block_response = _device_block_response(
+        block_response, warning_message = _device_risk_response(
             session,
             app_id,
             kami_code,
@@ -928,7 +940,7 @@ async def verify_kami(
         _record_event_log(session, app_id, kami_code, "activate", client_ip, uuid, user_agent,
                          status=1, message=f"卡密激活成功，类型：{kami.kami_type.value}")
 
-        response_data = _build_verify_response(kami)
+        response_data = _apply_warning_payload(_build_verify_response(kami), warning_message)
         return encrypt_response(response_data, app_info.get("app_secret", ""))
 
     # 非首次验证：检查设备绑定
@@ -984,7 +996,7 @@ async def verify_kami(
         response_data = {"success": False, "message": "IP 不匹配，禁止在其他网络环境使用"}
         return encrypt_response(response_data, app_info.get("app_secret", ""))
     
-    block_response = _device_block_response(
+    block_response, warning_message = _device_risk_response(
         session,
         app_id,
         kami_code,
@@ -1023,7 +1035,7 @@ async def verify_kami(
     _record_event_log(session, app_id, kami_code, "verify", client_ip, uuid, user_agent,
                      status=1, message="验证成功")
 
-    response_data = _build_verify_response(kami)
+    response_data = _apply_warning_payload(_build_verify_response(kami), warning_message)
     return encrypt_response(response_data, app_info.get("app_secret", ""))
 
 
@@ -1134,7 +1146,7 @@ async def consume_kami(
         session, app_id, "sdk.device_limit", default_enabled=True
     )
     machine_bind_mode = _machine_bind_mode(kami) if device_limit_enabled else MachineBindMode.no_limit
-    block_response = _device_block_response(
+    block_response, warning_message = _device_risk_response(
         session,
         app_id,
         kami_code,
@@ -1244,7 +1256,7 @@ async def consume_kami(
 
     response_data = {
         "success": True,
-        "message": "核销成功",
+        "message": warning_message or "核销成功",
         "consume_id": consume_id,
         "biz_id": biz_id,
         "amount": amount,
@@ -1260,6 +1272,7 @@ async def consume_kami(
         "times_total": kami.times_total,
         "times_remaining": kami.times_remaining or 0,
     }
+    _apply_warning_payload(response_data, warning_message)
     _record_event_log(
         session, app_id, kami_code, "consume", client_ip, uuid, user_agent,
         status=1, message="核销成功", payload=response_data

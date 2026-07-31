@@ -31,7 +31,11 @@ def _detail_sort_key(item: dict) -> tuple[str, str]:
 
 def _device_detail_payload(payload: dict) -> dict:
     detail = {field: payload.get(field) for field in DETAIL_FIELDS}
-    detail["can_manage_risk"] = isinstance(payload.get("id"), int)
+    payload_can_manage_risk = payload.get("can_manage_risk")
+    if payload_can_manage_risk is None:
+        detail["can_manage_risk"] = isinstance(payload.get("id"), int)
+    else:
+        detail["can_manage_risk"] = bool(payload_can_manage_risk) and isinstance(payload.get("id"), int)
     return detail
 
 

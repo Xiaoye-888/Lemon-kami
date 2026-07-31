@@ -21,6 +21,7 @@ from models import (
     App,
     AppNotice,
     Device,
+    DeviceIpRisk,
     EndUser,
     EventLog,
     Kami,
@@ -3587,12 +3588,21 @@ def test_admin_devices_require_admin_and_merchant_devices_are_scoped():
             rsa_private_key="private",
             created_by="other-device-merchant",
         )
+        authorized_app = App(
+            app_id="app_device_authorized",
+            name="Authorized Device App",
+            app_secret="secret-device-authorized",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by="admin",
+        )
         session.add(merchant)
         session.add(other_merchant)
         session.add(no_app_merchant)
         session.add(usage_user)
         session.add(app)
         session.add(other_app)
+        session.add(authorized_app)
         session.commit()
         session.refresh(merchant)
         session.refresh(other_merchant)
@@ -3602,6 +3612,14 @@ def test_admin_devices_require_admin_and_merchant_devices_are_scoped():
         other_app.owner_user_id = other_merchant.id
         session.add(app)
         session.add(other_app)
+        session.add(
+            UserAppAuthorization(
+                app_id="app_device_authorized",
+                user_id=merchant.id,
+                username=merchant.username,
+                granted_by="admin",
+            )
+        )
         session.add(
             Kami(
                 app_id="app_device_owned",
@@ -3623,6 +3641,33 @@ def test_admin_devices_require_admin_and_merchant_devices_are_scoped():
             )
         )
         session.add(Device(app_id="app_device_owned", uuid="device-owned-1", fingerprint="fingerprint-owned-1", last_ip="203.0.113.10"))
+        session.add(
+            Kami(
+                app_id="app_device_authorized",
+                kami_code="DEVAUTH001",
+                kami_type="points",
+                status="active",
+                points_amount=10,
+                created_by_user_id=merchant.id,
+            )
+        )
+        session.add(
+            KamiDeviceBinding(
+                app_id="app_device_authorized",
+                kami_code="DEVAUTH001",
+                device_uuid="device-authorized-1",
+                fingerprint="fingerprint-authorized-1",
+                bind_ip="203.0.113.12",
+            )
+        )
+        session.add(
+            Device(
+                app_id="app_device_authorized",
+                uuid="device-authorized-1",
+                fingerprint="fingerprint-authorized-1",
+                last_ip="203.0.113.12",
+            )
+        )
         session.add(
             Kami(
                 app_id="app_device_other",
@@ -3668,11 +3713,44 @@ def test_admin_devices_require_admin_and_merchant_devices_are_scoped():
         )
         assert merchant_devices_response.status_code == 200
         merchant_items = merchant_devices_response.json()["data"]["items"]
-        assert [item["uuid"] for item in merchant_items] == ["device-owned-1"]
-        assert merchant_items[0]["card_source"] == "merchant_issued"
-        assert merchant_items[0]["app_source"] == "merchant_self_owned"
-        assert merchant_items[0]["issuing_user"]["username"] == "device-merchant"
-        assert merchant_items[0]["owning_user"]["username"] == "device-merchant"
+        merchant_items_by_app = {item["app_id"]: item for item in merchant_items}
+        assert set(merchant_items_by_app) == {"app_device_owned", "app_device_authorized"}
+        assert merchant_items_by_app["app_device_owned"]["uuid"] == "device-owned-1"
+        assert merchant_items_by_app["app_device_owned"]["card_source"] == "merchant_issued"
+        assert merchant_items_by_app["app_device_owned"]["app_source"] == "merchant_self_owned"
+        assert merchant_items_by_app["app_device_owned"]["can_manage_risk"] is True
+        assert merchant_items_by_app["app_device_owned"]["issuing_user"]["username"] == "device-merchant"
+        assert merchant_items_by_app["app_device_owned"]["owning_user"]["username"] == "device-merchant"
+        assert merchant_items_by_app["app_device_authorized"]["uuid"] == "device-authorized-1"
+        assert merchant_items_by_app["app_device_authorized"]["app_source"] == "admin_authorized"
+        assert merchant_items_by_app["app_device_authorized"]["can_manage_risk"] is False
+
+        merchant_risk_response = client.put(
+            f"/api/v1/merchant/devices/{merchant_items_by_app['app_device_owned']['id']}/risk",
+            headers=auth_headers(merchant_token),
+            params={"risk_level": 2},
+        )
+        assert merchant_risk_response.status_code == 200
+        with Session(engine) as session:
+            owned_device = session.exec(select(Device).where(Device.uuid == "device-owned-1")).one()
+            owned_ip_risk = session.exec(
+                select(DeviceIpRisk).where(
+                    DeviceIpRisk.app_id == "app_device_owned",
+                    DeviceIpRisk.ip_address == "203.0.113.10",
+                )
+            ).one()
+            assert owned_device.risk_level == 2
+            assert owned_ip_risk.risk_level == 2
+
+        authorized_risk_response = client.put(
+            f"/api/v1/merchant/devices/{merchant_items_by_app['app_device_authorized']['id']}/risk",
+            headers=auth_headers(merchant_token),
+            params={"risk_level": 2},
+        )
+        assert authorized_risk_response.status_code == 403
+        with Session(engine) as session:
+            authorized_device = session.exec(select(Device).where(Device.uuid == "device-authorized-1")).one()
+            assert authorized_device.risk_level == 0
 
         no_app_forbidden_response = client.get(
             "/api/v1/merchant/devices",
