@@ -200,9 +200,8 @@ function Invoke-ReleaseBoundaryStaticChecks {
             throw "unused Vite/legacy frontend files removed: $relativePath"
         }
     }
-
     $readme = Get-Content -LiteralPath (Join-Path $root "README.md") -Raw
-    if ($readme -notmatch "981388" -or $readme -match "d18880848565") {
+    if ($readme -match '- \*\*QQ\*\*: `\d{6,}`' -or $readme -match 'd\d{11}') {
         throw "README contact check failed"
     }
 

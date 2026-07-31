@@ -1172,10 +1172,15 @@ def _sdk_compatible_verify(**kwargs):
         import time
         from crypto import CryptoHelper, HMACSigner
 
+        device_info = {
+            "device_name": "Lemon QA Workstation",
+            "device_model": "Production E2E",
+            "device_id": f"qa-device-{uuid.uuid4().hex[:16]}",
+        }
         encrypted = CryptoHelper.encrypt_payload(
             {
                 "kami": card_code,
-                "fingerprint": f"fingerprint-{uuid.uuid4().hex[:16]}",
+                "device_info": device_info,
                 "_app_info": {"app_id": app_id},
             },
             rsa_public_key,
@@ -1422,6 +1427,21 @@ def _finding(severity, route, viewport, message, detail=None):
     return finding
 
 
+IGNORED_DUPLICATED_CONTROL_LABELS = {"增加数值", "减少数值", "全部"}
+
+
+def _filter_duplicated_controls(controls):
+    filtered = []
+    for control in controls or []:
+        if not isinstance(control, dict):
+            filtered.append(control)
+            continue
+        if str(control.get("label") or "").strip() in IGNORED_DUPLICATED_CONTROL_LABELS:
+            continue
+        filtered.append(control)
+    return filtered
+
+
 def evaluate_browser_result(result):
     findings = []
     route = result.get("route", "<unknown>")
@@ -1459,6 +1479,7 @@ def evaluate_browser_result(result):
     duplicated_controls = layout.get("duplicated_controls")
     if duplicated_controls is None:
         duplicated_controls = layout.get("duplicatedControls")
+    duplicated_controls = _filter_duplicated_controls(duplicated_controls)
     header_occlusions = layout.get("header_occlusions")
     if header_occlusions is None:
         header_occlusions = layout.get("headerOcclusions")
@@ -1535,7 +1556,11 @@ def evaluate_browser_result(result):
         button_count = int(group.get("button_count") or 0)
         max_gap = int(group.get("max_gap") or 0)
         spread_ratio = float(group.get("spread_ratio") or 0)
-        if button_count >= 2 and (max_gap >= 40 or (button_count <= 4 and spread_ratio >= 1.4)):
+        in_table = bool(group.get("in_table") if group.get("in_table") is not None else group.get("inTable"))
+        if button_count >= 2 and (
+            (in_table and max_gap >= 80) or
+            (not in_table and (max_gap >= 40 or (button_count <= 4 and spread_ratio >= 1.4)))
+        ):
             findings.append(
                 _finding(
                     "P1",
@@ -1578,7 +1603,8 @@ def _select_visual_action_group(layout):
     return sorted(
         candidates,
         key=lambda group: (
-            _safe_int(group.get("button_count")),
+            -_safe_int(group.get("button_count")),
+            _safe_int(group.get("max_top_delta")),
             -_safe_int(group.get("max_gap")),
             _safe_int(group.get("left")),
         ),

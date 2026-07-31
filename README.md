@@ -197,7 +197,7 @@ else:
 
 如果您有任何问题、建议或需要商业合作，欢迎联系我们。
 
-- **QQ**: `981388`
+- **QQ**: `请通过 GitHub Issues 联系`
 - **GitHub Issues**: [提交问题](https://github.com/yourusername/Lemon-kami/issues)
 
 ## 📄 许可证

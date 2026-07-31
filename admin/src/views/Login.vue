@@ -138,7 +138,7 @@
             </div>
             <div class="contact-card-info">
               <div class="contact-label">微信</div>
-              <div class="contact-value">981388</div>
+              <div class="contact-value">请联系管理员</div>
             </div>
           </div>
           
@@ -148,7 +148,7 @@
             </div>
             <div class="contact-card-info">
               <div class="contact-label">QQ</div>
-              <div class="contact-value">981388</div>
+              <div class="contact-value">请联系管理员</div>
             </div>
           </div>
         </div>

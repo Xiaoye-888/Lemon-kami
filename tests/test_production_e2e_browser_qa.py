@@ -971,6 +971,30 @@ def test_browser_result_evaluation_flags_admin_merchant_parity_and_repeated_cont
     }
 
 
+def test_browser_result_evaluation_ignores_generic_repeated_form_controls():
+    qa = load_qa_module()
+    result = {
+        "route": "/admin/commercial/recharge-settings",
+        "viewport": "desktop",
+        "console_errors": [],
+        "exceptions": [],
+        "network_failures": [],
+        "bodyTextLength": 1800,
+        "layout": {
+            "horizontalOverflow": False,
+            "largeBlankRatio": 0.18,
+            "overwideCards": [],
+            "duplicatedControls": [
+                {"label": "增加数值", "count": 6},
+                {"label": "减少数值", "count": 6},
+                {"label": "全部", "count": 2},
+            ],
+        },
+    }
+
+    assert qa.evaluate_browser_result(result) == []
+
+
 def test_browser_result_evaluation_flags_merchant_detail_panel_parity_mismatch():
     qa = load_qa_module()
     result = {
@@ -1036,6 +1060,36 @@ def test_browser_result_evaluation_flags_merchant_detail_summary_parity_mismatch
         finding["message"] == "Admin/merchant detail summary parity mismatch" and finding["severity"] == "P1"
         for finding in findings
     )
+
+
+def test_browser_result_evaluation_allows_fixed_width_table_action_cell_spacing():
+    qa = load_qa_module()
+    result = {
+        "route": "/admin/commercial/recharge-orders",
+        "viewport": "desktop",
+        "console_errors": [],
+        "exceptions": [],
+        "network_failures": [],
+        "http_errors": [],
+        "bodyTextLength": 1600,
+        "layout": {
+            "horizontalOverflow": False,
+            "largeBlankRatio": 0.18,
+            "overwideCards": [],
+            "action_groups": [
+                {
+                    "button_count": 2,
+                    "max_gap": 46,
+                    "spread_ratio": 2.1,
+                    "in_table": True,
+                }
+            ],
+        },
+    }
+
+    findings = qa.evaluate_browser_result(result)
+
+    assert "Action button group is overly dispersed" not in [finding["message"] for finding in findings]
 
 
 def test_browser_result_evaluation_flags_non_2xx_document_status_without_sparse_noise():
@@ -1481,6 +1535,16 @@ def test_visual_regression_accepts_matching_action_group_crop(tmp_path, monkeypa
     assert (tmp_path / "visual-regression" / "merchant-apps-row-actions.desktop.actual.png").exists()
     assert results["comparisons"][0]["mean_diff"] == 0
     assert results["comparisons"][0]["changed_ratio"] == 0
+
+
+def test_visual_regression_prefers_complete_action_group_over_read_only_row():
+    qa = load_qa_module()
+    read_only_group = {"button_count": 2, "left": 200, "top": 20, "width": 120, "height": 32, "max_gap": 12}
+    self_owned_group = {"button_count": 4, "left": 200, "top": 72, "width": 240, "height": 32, "max_gap": 12}
+
+    selected = qa._select_visual_action_group({"action_groups": [read_only_group, self_owned_group]})
+
+    assert selected is self_owned_group
 
 
 def test_visual_regression_accepts_matching_detail_summary_crop(tmp_path, monkeypatch):
@@ -2689,6 +2753,47 @@ def test_verify_one_card_is_injectable_and_reports_only_redacted_code():
     assert "KAMI-ABCDEFG1234567" not in safe_line
     assert "secret-self" not in safe_line
     assert "fingerprint-1234567890" not in safe_line
+
+
+def test_sdk_compatible_verify_uses_device_info_device_id_without_legacy_fields(monkeypatch):
+    qa = load_qa_module()
+    session = FakeSession([FakeResponse(payload={"success": True, "data": {"activated": True}})])
+    install_fake_api_session(monkeypatch, qa, session)
+
+    captured = {}
+    from crypto import CryptoHelper, HMACSigner
+
+    def fake_encrypt(data, public_key):
+        captured["data"] = data
+        captured["public_key"] = public_key
+        return {"encrypted_data": "encrypted-payload", "encrypted_key": "encrypted-key", "iv": "iv"}
+
+    monkeypatch.setattr(CryptoHelper, "encrypt_payload", staticmethod(fake_encrypt))
+    monkeypatch.setattr(HMACSigner, "generate_sign", staticmethod(lambda _data, _secret: "signature"))
+
+    result = qa._sdk_compatible_verify(
+        base_url="https://qa.example.invalid",
+        app_id="app_self",
+        card_code="KAMI-ABCDEFG1234567",
+        app_secret="secret-self",
+        rsa_public_key="public-self",
+    )
+
+    assert result["success"] is True
+    assert captured["public_key"] == "public-self"
+    encrypted_data = captured["data"]
+    assert encrypted_data["kami"] == "KAMI-ABCDEFG1234567"
+    assert encrypted_data["_app_info"] == {"app_id": "app_self"}
+    assert "uuid" not in encrypted_data
+    assert "fingerprint" not in encrypted_data
+    assert encrypted_data["device_info"]["device_id"].startswith("qa-device-")
+    assert encrypted_data["device_info"]["device_name"] == "Lemon QA Workstation"
+    assert encrypted_data["device_info"]["device_model"] == "Production E2E"
+
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/api/v1/sdk/verify")
+    assert call["kwargs"]["json"]["encrypted_data"] == "encrypted-payload"
 
 
 def test_self_owned_flow_report_summary_includes_direct_spec_fields_and_safe_cards():

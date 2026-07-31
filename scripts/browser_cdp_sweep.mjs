@@ -489,6 +489,7 @@ async function evaluateLayout(cdp, sessionId) {
         max_gap: Math.round(maxGap),
         max_top_delta: Math.round(maxTopDelta),
         wrapped: maxTopDelta > 10,
+        in_table: Boolean(group.closest('.el-table__body, tbody')),
         left_padding: Math.round(leftPadding),
         right_padding: Math.round(rightPadding),
         spread_ratio: Number((groupRect.width / Math.max(totalItemWidth, 1)).toFixed(2)),
@@ -497,6 +498,7 @@ async function evaluateLayout(cdp, sessionId) {
     })
     .filter(Boolean)
     .slice(0, 8);
+  const ignoredDuplicateControlLabels = new Set(['\u589e\u52a0\u6570\u503c', '\u51cf\u5c11\u6570\u503c', '\u5168\u90e8']);
   const controlCounts = new Map();
   Array.from(document.querySelectorAll('button, .el-button, .el-select, .el-input, .el-date-editor, [role="button"]'))
     .map((el) => {
@@ -523,7 +525,7 @@ async function evaluateLayout(cdp, sessionId) {
       controlCounts.set(label, (controlCounts.get(label) || 0) + 1);
     });
   const duplicatedControls = Array.from(controlCounts.entries())
-    .filter(([, count]) => count >= 2)
+    .filter(([label, count]) => count >= 2 && !ignoredDuplicateControlLabels.has(label))
     .slice(0, 8)
     .map(([label, count]) => ({ label, count }));
   const headerBottom = (() => {
@@ -607,15 +609,25 @@ async function evaluateLayout(cdp, sessionId) {
     };
     const requireActionGroup = (contract, selector, options = {}) => {
       const actionGroupSeverity = viewportWidth < 600 ? 'P2' : 'P1';
-      const group = firstVisible(selector);
-      if (!group) {
+      const visibleGroups = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+      if (!visibleGroups.length) {
         fail(contract, 'Action group is missing', { selector }, actionGroupSeverity);
         return;
       }
-      const groupRect = group.getBoundingClientRect();
-      const items = Array.from(group.querySelectorAll('button, a, [role="button"], .el-button'))
+      const visibleItemsFor = (group) => Array.from(group.querySelectorAll('button, a, [role="button"], .el-button'))
         .map((el) => ({ rect: el.getBoundingClientRect(), text: (el.innerText || el.textContent || '').trim() }))
         .filter(({ rect }) => rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.top <= viewportHeight);
+      const candidates = visibleGroups
+        .map((group) => ({ group, items: visibleItemsFor(group), rect: group.getBoundingClientRect() }))
+        .sort((left, right) => {
+          const leftMeetsMin = !options.minItems || left.items.length >= options.minItems;
+          const rightMeetsMin = !options.minItems || right.items.length >= options.minItems;
+          if (leftMeetsMin !== rightMeetsMin) return rightMeetsMin - leftMeetsMin;
+          if (left.items.length !== right.items.length) return right.items.length - left.items.length;
+          return left.rect.top - right.rect.top;
+        });
+      const { group, items } = candidates[0];
+      const groupRect = group.getBoundingClientRect();
       const topValues = items.map((item) => Math.round(item.rect.top));
       const maxTopDelta = topValues.length ? Math.max(...topValues) - Math.min(...topValues) : 0;
       const totalItemWidth = items.reduce((sum, item) => sum + item.rect.width, 0);
@@ -644,7 +656,7 @@ async function evaluateLayout(cdp, sessionId) {
       }
     };
 
-    if (path.includes('/merchant/apps')) {
+    if (path === '/merchant/apps') {
       requireOrder('merchant-apps.regions', ['.merchant-apps .page-toolbar', '.merchant-apps .page-card']);
       requireActionGroup('merchant-apps.toolbar-actions', '.merchant-apps .page-toolbar .actions', { minItems: 2, maxItems: 2, maxSpreadRatio: 2.5 });
       if (firstVisible('.merchant-apps .row-actions')) {
