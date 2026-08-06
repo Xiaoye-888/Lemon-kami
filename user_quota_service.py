@@ -52,33 +52,41 @@ def generate_kami_code(length: int = 16, prefix: str = "", charset: str = "upper
     return f"{prefix}{''.join(random.choices(characters, k=length))}"
 
 
-def _batch_no_exists(session: Session, app_id: str, batch_no: str) -> bool:
+def _user_batch_no_exists(session: Session, app_id: str, batch_no: str, user_id: int) -> bool:
     return session.exec(
         select(KamiBatch.id)
-        .where(KamiBatch.app_id == app_id, KamiBatch.batch_no == batch_no)
+        .where(
+            KamiBatch.app_id == app_id,
+            KamiBatch.batch_no == batch_no,
+            KamiBatch.created_by_user_id == user_id,
+        )
         .limit(1)
     ).first() is not None
 
 
-def _next_available_batch_no(session: Session, app_id: str, requested_batch_no: Optional[str]) -> str:
-    base = requested_batch_no.strip() if isinstance(requested_batch_no, str) else ""
-    if not base:
-        for _ in range(100):
-            candidate = f"user_{uuid.uuid4().hex[:12]}"
-            if not _batch_no_exists(session, app_id, candidate):
-                return candidate
-        raise ValueError("batch_no already exists")
-
-    candidate = base
-    if not _batch_no_exists(session, app_id, candidate):
-        return candidate
-
-    for index in range(2, 10000):
-        suffix = f"-{index}"
-        candidate = f"{base[:64 - len(suffix)]}{suffix}"
-        if not _batch_no_exists(session, app_id, candidate):
+def _generated_user_batch_no(session: Session, app_id: str, user_id: int) -> str:
+    for _ in range(100):
+        candidate = f"user_{uuid.uuid4().hex[:12]}"
+        if not _user_batch_no_exists(session, app_id, candidate, user_id):
             return candidate
     raise ValueError("batch_no already exists")
+
+
+def _normalize_user_batch_no(session: Session, app_id: str, user_id: int, requested_batch_no: Optional[str]) -> str:
+    base = requested_batch_no.strip() if isinstance(requested_batch_no, str) else ""
+    if not base:
+        return _generated_user_batch_no(session, app_id, user_id)
+    return base
+
+
+def _find_user_batch(session: Session, app_id: str, batch_no: str, user_id: int) -> Optional[KamiBatch]:
+    return session.exec(
+        select(KamiBatch).where(
+            KamiBatch.app_id == app_id,
+            KamiBatch.batch_no == batch_no,
+            KamiBatch.created_by_user_id == user_id,
+        )
+    ).first()
 
 
 def _now() -> object:
@@ -492,23 +500,27 @@ def issue_user_kamis(
     user_bind_mode: str | UserBindMode = UserBindMode.none,
     remark: Optional[str] = None,
     allow_existing_batch: bool = False,
+    batch_id: Optional[int] = None,
     biz_id_suffix: Optional[str] = None,
 ) -> dict:
     if count <= 0:
         raise ValueError("count must be greater than 0")
     if unit_cost <= 0:
         raise ValueError("unit_cost must be greater than 0")
-    if allow_existing_batch:
-        effective_batch_no = (batch_no.strip() if isinstance(batch_no, str) else batch_no) or f"user_{uuid.uuid4().hex[:12]}"
-        existing_batch = session.exec(
-            select(KamiBatch).where(
-                KamiBatch.app_id == app.app_id,
-                KamiBatch.batch_no == effective_batch_no,
-            )
-        ).first()
+    if batch_id is not None:
+        existing_batch = session.get(KamiBatch, batch_id)
+        if (
+            not existing_batch
+            or existing_batch.app_id != app.app_id
+            or existing_batch.created_by_user_id not in (None, user.id)
+        ):
+            raise ValueError("Batch not found")
+        effective_batch_no = existing_batch.batch_no
+        if existing_batch.created_by_user_id is None:
+            existing_batch.created_by_user_id = user.id
     else:
-        effective_batch_no = _next_available_batch_no(session, app.app_id, batch_no)
-        existing_batch = None
+        effective_batch_no = _normalize_user_batch_no(session, app.app_id, user.id, batch_no)
+        existing_batch = _find_user_batch(session, app.app_id, effective_batch_no, user.id)
 
     kami_type_enum = _normalize_kami_type(kami_type)
     if charset not in KAMI_CHARSETS:
@@ -538,7 +550,9 @@ def issue_user_kamis(
 
     account = get_or_create_user_quota_account(session, user.id, user.username)
     total_cost = count * unit_cost
-    biz_scope = biz_id_suffix or (uuid.uuid4().hex[:8] if allow_existing_batch else f"{code_prefix or ''}:{count}")
+    biz_scope = biz_id_suffix or (
+        uuid.uuid4().hex[:8] if allow_existing_batch or existing_batch else f"{code_prefix or ''}:{count}"
+    )
     quota_result = consume_user_quota(
         session=session,
         account=account,
@@ -570,6 +584,7 @@ def issue_user_kamis(
     kamis: list[Kami] = []
     batch = existing_batch
     if batch:
+        batch.created_by_user_id = user.id
         batch.kami_type = kami_type_enum
         batch.points_amount = points_amount if kami_type_enum == KamiType.points else None
         batch.points_valid_days = points_valid_days if kami_type_enum == KamiType.points else None
@@ -589,9 +604,9 @@ def issue_user_kamis(
         batch.updated_at = now
         session.add(batch)
     else:
-        session.add(
-            KamiBatch(
+        batch = KamiBatch(
             spec_id=spec_id,
+            created_by_user_id=user.id,
             app_id=app.app_id,
             batch_no=effective_batch_no,
             kami_type=kami_type_enum,
@@ -613,7 +628,7 @@ def issue_user_kamis(
             created_at=now,
             updated_at=now,
         )
-        )
+        session.add(batch)
 
     for _ in range(count):
         kami_code = generate_kami_code(code_length, code_prefix or "", charset)
@@ -652,6 +667,7 @@ def issue_user_kamis(
     session.add_all(kamis)
     session.flush()
     return {
+        "batch_id": batch.id if batch else None,
         "batch_no": effective_batch_no,
         "spec_id": spec_id,
         "count": count,

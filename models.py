@@ -672,12 +672,10 @@ class Kami(SQLModel, table=True):
 
 class KamiBatch(SQLModel, table=True):
     __tablename__ = "kami_batches"
-    __table_args__ = (
-        UniqueConstraint("app_id", "batch_no", name="uk_kami_batch_app_batch"),
-    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     spec_id: Optional[int] = Field(default=None, foreign_key="kami_specs.id", index=True)
+    created_by_user_id: Optional[int] = Field(default=None, foreign_key="end_users.id", index=True, description="Batch issuer end-user ID")
     app_id: str = Field(sa_column=app_id_fk_column(), description="App ID")
     batch_no: str = Field(max_length=64, index=True, description="Batch number")
     kami_type: KamiType = Field(index=True, description="Kami type")

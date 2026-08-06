@@ -104,11 +104,15 @@ def batch_stats_payload(
     include_unassigned: bool = False,
 ) -> dict:
     statement = select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
-    if created_by_user_id is not None:
+    if batch.created_by_user_id is not None:
+        statement = statement.where(Kami.created_by_user_id == batch.created_by_user_id)
+    elif created_by_user_id is not None:
         visibility_conditions = [Kami.created_by_user_id == created_by_user_id]
         if include_unassigned:
             visibility_conditions.append(Kami.created_by_user_id.is_(None))
         statement = statement.where(or_(*visibility_conditions))
+    elif include_unassigned:
+        statement = statement.where(Kami.created_by_user_id.is_(None))
     kamis = session.exec(statement).all()
     codes = [kami.kami_code for kami in kamis if kami.kami_code]
     bindings = []

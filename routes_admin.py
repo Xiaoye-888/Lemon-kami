@@ -2416,6 +2416,17 @@ def _admin_owned_kami_scope(statement):
 
 
 def _batch_has_kamis(session: Session, batch: KamiBatch) -> bool:
+    statement = select(Kami.id).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
+    if batch.created_by_user_id is not None:
+        statement = statement.where(Kami.created_by_user_id == batch.created_by_user_id)
+    else:
+        statement = _admin_owned_kami_scope(statement)
+    return session.exec(
+        statement.limit(1)
+    ).first() is not None
+
+
+def _batch_has_any_kamis(session: Session, batch: KamiBatch) -> bool:
     return session.exec(
         select(Kami.id)
         .where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
@@ -2426,8 +2437,10 @@ def _batch_has_kamis(session: Session, batch: KamiBatch) -> bool:
 def _admin_visible_batches_for_stats(session: Session, batches: list[KamiBatch]) -> list[KamiBatch]:
     visible_batches = []
     for batch in batches:
+        if batch.created_by_user_id is not None:
+            continue
         stats = _kami_batch_stats(session, batch, admin_owned_only=True)
-        if stats["total_count"] > 0 or not _batch_has_kamis(session, batch):
+        if stats["total_count"] > 0 or not _batch_has_any_kamis(session, batch):
             visible_batches.append(batch)
     return visible_batches
 
@@ -2494,9 +2507,16 @@ def _kami_spec_stats(session: Session, spec_id: int, *, admin_owned_only: bool =
 
 def _kami_batch_stats(session: Session, batch: KamiBatch, *, admin_owned_only: bool = False) -> dict:
     statement = select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
-    if admin_owned_only:
+    if admin_owned_only and batch.created_by_user_id is not None:
+        kamis = []
+    elif batch.created_by_user_id is not None:
+        statement = statement.where(Kami.created_by_user_id == batch.created_by_user_id)
+        kamis = session.exec(statement).all()
+    elif admin_owned_only:
         statement = _admin_owned_kami_scope(statement)
-    kamis = session.exec(statement).all()
+        kamis = session.exec(statement).all()
+    else:
+        kamis = session.exec(statement).all()
     now = get_now().replace(tzinfo=None)
     stats = {
         "total_count": len(kamis),
@@ -2594,6 +2614,7 @@ def _kami_batch_payload(batch: KamiBatch) -> dict:
     return {
         "id": batch.id,
         "spec_id": batch.spec_id,
+        "created_by_user_id": batch.created_by_user_id,
         "batch_no": batch.batch_no,
         "app_id": batch.app_id,
         "kami_type": _enum_value(batch.kami_type),
@@ -3028,7 +3049,11 @@ async def generate_kamis_for_spec(
 
     batch_no = payload.batch_no or f"{spec.spec_name}-{get_now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6]}"
     duplicate = session.exec(
-        select(KamiBatch).where(KamiBatch.app_id == spec.app_id, KamiBatch.batch_no == batch_no)
+        select(KamiBatch).where(
+            KamiBatch.app_id == spec.app_id,
+            KamiBatch.batch_no == batch_no,
+            KamiBatch.created_by_user_id.is_(None),
+        )
     ).first()
     if duplicate:
         raise HTTPException(status_code=400, detail="批次号已存在")
@@ -3095,7 +3120,7 @@ async def list_kami_spec_batches(
     for batch in batches:
         item = _kami_batch_payload(batch)
         stats = _kami_batch_stats(session, batch, admin_owned_only=True)
-        if stats["total_count"] == 0 and _batch_has_kamis(session, batch):
+        if stats["total_count"] == 0 and _batch_has_any_kamis(session, batch):
             continue
         item.update(stats)
         items.append(item)
@@ -3194,6 +3219,7 @@ async def create_kami_batch(
         select(KamiBatch).where(
             KamiBatch.app_id == payload.app_id,
             KamiBatch.batch_no == payload.batch_no,
+            KamiBatch.created_by_user_id.is_(None),
         )
     ).first()
     if existing:
@@ -3259,7 +3285,7 @@ async def update_kami_batch(
     session: Session = Depends(get_session),
 ):
     batch = session.get(KamiBatch, batch_id)
-    if not batch:
+    if not batch or batch.created_by_user_id is not None:
         raise HTTPException(status_code=404, detail="Batch not found")
 
     username = current_user.get("sub")
@@ -3272,7 +3298,9 @@ async def update_kami_batch(
         return {"success": True, "message": "Batch unchanged", "data": _kami_batch_payload(batch)}
 
     current_kamis = session.exec(
-        select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
+        _admin_owned_kami_scope(
+            select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
+        )
     ).all()
     requested_type = data.get("kami_type")
     if requested_type and requested_type != _enum_value(batch.kami_type) and current_kamis:
@@ -3315,6 +3343,7 @@ async def update_kami_batch(
             select(KamiBatch).where(
                 KamiBatch.app_id == batch.app_id,
                 KamiBatch.batch_no == new_batch_no,
+                KamiBatch.created_by_user_id.is_(None),
                 KamiBatch.id != batch.id,
             )
         ).first()
@@ -3386,7 +3415,7 @@ async def delete_kami_batch(
     session: Session = Depends(get_session),
 ):
     batch = session.get(KamiBatch, batch_id)
-    if not batch:
+    if not batch or batch.created_by_user_id is not None:
         raise HTTPException(status_code=404, detail="Batch not found")
 
     username = current_user.get("sub")
@@ -3408,7 +3437,9 @@ async def delete_kami_batch(
     )
 
     existing_kamis = session.exec(
-        select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
+        _admin_owned_kami_scope(
+            select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
+        )
     ).all()
     if existing_kamis and not cascade_kamis:
         error_message = "批次下仍有卡密，请先删除或转移卡密后再删除批次。"
@@ -3561,6 +3592,7 @@ async def batch_create_kamis(
         select(KamiBatch).where(
             KamiBatch.app_id == app_id,
             KamiBatch.batch_no == batch_no,
+            KamiBatch.created_by_user_id.is_(None),
         )
     ).first()
     if not batch:
@@ -3968,7 +4000,10 @@ async def list_kami_batches(
     device_summary_by_code = _kami_device_summary_by_code(session, batch_kamis)
     point_source_by_code = _point_source_summary_by_code(session, kami_codes)
 
-    batch_statement = select(KamiBatch).where(KamiBatch.app_id == app_id)
+    batch_statement = select(KamiBatch).where(
+        KamiBatch.app_id == app_id,
+        KamiBatch.created_by_user_id.is_(None),
+    )
     if kami_type:
         batch_statement = batch_statement.where(KamiBatch.kami_type == KamiType(kami_type))
     batch_configs = session.exec(batch_statement).all()
@@ -3984,7 +4019,7 @@ async def list_kami_batches(
     for batch in batch_configs:
         item = _kami_batch_payload(batch)
         stats = _kami_batch_stats(session, batch, admin_owned_only=True)
-        if stats["total_count"] == 0 and _batch_has_kamis(session, batch):
+        if stats["total_count"] == 0 and _batch_has_any_kamis(session, batch):
             continue
         spec = specs_by_id.get(batch.spec_id)
         item.update({

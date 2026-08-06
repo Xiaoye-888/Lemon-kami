@@ -2882,7 +2882,7 @@ def test_merchant_notice_and_version_management_follows_app_ownership_boundaries
         fastapi_app.dependency_overrides.clear()
 
 
-def test_duplicate_merchant_issue_batch_auto_renames_and_deducts_once_per_batch():
+def test_same_merchant_issue_batch_name_reuses_owner_batch_and_deducts_each_issue():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
 
@@ -2933,22 +2933,24 @@ def test_duplicate_merchant_issue_batch_auto_renames_and_deducts_once_per_batch(
             json=payload,
         )
         assert duplicate_response.status_code == 200
+        first_data = first_response.json()["data"]
         duplicate_data = duplicate_response.json()["data"]
-        assert duplicate_data["batch_no"] == "DUP-001-2"
+        assert first_data["batch_no"] == "DUP-001"
+        assert duplicate_data["batch_no"] == "DUP-001"
+        assert duplicate_data["batch_id"] == first_data["batch_id"]
 
         with Session(engine) as session:
-            first_cards = session.exec(
+            cards = session.exec(
                 select(Kami).where(
                     Kami.app_id == "app_duplicate_issue",
                     Kami.batch_no == "DUP-001",
                     Kami.created_by_user_id == merchant_id,
                 )
             ).all()
-            duplicate_cards = session.exec(
-                select(Kami).where(
-                    Kami.app_id == "app_duplicate_issue",
-                    Kami.batch_no == "DUP-001-2",
-                    Kami.created_by_user_id == merchant_id,
+            batches = session.exec(
+                select(KamiBatch).where(
+                    KamiBatch.app_id == "app_duplicate_issue",
+                    KamiBatch.batch_no == "DUP-001",
                 )
             ).all()
             account = session.exec(
@@ -2961,13 +2963,154 @@ def test_duplicate_merchant_issue_batch_auto_renames_and_deducts_once_per_batch(
                     UserQuotaTransaction.transaction_type == UserQuotaTransactionType.consume,
                 )
             ).all()
-            assert len(first_cards) == 2
-            assert len(duplicate_cards) == 2
+            assert len(cards) == 4
+            assert len(batches) == 1
+            assert batches[0].created_by_user_id == merchant_id
             assert account.kami_issue_balance == 2
-            assert sorted(transaction.biz_id for transaction in consume_transactions) == [
-                "kami_issue:app_duplicate_issue:DUP-001-2::2",
-                "kami_issue:app_duplicate_issue:DUP-001::2",
+            assert len(consume_transactions) == 2
+            assert all(
+                transaction.biz_id.startswith("kami_issue:app_duplicate_issue:DUP-001:")
+                for transaction in consume_transactions
+            )
+            assert len({transaction.biz_id for transaction in consume_transactions}) == 2
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_two_merchants_can_issue_same_batch_no_without_scope_leak():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_merchant.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_user.get_session] = override_session_factory(engine)
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant_a = EndUser(username="issuer-alpha", password_hash=hash_password("secret123"), status=1)
+        merchant_b = EndUser(username="issuer-beta", password_hash=hash_password("secret123"), status=1)
+        app = App(
+            app_id="app_shared_batch_names",
+            name="Shared Batch Names",
+            app_secret="secret-shared",
+            rsa_public_key="public",
+            rsa_private_key="private",
+            created_by="admin",
+        )
+        session.add_all([merchant_a, merchant_b, app])
+        session.commit()
+        session.refresh(merchant_a)
+        session.refresh(merchant_b)
+        spec = KamiSpec(
+            app_id=app.app_id,
+            spec_key="points-10-shared",
+            spec_name="Shared Points",
+            kami_type=KamiType.points,
+            points_amount=10,
+            status=1,
+        )
+        session.add(spec)
+        session.commit()
+        session.refresh(spec)
+        session.add_all(
+            [
+                UserAppAuthorization(
+                    app_id=app.app_id,
+                    user_id=merchant_a.id,
+                    username=merchant_a.username,
+                    granted_by="admin",
+                ),
+                UserAppAuthorization(
+                    app_id=app.app_id,
+                    user_id=merchant_b.id,
+                    username=merchant_b.username,
+                    granted_by="admin",
+                ),
+                UserQuotaAccount(user_id=merchant_a.id, username=merchant_a.username, kami_issue_balance=5),
+                UserQuotaAccount(user_id=merchant_b.id, username=merchant_b.username, kami_issue_balance=5),
             ]
+        )
+        session.commit()
+        token_a = routes_user.create_user_access_token(merchant_a)
+        token_b = routes_user.create_user_access_token(merchant_b)
+        merchant_a_id = merchant_a.id
+        merchant_b_id = merchant_b.id
+        spec_id = spec.id
+
+    payload = {
+        "spec_id": spec_id,
+        "count": 2,
+        "batch_no": "SAME-DAY",
+        "code_length": 8,
+    }
+
+    try:
+        response_a = client.post(
+            "/api/v1/merchant/apps/app_shared_batch_names/kamis/batch",
+            headers=auth_headers(token_a),
+            json=payload,
+        )
+        response_b = client.post(
+            "/api/v1/merchant/apps/app_shared_batch_names/kamis/batch",
+            headers=auth_headers(token_b),
+            json=payload,
+        )
+
+        assert response_a.status_code == 200
+        assert response_b.status_code == 200
+        data_a = response_a.json()["data"]
+        data_b = response_b.json()["data"]
+        assert data_a["batch_no"] == "SAME-DAY"
+        assert data_b["batch_no"] == "SAME-DAY"
+        assert data_a["batch_id"] != data_b["batch_id"]
+
+        list_a = client.get(
+            f"/api/v1/merchant/kami-specs/{spec_id}/batches",
+            headers=auth_headers(token_a),
+        )
+        list_b = client.get(
+            f"/api/v1/merchant/kami-specs/{spec_id}/batches",
+            headers=auth_headers(token_b),
+        )
+        assert list_a.status_code == 200
+        assert list_b.status_code == 200
+        item_a = list_a.json()["data"]["items"][0]
+        item_b = list_b.json()["data"]["items"][0]
+        assert item_a["id"] == data_a["batch_id"]
+        assert item_b["id"] == data_b["batch_id"]
+        assert item_a["stats"]["total_count"] == 2
+        assert item_b["stats"]["total_count"] == 2
+
+        hidden = client.get(
+            f"/api/v1/merchant/batches/{data_b['batch_id']}/kamis",
+            headers=auth_headers(token_a),
+        )
+        assert hidden.status_code == 404
+
+        own_cards = client.get(
+            f"/api/v1/merchant/batches/{data_a['batch_id']}/kamis",
+            headers=auth_headers(token_a),
+        )
+        assert own_cards.status_code == 200
+        assert own_cards.json()["data"]["total"] == 2
+
+        with Session(engine) as session:
+            batches = session.exec(
+                select(KamiBatch).where(
+                    KamiBatch.app_id == "app_shared_batch_names",
+                    KamiBatch.batch_no == "SAME-DAY",
+                )
+            ).all()
+            assert len(batches) == 2
+            assert {batch.created_by_user_id for batch in batches} == {merchant_a_id, merchant_b_id}
+            assert {
+                kami.created_by_user_id
+                for kami in session.exec(
+                    select(Kami).where(
+                        Kami.app_id == "app_shared_batch_names",
+                        Kami.batch_no == "SAME-DAY",
+                    )
+                ).all()
+            } == {merchant_a_id, merchant_b_id}
     finally:
         fastapi_app.dependency_overrides.clear()
 

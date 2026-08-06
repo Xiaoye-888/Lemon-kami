@@ -732,12 +732,15 @@ def _validate_merchant_spec_payload(
 
 def _merchant_spec_stats(session: Session, spec_id: int, user: EndUser, app: App) -> dict:
     visibility_conditions = [Kami.created_by_user_id == user.id]
+    batch_visibility_conditions = [KamiBatch.created_by_user_id == user.id]
     if _app_is_owned_by_user(app, user):
         visibility_conditions.append(Kami.created_by_user_id.is_(None))
+        batch_visibility_conditions.append(KamiBatch.created_by_user_id.is_(None))
     batch_count = session.exec(
-        select(KamiBatch)
-        .join(Kami, (Kami.app_id == KamiBatch.app_id) & (Kami.batch_no == KamiBatch.batch_no))
-        .where(KamiBatch.spec_id == spec_id, or_(*visibility_conditions))
+        select(KamiBatch).where(
+            KamiBatch.spec_id == spec_id,
+            or_(*batch_visibility_conditions),
+        )
     ).all()
     kamis = session.exec(
         select(Kami).where(Kami.spec_id == spec_id, or_(*visibility_conditions))
@@ -871,10 +874,15 @@ def _merchant_batch_has_user_cards(
     stats: Optional[dict] = None,
     include_unassigned: bool = False,
 ) -> bool:
+    if batch.created_by_user_id is not None and batch.created_by_user_id != user_id:
+        return False
     if stats is not None and int(stats.get("total_count", 0) or 0) > 0:
         return True
-    visibility_conditions = [Kami.created_by_user_id == user_id]
-    if include_unassigned:
+    if batch.created_by_user_id is not None:
+        visibility_conditions = [Kami.created_by_user_id == batch.created_by_user_id]
+    else:
+        visibility_conditions = [Kami.created_by_user_id == user_id]
+    if include_unassigned and batch.created_by_user_id is None:
         visibility_conditions.append(Kami.created_by_user_id.is_(None))
     return session.exec(
         select(Kami.id)
@@ -885,6 +893,23 @@ def _merchant_batch_has_user_cards(
         )
         .limit(1)
     ).first() is not None
+
+
+def _merchant_batch_kami_conditions(
+    batch: KamiBatch,
+    user_id: int,
+    *,
+    include_unassigned: bool = False,
+) -> list:
+    conditions = [Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no]
+    if batch.created_by_user_id is not None:
+        conditions.append(Kami.created_by_user_id == batch.created_by_user_id)
+    else:
+        visibility_conditions = [Kami.created_by_user_id == user_id]
+        if include_unassigned:
+            visibility_conditions.append(Kami.created_by_user_id.is_(None))
+        conditions.append(or_(*visibility_conditions))
+    return conditions
 
 
 def _get_visible_merchant_batch_or_404(
@@ -906,20 +931,36 @@ def _get_visible_merchant_batch_or_404(
     return batch, app, True
 
 
-def _delete_empty_merchant_batches(session: Session, app_id: str, batch_nos: set[str]) -> int:
+def _delete_empty_merchant_batches(
+    session: Session,
+    app_id: str,
+    batch_nos: set[str],
+    user_id: int,
+    *,
+    include_unassigned: bool = False,
+) -> int:
     deleted_count = 0
     for batch_no in batch_nos:
         if not batch_no:
             continue
+        visibility_conditions = [Kami.created_by_user_id == user_id]
+        batch_visibility_conditions = [KamiBatch.created_by_user_id == user_id]
+        if include_unassigned:
+            visibility_conditions.append(Kami.created_by_user_id.is_(None))
+            batch_visibility_conditions.append(KamiBatch.created_by_user_id.is_(None))
         still_has_kamis = session.exec(
             select(Kami.id)
-            .where(Kami.app_id == app_id, Kami.batch_no == batch_no)
+            .where(Kami.app_id == app_id, Kami.batch_no == batch_no, or_(*visibility_conditions))
             .limit(1)
         ).first()
         if still_has_kamis:
             continue
         empty_batches = session.exec(
-            select(KamiBatch).where(KamiBatch.app_id == app_id, KamiBatch.batch_no == batch_no)
+            select(KamiBatch).where(
+                KamiBatch.app_id == app_id,
+                KamiBatch.batch_no == batch_no,
+                or_(*batch_visibility_conditions),
+            )
         ).all()
         for batch in empty_batches:
             session.delete(batch)
@@ -997,7 +1038,11 @@ def _merchant_kami_refund_unit_cost(session: Session, kami: Kami, user: EndUser)
 
     if kami.batch_no:
         batch = session.exec(
-            select(KamiBatch).where(KamiBatch.app_id == kami.app_id, KamiBatch.batch_no == kami.batch_no)
+            select(KamiBatch).where(
+                KamiBatch.app_id == kami.app_id,
+                KamiBatch.batch_no == kami.batch_no,
+                KamiBatch.created_by_user_id == user.id,
+            )
         ).first()
         if batch:
             snapshot = _batch_cost_snapshot(session, batch, user, 1)
@@ -2018,6 +2063,8 @@ async def list_merchant_batch_kamis(
             status=status,
             batch_no=batch.batch_no,
         )
+        if batch.created_by_user_id is not None:
+            statement = statement.where(Kami.created_by_user_id == batch.created_by_user_id)
         payload = kami_search_payload(session, statement, page=page, page_size=page_size)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
@@ -2830,7 +2877,13 @@ async def delete_merchant_kamis(
             touched_batch_nos.add(kami.batch_no)
         session.delete(kami)
 
-    _delete_empty_merchant_batches(session, payload.app_id, touched_batch_nos)
+    _delete_empty_merchant_batches(
+        session,
+        payload.app_id,
+        touched_batch_nos,
+        current_user.id,
+        include_unassigned=_app_is_owned_by_user(app, current_user),
+    )
     session.add(account)
     session.commit()
     session.refresh(account)
@@ -2898,7 +2951,13 @@ async def update_merchant_batch(
         return {"success": True, "message": "batch unchanged", "data": _merchant_batch_payload(session, batch, current_user, app=app)}
 
     current_kamis = session.exec(
-        select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
+        select(Kami).where(
+            *_merchant_batch_kami_conditions(
+                batch,
+                current_user.id,
+                include_unassigned=_app_is_owned_by_user(app, current_user),
+            )
+        )
     ).all()
     requested_type = data.get("kami_type")
     if requested_type and requested_type != _enum_value(batch.kami_type) and current_kamis:
@@ -2910,6 +2969,7 @@ async def update_merchant_batch(
             select(KamiBatch).where(
                 KamiBatch.app_id == batch.app_id,
                 KamiBatch.batch_no == new_batch_no,
+                KamiBatch.created_by_user_id == batch.created_by_user_id,
                 KamiBatch.id != batch.id,
             )
         ).first()
@@ -2974,7 +3034,13 @@ async def delete_merchant_batch(
     if not can_manage_batch:
         raise HTTPException(status_code=403, detail="Only issuer-created batches can be managed")
     existing_kami = session.exec(
-        select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
+        select(Kami).where(
+            *_merchant_batch_kami_conditions(
+                batch,
+                current_user.id,
+                include_unassigned=False,
+            )
+        )
     ).first()
     if existing_kami:
         raise HTTPException(status_code=400, detail="Batch still has kamis")
@@ -3006,6 +3072,7 @@ async def append_merchant_batch_kamis(
             spec_id=batch.spec_id,
             kami_type=batch.kami_type,
             count=payload.count,
+            batch_id=batch.id,
             batch_no=batch.batch_no,
             code_prefix=payload.code_prefix if payload.code_prefix is not None else batch.code_prefix,
             code_length=payload.code_length if payload.code_length is not None else batch.code_length,

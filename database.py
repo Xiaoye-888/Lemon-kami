@@ -551,6 +551,7 @@ def _ensure_points_schema():
                 CREATE TABLE kami_batches (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     spec_id INT DEFAULT NULL,
+                    created_by_user_id INT DEFAULT NULL,
                     app_id {_mysql_app_id_column()},
                     batch_no VARCHAR(64) NOT NULL,
                     kami_type ENUM('hour', 'day', 'week', 'month', 'quarter', 'year', 'lifetime', 'points', 'times') NOT NULL,
@@ -573,14 +574,15 @@ def _ensure_points_schema():
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     INDEX idx_app_id (app_id),
                     INDEX idx_spec_id (spec_id),
+                    INDEX idx_kami_batches_created_by_user_id (created_by_user_id),
                     INDEX idx_batch_no (batch_no),
+                    INDEX idx_kami_batches_app_batch_owner (app_id, batch_no, created_by_user_id),
                     INDEX idx_kami_type (kami_type),
                     INDEX idx_machine_bind_mode (machine_bind_mode),
                     INDEX idx_authorization_owner (authorization_owner),
                     INDEX idx_user_bind_mode (user_bind_mode),
                     INDEX idx_status (status),
                     INDEX idx_created_at (created_at),
-                    UNIQUE KEY uk_kami_batch_app_batch (app_id, batch_no),
                     FOREIGN KEY (app_id) REFERENCES apps(app_id) ON DELETE CASCADE
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Kami batch configs'
             """))
@@ -594,6 +596,9 @@ def _ensure_points_schema():
                 conn.execute(text("ALTER TABLE kami_batches ADD COLUMN spec_id INT DEFAULT NULL"))
                 conn.commit()
                 conn.execute(text("CREATE INDEX idx_kami_batches_spec_id ON kami_batches (spec_id)"))
+                conn.commit()
+            if "created_by_user_id" not in columns:
+                conn.execute(text("ALTER TABLE kami_batches ADD COLUMN created_by_user_id INT DEFAULT NULL"))
                 conn.commit()
             if "max_bind_devices" not in columns:
                 conn.execute(text("ALTER TABLE kami_batches ADD COLUMN max_bind_devices INT DEFAULT 1"))
@@ -611,6 +616,43 @@ def _ensure_points_schema():
             if "code_valid_days" not in columns:
                 conn.execute(text("ALTER TABLE kami_batches ADD COLUMN code_valid_days INT DEFAULT NULL"))
                 conn.commit()
+            indexes = {
+                row[2]
+                for row in conn.execute(text("SHOW INDEX FROM kami_batches")).fetchall()
+            }
+            if "uk_kami_batch_app_batch" in indexes:
+                conn.execute(text("ALTER TABLE kami_batches DROP INDEX uk_kami_batch_app_batch"))
+                conn.commit()
+                indexes.remove("uk_kami_batch_app_batch")
+            if "idx_kami_batches_created_by_user_id" not in indexes:
+                conn.execute(text("CREATE INDEX idx_kami_batches_created_by_user_id ON kami_batches (created_by_user_id)"))
+                conn.commit()
+            if "idx_kami_batches_app_batch_owner" not in indexes:
+                conn.execute(text("CREATE INDEX idx_kami_batches_app_batch_owner ON kami_batches (app_id, batch_no, created_by_user_id)"))
+                conn.commit()
+            conn.execute(text("""
+                UPDATE kami_batches kb
+                JOIN (
+                    SELECT
+                        app_id,
+                        batch_no,
+                        CASE
+                            WHEN COUNT(*) = COUNT(created_by_user_id)
+                             AND COUNT(DISTINCT created_by_user_id) = 1
+                            THEN MAX(created_by_user_id)
+                            ELSE NULL
+                        END AS issuer_user_id
+                    FROM kamis
+                    WHERE batch_no IS NOT NULL
+                    GROUP BY app_id, batch_no
+                ) issuer
+                  ON issuer.app_id = kb.app_id
+                 AND issuer.batch_no = kb.batch_no
+                SET kb.created_by_user_id = issuer.issuer_user_id
+                WHERE kb.created_by_user_id IS NULL
+                  AND issuer.issuer_user_id IS NOT NULL
+            """))
+            conn.commit()
             conn.execute(text("""
                 UPDATE kami_batches
                 SET max_bind_devices = CASE
@@ -788,6 +830,8 @@ def _ensure_sqlite_schema():
             }
             if "spec_id" not in columns:
                 conn.execute(text("ALTER TABLE kami_batches ADD COLUMN spec_id INTEGER DEFAULT NULL"))
+            if "created_by_user_id" not in columns:
+                conn.execute(text("ALTER TABLE kami_batches ADD COLUMN created_by_user_id INTEGER DEFAULT NULL"))
             if "max_bind_devices" not in columns:
                 conn.execute(text("ALTER TABLE kami_batches ADD COLUMN max_bind_devices INTEGER DEFAULT 1"))
             if "authorization_owner" not in columns:
@@ -797,8 +841,25 @@ def _ensure_sqlite_schema():
             if "code_valid_days" not in columns:
                 conn.execute(text("ALTER TABLE kami_batches ADD COLUMN code_valid_days INTEGER DEFAULT NULL"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kami_batches_spec_id ON kami_batches (spec_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kami_batches_created_by_user_id ON kami_batches (created_by_user_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kami_batches_app_batch_owner ON kami_batches (app_id, batch_no, created_by_user_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kami_batches_authorization_owner ON kami_batches (authorization_owner)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_kami_batches_user_bind_mode ON kami_batches (user_bind_mode)"))
+            conn.execute(text("""
+                UPDATE kami_batches
+                SET created_by_user_id = (
+                    SELECT CASE
+                        WHEN COUNT(*) = COUNT(k.created_by_user_id)
+                         AND COUNT(DISTINCT k.created_by_user_id) = 1
+                        THEN MAX(k.created_by_user_id)
+                        ELSE NULL
+                    END
+                    FROM kamis k
+                    WHERE k.app_id = kami_batches.app_id
+                      AND k.batch_no = kami_batches.batch_no
+                )
+                WHERE created_by_user_id IS NULL
+            """))
             conn.execute(text("""
                 UPDATE kami_batches
                 SET max_bind_devices = CASE
