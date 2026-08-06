@@ -508,6 +508,10 @@ class DeleteKamisRequest(BaseModel):
     confirm_text: Optional[str] = None
 
 
+class KamiRemarkUpdateRequest(BaseModel):
+    remark: Optional[str] = PydanticField(None, max_length=500)
+
+
 class SensitiveConfirmRequest(BaseModel):
     confirm_text: Optional[str] = None
 
@@ -598,6 +602,7 @@ class KamiSpecGenerateRequest(BaseModel):
     code_length: int = PydanticField(16, ge=4, le=64)
     charset: str = PydanticField("upper_numeric", max_length=32)
     code_valid_days: Optional[int] = PydanticField(None, ge=1, le=36500)
+    remark: Optional[str] = PydanticField(None, max_length=500)
 
 
 class InterfaceCreateRequest(BaseModel):
@@ -3037,6 +3042,7 @@ async def generate_kamis_for_spec(
         code_length=None,
         charset=None,
         code_valid_days=payload.code_valid_days,
+        remark=payload.remark,
         current_user=current_user,
         session=session,
     )
@@ -3500,6 +3506,7 @@ async def batch_create_kamis(
     code_length: Optional[int] = Query(None, ge=4, le=64, description="随机后缀长度"),
     charset: Optional[str] = Query(None, description="字符集：upper_numeric/numeric/upper/lower_mixed"),
     code_valid_days: Optional[int] = Query(None, ge=1, le=36500, description="卡密生成后未使用有效天数，不传则继承批次"),
+    remark: Optional[str] = Query(None, max_length=500),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
@@ -3595,6 +3602,9 @@ async def batch_create_kamis(
         time_unit = batch.time_unit
     now = get_now().replace(tzinfo=None)
     code_expires_at = now + timedelta(days=code_valid_days) if code_valid_days else None
+    normalized_remark = remark.strip() if isinstance(remark, str) else None
+    if normalized_remark == "":
+        normalized_remark = None
 
     for _ in range(count):
         kami_code = generate_kami_code(code_length, code_prefix, charset)
@@ -3615,6 +3625,7 @@ async def batch_create_kamis(
             status=KamiStatus.unused,
             points_amount=points_amount if kami_type_enum == KamiType.points else None,
             batch_no=effective_batch_no,
+            remark=normalized_remark,
             points_valid_days=points_valid_days if kami_type_enum == KamiType.points else None,
             time_value=time_value,
             time_unit=time_unit,
@@ -3662,6 +3673,7 @@ async def batch_create_kamis(
             "charset": charset,
             "code_valid_days": code_valid_days,
             "code_validity_text": _code_validity_text(code_valid_days),
+            "remark": normalized_remark,
         },
         message=f"用户 {username} 生成了 {count} 个{getTypeText(kami_type)}卡密"
     )
@@ -3686,6 +3698,7 @@ async def batch_create_kamis(
             "charset": charset,
             "code_valid_days": code_valid_days,
             "code_validity_text": _code_validity_text(code_valid_days),
+            "remark": normalized_remark,
             "codes": generated_codes
         }
     }
@@ -3740,6 +3753,7 @@ async def list_kamis(
                 Kami.kami_code.like(keyword_like),
                 Kami.batch_no.like(keyword_like),
                 Kami.bind_uuid.like(keyword_like),
+                Kami.remark.like(keyword_like),
             )
         )
 
@@ -3800,6 +3814,7 @@ async def list_kamis(
                 Kami.kami_code.like(keyword_like),
                 Kami.batch_no.like(keyword_like),
                 Kami.bind_uuid.like(keyword_like),
+                Kami.remark.like(keyword_like),
             )
         )
     total = len(session.exec(count_stmt).all())
@@ -3845,6 +3860,7 @@ async def list_kamis(
                     )
                     if last_consume_at_by_code.get(kami.kami_code)
                     else None,
+                    "remark": kami.remark,
                     "machine_bind_mode": get_machine_bind_mode_value(kami.machine_bind_mode),
                     "machine_bind_mode_text": get_machine_bind_mode_text(kami.machine_bind_mode),
                     "max_bind_devices": kami.max_bind_devices,
@@ -4062,6 +4078,7 @@ async def export_kamis(
                 Kami.kami_code.like(keyword_like),
                 Kami.batch_no.like(keyword_like),
                 Kami.bind_uuid.like(keyword_like),
+                Kami.remark.like(keyword_like),
             )
         )
 
@@ -4082,6 +4099,7 @@ async def export_kamis(
             "kami_type": _enum_value(kami.kami_type),
             "status": _enum_value(kami.status),
             "batch_no": kami.batch_no,
+            "remark": kami.remark,
             "points_amount": kami.points_amount,
             "points_remaining": point_source["points_remaining"],
             "points_redeemed": point_source["points_redeemed"],
@@ -4128,6 +4146,7 @@ async def export_kamis(
             "kami_type",
             "status",
             "batch_no",
+            "remark",
             "points_amount",
             "points_remaining",
             "points_redeemed",
@@ -4289,6 +4308,50 @@ async def delete_kamis(
             "skipped_count": len(skipped),
             "skipped": skipped,
         }
+    }
+
+
+@router.put("/kamis/{kami_code}/remark", summary="更新卡密备注")
+async def update_kami_remark(
+    kami_code: str,
+    payload: KamiRemarkUpdateRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    kami = session.exec(select(Kami).where(Kami.kami_code == kami_code)).first()
+    if not kami:
+        raise HTTPException(status_code=404, detail="Kami not found")
+
+    username = current_user.get("sub")
+    is_admin = current_user.get("is_admin", False)
+    if not check_app_permission(session, kami.app_id, username, is_admin):
+        raise HTTPException(status_code=403, detail="No permission to update this kami")
+
+    before = {"remark": kami.remark}
+    remark = payload.remark.strip() if isinstance(payload.remark, str) else None
+    if remark == "":
+        remark = None
+    kami.remark = remark
+    session.add(kami)
+    session.commit()
+
+    record_admin_audit(
+        session,
+        admin=current_user,
+        action="update_kami_remark",
+        resource_type="kami",
+        resource_id=kami.kami_code,
+        request=request,
+        before=before,
+        after={"remark": kami.remark, "app_id": kami.app_id, "batch_no": kami.batch_no},
+        summary=f"更新卡密备注 {kami.kami_code}",
+    )
+
+    return {
+        "success": True,
+        "message": "卡密备注已更新",
+        "data": {"kami_code": kami.kami_code, "remark": kami.remark},
     }
 
 

@@ -77,13 +77,14 @@ def kami_csv(session: Session, statement) -> bytes:
     kamis = session.exec(statement.order_by(Kami.id.desc())).all()
     rows = _kami_rows(session, kamis)
     return _csv_bytes(
-        ["卡密", "应用", "应用ID", "批次号", "类型", "状态", "绑定设备数", "创建时间", "激活时间"],
+        ["卡密", "应用", "应用ID", "批次号", "备注", "类型", "状态", "绑定设备数", "创建时间", "激活时间"],
         [
             [
                 row["kami_code"],
                 row.get("app_name") or "",
                 row["app_id"],
                 row.get("batch_no") or "",
+                row.get("remark") or "",
                 row.get("kami_type") or "",
                 row.get("status") or "",
                 row.get("bound_device_count") or 0,
@@ -157,6 +158,7 @@ def _apply_kami_filters(
                 Kami.kami_code.like(like_value),
                 Kami.app_id.like(like_value),
                 Kami.batch_no.like(like_value),
+                Kami.remark.like(like_value),
             )
         )
     return statement
@@ -179,6 +181,7 @@ def _kami_rows(session: Session, kamis: list[Kami]) -> list[dict]:
             "kami_type": kami.kami_type.value if hasattr(kami.kami_type, "value") else kami.kami_type,
             "status": _status_text(kami),
             "batch_no": kami.batch_no,
+            "remark": kami.remark,
             "points_amount": kami.points_amount,
             "points_valid_days": kami.points_valid_days,
             "times_total": kami.times_total,

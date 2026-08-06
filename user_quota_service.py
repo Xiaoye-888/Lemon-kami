@@ -461,6 +461,7 @@ def issue_user_kamis(
     max_bind_devices: int = 1,
     authorization_owner: str | AuthorizationOwnerMode = AuthorizationOwnerMode.device,
     user_bind_mode: str | UserBindMode = UserBindMode.none,
+    remark: Optional[str] = None,
     allow_existing_batch: bool = False,
     biz_id_suffix: Optional[str] = None,
 ) -> dict:
@@ -531,6 +532,9 @@ def issue_user_kamis(
 
     now = _now()
     code_expires_at = now + timedelta(days=code_valid_days) if code_valid_days else None
+    normalized_remark = remark.strip() if isinstance(remark, str) else None
+    if normalized_remark == "":
+        normalized_remark = None
     codes: list[str] = []
     kamis: list[Kami] = []
     batch = existing_batch
@@ -593,6 +597,7 @@ def issue_user_kamis(
             status=KamiStatus.unused,
             points_amount=points_amount if kami_type_enum == KamiType.points else None,
             batch_no=effective_batch_no,
+            remark=normalized_remark,
             points_valid_days=points_valid_days if kami_type_enum == KamiType.points else None,
             time_value=time_value if kami_type_enum in TIME_CARD_UNITS else None,
             time_unit=time_unit if kami_type_enum in TIME_CARD_UNITS else None,
@@ -620,6 +625,7 @@ def issue_user_kamis(
         "spec_id": spec_id,
         "count": count,
         "codes": codes,
+        "remark": normalized_remark,
         "unit_cost": unit_cost,
         "total_cost": total_cost,
         "quota": quota_result,

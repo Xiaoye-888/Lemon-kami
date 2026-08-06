@@ -581,8 +581,15 @@
               <template #default="{ row }">{{ formatOptionalTime(row.redeemed_at) }}</template>
             </el-table-column>
           </template>
-          <el-table-column label="备注" min-width="160">
-            <template #default="{ row }">{{ row.remark || '-' }}</template>
+          <el-table-column label="备注" min-width="190">
+            <template #default="{ row }">
+              <div class="remark-cell">
+                <span>{{ row.remark || '-' }}</span>
+                <el-tooltip content="编辑备注" placement="top">
+                  <el-button class="icon-action subtle" :icon="EditPen" @click="handleEditKamiRemark(row)" />
+                </el-tooltip>
+              </div>
+            </template>
           </el-table-column>
         </el-table>
 
@@ -708,6 +715,16 @@
         <el-form-item label="格式预览">
           <div class="code-preview">{{ generateCodePreview }}</div>
         </el-form-item>
+        <el-form-item label="卡密备注">
+          <el-input
+            v-model="generateForm.remark"
+            type="textarea"
+            :rows="2"
+            maxlength="500"
+            show-word-limit
+            placeholder="例如：客户名称、订单号、渠道来源"
+          />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="generateDialogVisible = false">取消</el-button>
@@ -775,6 +792,16 @@
         <el-form-item label="格式预览">
           <div class="code-preview">{{ appendCodePreview }}</div>
         </el-form-item>
+        <el-form-item label="卡密备注">
+          <el-input
+            v-model="appendForm.remark"
+            type="textarea"
+            :rows="2"
+            maxlength="500"
+            show-word-limit
+            placeholder="仅应用到本次追加生成的卡密"
+          />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="appendDialogVisible = false">取消</el-button>
@@ -816,6 +843,7 @@ import {
   getKamiSpecs,
   getKamis,
   updateKamiBatch,
+  updateKamiRemark,
   updateKamiSpec
 } from '../api/kami'
 import { formatBeijingTime } from '../utils/datetime'
@@ -938,7 +966,8 @@ const generateForm = reactive({
   code_length: 16,
   charset: 'upper_numeric',
   code_validity_mode: 'unlimited',
-  code_valid_days: 7
+  code_valid_days: 7,
+  remark: ''
 })
 
 const batchForm = reactive({
@@ -961,7 +990,8 @@ const appendForm = reactive({
   count: 10,
   code_prefix: '',
   code_length: 16,
-  charset: 'upper_numeric'
+  charset: 'upper_numeric',
+  remark: ''
 })
 
 const interfaceEnabled = (key, defaultValue = true) => {
@@ -1525,6 +1555,7 @@ const showGenerateDialog = (row) => {
   generateForm.charset = 'upper_numeric'
   generateForm.code_validity_mode = 'unlimited'
   generateForm.code_valid_days = 7
+  generateForm.remark = ''
   generateDialogVisible.value = true
 }
 
@@ -1550,7 +1581,8 @@ const handleGenerateForSpec = async () => {
       code_prefix: generateForm.code_prefix || null,
       code_length: generateForm.code_length,
       charset: generateForm.charset,
-      code_valid_days: generateForm.code_validity_mode === 'custom' ? generateForm.code_valid_days : null
+      code_valid_days: generateForm.code_validity_mode === 'custom' ? generateForm.code_valid_days : null,
+      remark: generateForm.remark || null
     })
     ElMessage.success(`成功生成 ${res.data.count} 个卡密`)
     generateDialogVisible.value = false
@@ -1671,6 +1703,7 @@ const showAppendDialog = () => {
   appendForm.code_prefix = ''
   appendForm.code_length = 16
   appendForm.charset = 'upper_numeric'
+  appendForm.remark = ''
   appendDialogVisible.value = true
 }
 
@@ -1684,7 +1717,8 @@ const handleAppendKamis = async () => {
       count: appendForm.count,
       code_prefix: appendForm.code_prefix,
       code_length: appendForm.code_length,
-      charset: appendForm.charset
+      charset: appendForm.charset,
+      remark: appendForm.remark || null
     })
     ElMessage.success(`成功追加 ${res.data.count} 个卡密`)
     appendDialogVisible.value = false
@@ -1692,6 +1726,21 @@ const handleAppendKamis = async () => {
     await loadDetailKamis()
   } finally {
     appending.value = false
+  }
+}
+
+const handleEditKamiRemark = async (row) => {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入卡密备注，可留空', '编辑备注', {
+      inputValue: row.remark || '',
+      inputType: 'textarea',
+      inputValidator: (value) => !value || value.length <= 500 || '备注不能超过 500 字'
+    })
+    await updateKamiRemark(row.kami_code, { remark: value || null })
+    ElMessage.success('备注已更新')
+    await loadDetailKamis()
+  } catch (error) {
+    if (error !== 'cancel') console.error('更新卡密备注失败:', error)
   }
 }
 
@@ -2072,6 +2121,19 @@ onMounted(loadApps)
 
 .hero-actions :deep(.el-button) {
   flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.remark-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.remark-cell > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

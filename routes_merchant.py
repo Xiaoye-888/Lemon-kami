@@ -211,6 +211,7 @@ class MerchantKamiIssueRequest(BaseModel):
     times_total: Optional[int] = PydanticField(None, gt=0)
     time_value: Optional[int] = PydanticField(None, gt=0)
     time_unit: Optional[str] = PydanticField(None, max_length=32)
+    remark: Optional[str] = PydanticField(None, max_length=500)
 
 
 class MerchantKamiDeleteRequest(BaseModel):
@@ -244,6 +245,11 @@ class MerchantBatchAppendRequest(BaseModel):
     code_length: Optional[int] = PydanticField(None, ge=4, le=64)
     charset: Optional[str] = PydanticField(None, max_length=32)
     code_valid_days: Optional[int] = PydanticField(None, ge=1, le=36500)
+    remark: Optional[str] = PydanticField(None, max_length=500)
+
+
+class MerchantKamiRemarkUpdateRequest(BaseModel):
+    remark: Optional[str] = PydanticField(None, max_length=500)
 
 
 TIME_CARD_UNITS = {
@@ -2617,6 +2623,7 @@ async def issue_merchant_kamis(
             max_bind_devices=max_bind_devices,
             authorization_owner=authorization_owner,
             user_bind_mode=user_bind_mode,
+            remark=payload.remark,
             unit_cost=pricing["unit_cost"],
             pricing_source=pricing["pricing_source"],
             pricing_rule_id=pricing["pricing_rule_id"],
@@ -2688,6 +2695,7 @@ async def list_merchant_kamis(
                 "kami_type": kami.kami_type.value if hasattr(kami.kami_type, "value") else kami.kami_type,
                 "status": kami.status.value if hasattr(kami.status, "value") else kami.status,
                 "batch_no": kami.batch_no,
+                "remark": kami.remark,
                 "points_amount": kami.points_amount,
                 "points_valid_days": kami.points_valid_days,
                 "times_total": kami.times_total,
@@ -2699,6 +2707,39 @@ async def list_merchant_kamis(
             }
             for kami in kamis
         ],
+    }
+
+
+@router.put("/kamis/{kami_code}/remark", summary="Update merchant kami remark")
+async def update_merchant_kami_remark(
+    kami_code: str,
+    payload: MerchantKamiRemarkUpdateRequest,
+    current_user: EndUser = Depends(get_current_merchant),
+    session: Session = Depends(get_session),
+):
+    kami = session.exec(select(Kami).where(Kami.kami_code == kami_code)).first()
+    if not kami:
+        raise HTTPException(status_code=404, detail="Kami not found")
+    app = session.exec(select(App).where(App.app_id == kami.app_id)).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="App not found")
+
+    can_update = kami.created_by_user_id == current_user.id or (
+        kami.created_by_user_id is None and _app_is_owned_by_user(app, current_user)
+    )
+    if not can_update:
+        raise HTTPException(status_code=403, detail="No permission to update this kami")
+
+    remark = payload.remark.strip() if isinstance(payload.remark, str) else None
+    if remark == "":
+        remark = None
+    kami.remark = remark
+    session.add(kami)
+    session.commit()
+    return {
+        "success": True,
+        "message": "kami remark updated",
+        "data": {"kami_code": kami.kami_code, "remark": kami.remark},
     }
 
 
@@ -2979,6 +3020,7 @@ async def append_merchant_batch_kamis(
             max_bind_devices=batch.max_bind_devices,
             authorization_owner=batch.authorization_owner,
             user_bind_mode=batch.user_bind_mode,
+            remark=payload.remark,
             unit_cost=pricing["unit_cost"],
             pricing_source=pricing["pricing_source"],
             pricing_rule_id=pricing["pricing_rule_id"],

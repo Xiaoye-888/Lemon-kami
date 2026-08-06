@@ -79,6 +79,7 @@ def test_kami_spec_schema_exists():
     assert "code_valid_days" in batch_columns
     assert "code_valid_days" in kami_columns
     assert "code_expires_at" in kami_columns
+    assert "remark" in kami_columns
     assert {
         "app_id",
         "spec_key",
@@ -1109,5 +1110,86 @@ def test_legacy_batch_create_and_generate_attach_spec():
             ).one()
             assert failed_audit.resource_type == "kami_batch"
             assert failed_audit.error_message
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_admin_batch_generated_kami_remark_is_listed_searchable_exported_and_editable():
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    def override_session():
+        with Session(engine) as session:
+            yield session
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app())
+        session.commit()
+
+    try:
+        batch_response = client.post(
+            "/api/v1/admin/kamis/batches",
+            json={
+                "app_id": "app_demo",
+                "batch_no": "remark-batch",
+                "kami_type": "points",
+                "points_amount": 42,
+                "machine_bind_mode": "one_card_one_device",
+                "max_bind_devices": 1,
+                "authorization_owner": "auto",
+                "user_bind_mode": "auto",
+                "status": 1,
+            },
+        )
+        assert batch_response.status_code == 200
+
+        generate_response = client.post(
+            "/api/v1/admin/kamis/batch",
+            params={
+                "app_id": "app_demo",
+                "batch_no": "remark-batch",
+                "count": 1,
+                "remark": "single-card order 42",
+            },
+        )
+        assert generate_response.status_code == 200
+        generate_data = generate_response.json()["data"]
+        kami_code = generate_data["codes"][0]
+        assert generate_data["remark"] == "single-card order 42"
+
+        list_response = client.get(
+            "/api/v1/admin/kamis",
+            params={"app_id": "app_demo", "keyword": "order 42"},
+        )
+        assert list_response.status_code == 200
+        items = list_response.json()["data"]["items"]
+        assert [item["kami_code"] for item in items] == [kami_code]
+        assert items[0]["remark"] == "single-card order 42"
+
+        export_response = client.get(
+            "/api/v1/admin/kamis/export",
+            params={"app_id": "app_demo", "keyword": "order 42"},
+        )
+        assert export_response.status_code == 200
+        export_text = export_response.content.decode("utf-8-sig")
+        assert "single-card order 42" in export_text
+
+        update_response = client.put(
+            f"/api/v1/admin/kamis/{kami_code}/remark",
+            json={"remark": "updated order memo"},
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["data"]["remark"] == "updated order memo"
+
+        with Session(engine) as session:
+            kami = session.exec(select(Kami).where(Kami.kami_code == kami_code)).one()
+            assert kami.remark == "updated order memo"
     finally:
         fastapi_app.dependency_overrides.clear()

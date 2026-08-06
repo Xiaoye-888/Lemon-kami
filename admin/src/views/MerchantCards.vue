@@ -62,6 +62,16 @@
         <el-table-column prop="created_at" label="创建时间" width="170">
           <template #default="{ row }">{{ formatBeijingTime(row.created_at) }}</template>
         </el-table-column>
+        <el-table-column label="备注" min-width="190">
+          <template #default="{ row }">
+            <div class="remark-cell">
+              <span>{{ row.remark || '-' }}</span>
+              <el-tooltip content="编辑备注" placement="top">
+                <el-button class="icon-action subtle" :icon="EditPen" @click="handleEditRemark(row)" />
+              </el-tooltip>
+            </div>
+          </template>
+        </el-table-column>
       </el-table>
       <el-pagination
         v-model:current-page="query.page"
@@ -134,6 +144,16 @@
         <el-form-item label="格式预览">
           <div class="code-preview">{{ codePreview }}</div>
         </el-form-item>
+        <el-form-item label="卡密备注">
+          <el-input
+            v-model="generateForm.remark"
+            type="textarea"
+            :rows="2"
+            maxlength="500"
+            show-word-limit
+            placeholder="例如：客户名称、订单号、渠道来源"
+          />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="generateDialogVisible = false">取消</el-button>
@@ -153,14 +173,15 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { Download, Plus, Refresh, Search, VideoPlay } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Download, EditPen, Plus, Refresh, Search, VideoPlay } from '@element-plus/icons-vue'
 import {
   appendMerchantBatchKamis,
   exportMerchantKamis,
   getMerchantApps,
   getMerchantBatches,
   getMerchantKamis,
+  updateMerchantKamiRemark,
   previewMerchantKamis
 } from '../api/merchant'
 import { formatBeijingTime } from '../utils/datetime'
@@ -193,7 +214,8 @@ const generateForm = reactive({
   count: 10,
   code_prefix: '',
   code_length: 16,
-  charset: 'upper_numeric'
+  charset: 'upper_numeric',
+  remark: ''
 })
 
 const charsetOptions = [
@@ -365,6 +387,7 @@ async function goGenerateKamis() {
   generateForm.code_prefix = ''
   generateForm.code_length = 16
   generateForm.charset = 'upper_numeric'
+  generateForm.remark = ''
   issuePreview.value = null
   await loadBatchStats()
   generateDialogVisible.value = true
@@ -390,7 +413,8 @@ async function handleGenerate() {
       count: generateForm.count,
       code_prefix: generateForm.code_prefix || null,
       code_length: generateForm.code_length,
-      charset: generateForm.charset
+      charset: generateForm.charset,
+      remark: generateForm.remark || null
     })
     ElMessage.success(`成功生成 ${res.data.count} 个卡密`)
     query.app_id = generateForm.app_id
@@ -400,6 +424,21 @@ async function handleGenerate() {
     await Promise.all([loadBatchStats(), loadCards()])
   } finally {
     generating.value = false
+  }
+}
+
+async function handleEditRemark(row) {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入卡密备注，可留空', '编辑备注', {
+      inputValue: row.remark || '',
+      inputType: 'textarea',
+      inputValidator: (value) => !value || value.length <= 500 || '备注不能超过 500 字'
+    })
+    await updateMerchantKamiRemark(row.kami_code, { remark: value || null })
+    ElMessage.success('备注已更新')
+    await loadCards()
+  } catch (error) {
+    if (error !== 'cancel') console.error('更新卡密备注失败:', error)
   }
 }
 
@@ -497,6 +536,19 @@ onMounted(init)
   background: #f8fafc;
   color: #334155;
   line-height: 1.5;
+}
+
+.remark-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.remark-cell > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .code-preview {

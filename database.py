@@ -318,6 +318,9 @@ def _ensure_points_schema():
                 conn.commit()
                 conn.execute(text("CREATE INDEX idx_batch_no ON kamis (batch_no)"))
                 conn.commit()
+            if "remark" not in columns:
+                conn.execute(text("ALTER TABLE kamis ADD COLUMN remark TEXT DEFAULT NULL"))
+                conn.commit()
             if "points_valid_days" not in columns:
                 conn.execute(text("ALTER TABLE kamis ADD COLUMN points_valid_days INT DEFAULT NULL"))
                 conn.commit()
@@ -361,6 +364,7 @@ def _ensure_points_schema():
                 "user_bind_mode": "ALTER TABLE kamis ADD COLUMN user_bind_mode VARCHAR(32) DEFAULT 'none'",
                 "created_by_user_id": "ALTER TABLE kamis ADD COLUMN created_by_user_id INT DEFAULT NULL",
                 "created_at": "ALTER TABLE kamis ADD COLUMN created_at DATETIME DEFAULT NULL",
+                "remark": "ALTER TABLE kamis ADD COLUMN remark TEXT DEFAULT NULL",
             }
             columns = {
                 row[0]
@@ -750,6 +754,7 @@ def _ensure_sqlite_schema():
                 "user_bind_mode": "VARCHAR(32) DEFAULT 'none'",
                 "created_by_user_id": "INTEGER DEFAULT NULL",
                 "created_at": "DATETIME DEFAULT NULL",
+                "remark": "TEXT DEFAULT NULL",
             }
             for column, ddl in extra_columns.items():
                 if column not in columns:
@@ -1117,6 +1122,7 @@ def _init_db_unlocked():
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                         points_amount INT,
                         batch_no VARCHAR(64),
+                        remark TEXT,
                         points_valid_days INT,
                         redeemed_by_user_id INT,
                         created_by_user_id INT DEFAULT NULL,

@@ -144,8 +144,15 @@
         <el-table-column label="兑换时间" width="180">
           <template #default="{ row }">{{ formatOptionalTime(row.redeemed_at) }}</template>
         </el-table-column>
-        <el-table-column label="备注" min-width="160">
-          <template #default="{ row }">{{ row.remark || '-' }}</template>
+        <el-table-column label="备注" min-width="190">
+          <template #default="{ row }">
+            <div class="remark-cell">
+              <span>{{ row.remark || '-' }}</span>
+              <el-tooltip content="编辑备注" placement="top">
+                <el-button class="icon-action subtle" :icon="EditPen" @click="handleEditRemark(row)" />
+              </el-tooltip>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column label="操作" width="110" fixed="right">
           <template #default="{ row }">
@@ -220,6 +227,16 @@
         <el-form-item label="格式预览">
           <div class="code-preview">{{ codePreview }}</div>
         </el-form-item>
+        <el-form-item label="卡密备注">
+          <el-input
+            v-model="generateForm.remark"
+            type="textarea"
+            :rows="2"
+            maxlength="500"
+            show-word-limit
+            placeholder="例如：客户名称、订单号、渠道来源"
+          />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="generateDialogVisible = false">取消</el-button>
@@ -244,13 +261,14 @@ import {
   CircleClose,
   DocumentCopy,
   Download,
+  EditPen,
   Key,
   Plus,
   Refresh,
   Search,
   VideoPlay
 } from '@element-plus/icons-vue'
-import { batchCreateKamis, deleteKamis, exportKamis, freezeKami, getKamiBatches, getKamiSpecs, getKamis } from '../api/kami'
+import { batchCreateKamis, deleteKamis, exportKamis, freezeKami, getKamiBatches, getKamiSpecs, getKamis, updateKamiRemark } from '../api/kami'
 import { getApps } from '../api/admin'
 import { copyTextToClipboard } from '../utils/clipboard'
 import { formatBeijingTime } from '../utils/datetime'
@@ -314,7 +332,8 @@ const generateForm = reactive({
   count: 10,
   code_prefix: '',
   code_length: 16,
-  charset: 'upper_numeric'
+  charset: 'upper_numeric',
+  remark: ''
 })
 
 const selectedBatch = computed(() => batchStats.value.find((item) => item.batch_no === generateForm.batch_no))
@@ -505,6 +524,7 @@ const showGenerateDialog = () => {
   generateForm.code_prefix = ''
   generateForm.code_length = 16
   generateForm.charset = 'upper_numeric'
+  generateForm.remark = ''
   generateDialogVisible.value = true
 }
 
@@ -538,7 +558,8 @@ const handleGenerate = async () => {
       count: generateForm.count,
       code_prefix: generateForm.code_prefix,
       code_length: generateForm.code_length,
-      charset: generateForm.charset
+      charset: generateForm.charset,
+      remark: generateForm.remark || null
     })
     ElMessage.success(`成功生成 ${res.data.count} 个卡密`)
     queryParams.batch_no = generateForm.batch_no
@@ -620,6 +641,21 @@ const handleFreeze = async (row) => {
     await loadKamis()
   } catch (error) {
     if (error !== 'cancel') console.error('冻结失败:', error)
+  }
+}
+
+const handleEditRemark = async (row) => {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入卡密备注，可留空', '编辑备注', {
+      inputValue: row.remark || '',
+      inputType: 'textarea',
+      inputValidator: (value) => !value || value.length <= 500 || '备注不能超过 500 字'
+    })
+    await updateKamiRemark(row.kami_code, { remark: value || null })
+    ElMessage.success('备注已更新')
+    await loadKamis()
+  } catch (error) {
+    if (error !== 'cancel') console.error('更新卡密备注失败:', error)
   }
 }
 
@@ -742,6 +778,19 @@ onMounted(loadApps)
   min-height: 86px;
   padding: 18px 28px;
   border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.remark-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.remark-cell > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .quick-label {

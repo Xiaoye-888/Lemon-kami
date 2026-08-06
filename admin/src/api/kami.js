@@ -131,3 +131,11 @@ export function freezeKami(kamiCode) {
     method: 'put'
   })
 }
+
+export function updateKamiRemark(kamiCode, data) {
+  return request({
+    url: `/admin/kamis/${kamiCode}/remark`,
+    method: 'put',
+    data
+  })
+}

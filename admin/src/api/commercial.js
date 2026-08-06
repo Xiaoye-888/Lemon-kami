@@ -199,6 +199,14 @@ export function deleteCommercialMerchantKamis(merchantId, data) {
   })
 }
 
+export function updateCommercialMerchantKamiRemark(merchantId, kamiCode, data) {
+  return request({
+    url: `/admin/commercial/merchants/${merchantId}/kamis/${kamiCode}/remark`,
+    method: 'put',
+    data
+  })
+}
+
 export function getCommercialMerchantBatches(merchantId, appId) {
   return request({
     url: `/admin/commercial/merchants/${merchantId}/apps/${appId}/batches`,

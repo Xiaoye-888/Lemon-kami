@@ -410,6 +410,7 @@ def test_merchant_global_kami_search_is_scoped_and_export_matches_filter():
                         status=KamiStatus.unused,
                         created_by_user_id=merchant.id,
                         batch_no="B-A",
+                        remark="remark-alpha",
                     ),
                     Kami(
                         app_id=app.app_id,
@@ -418,6 +419,7 @@ def test_merchant_global_kami_search_is_scoped_and_export_matches_filter():
                         status=KamiStatus.unused,
                         created_by_user_id=other.id,
                         batch_no="B-B",
+                        remark="remark-alpha",
                     ),
                 ]
             )
@@ -436,12 +438,18 @@ def test_merchant_global_kami_search_is_scoped_and_export_matches_filter():
         assert listed.status_code == 200
         codes = [item["kami_code"] for item in listed.json()["items"]]
         assert codes == ["MERCHANT-A-001"]
+        assert listed.json()["items"][0]["remark"] == "remark-alpha"
 
-        exported = client.get("/api/v1/merchant/kamis/export", params={"keyword": "MERCHANT-A"})
+        listed_by_remark = client.get("/api/v1/merchant/kamis", params={"keyword": "remark-alpha"})
+        assert listed_by_remark.status_code == 200
+        assert [item["kami_code"] for item in listed_by_remark.json()["items"]] == ["MERCHANT-A-001"]
+
+        exported = client.get("/api/v1/merchant/kamis/export", params={"keyword": "remark-alpha"})
         assert exported.status_code == 200
         assert exported.content.startswith(b"\xef\xbb\xbf")
         text = exported.content.decode("utf-8-sig")
         assert "MERCHANT-A-001" in text
+        assert "remark-alpha" in text
         assert "MERCHANT-B-001" not in text
     finally:
         fastapi_app.dependency_overrides.clear()

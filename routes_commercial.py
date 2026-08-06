@@ -660,6 +660,23 @@ async def delete_admin_scoped_merchant_kamis(
     return result
 
 
+@router.put("/merchants/{merchant_id}/kamis/{kami_code}/remark", summary="Update merchant kami remark as admin")
+async def update_admin_scoped_merchant_kami_remark(
+    merchant_id: int,
+    kami_code: str,
+    payload: routes_merchant.MerchantKamiRemarkUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
+    return await routes_merchant.update_merchant_kami_remark(
+        kami_code,
+        payload,
+        current_user=merchant,
+        session=session,
+    )
+
+
 @router.get("/merchants/{merchant_id}/kami-specs/{spec_id}/batches", summary="List merchant spec batches as admin")
 async def list_admin_scoped_merchant_spec_batches(
     merchant_id: int,

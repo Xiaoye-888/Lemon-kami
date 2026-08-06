@@ -379,12 +379,14 @@ def test_user_can_issue_kamis_by_consuming_issue_quota_and_list_them():
                 "code_prefix": "AG",
                 "code_length": 8,
                 "charset": "upper_numeric",
+                "remark": "issuer order memo",
             },
         )
         assert issue_response.status_code == 200
         issue_data = issue_response.json()["data"]
         assert issue_data["count"] == 2
         assert len(issue_data["codes"]) == 2
+        assert issue_data["remark"] == "issuer order memo"
 
         quota_response = client.get(
             "/api/v1/merchant/quotas",
@@ -401,6 +403,25 @@ def test_user_can_issue_kamis_by_consuming_issue_quota_and_list_them():
         kamis = kamis_response.json()["data"]
         assert len(kamis) == 2
         assert {item["kami_code"] for item in kamis} == set(issue_data["codes"])
+        assert {item["remark"] for item in kamis} == {"issuer order memo"}
+
+        update_response = client.put(
+            f"/api/v1/merchant/kamis/{issue_data['codes'][0]}/remark",
+            headers={"Authorization": f"Bearer {user_token}"},
+            json={"remark": "merchant changed memo"},
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["data"]["remark"] == "merchant changed memo"
+
+        updated_list_response = client.get(
+            "/api/v1/merchant/apps/app_issuer/kamis",
+            headers={"Authorization": f"Bearer {user_token}"},
+        )
+        assert updated_list_response.status_code == 200
+        updated_rows = {
+            item["kami_code"]: item["remark"] for item in updated_list_response.json()["data"]
+        }
+        assert updated_rows[issue_data["codes"][0]] == "merchant changed memo"
 
         with Session(engine) as session:
             rows = session.exec(
@@ -408,6 +429,7 @@ def test_user_can_issue_kamis_by_consuming_issue_quota_and_list_them():
             ).all()
             assert len(rows) == 2
             assert all(row.redeemed_by_user_id is None for row in rows)
+            assert {row.remark for row in rows} == {"issuer order memo", "merchant changed memo"}
     finally:
         fastapi_app.dependency_overrides.clear()
 

@@ -625,6 +625,7 @@ class Kami(SQLModel, table=True):
     expire_time: Optional[datetime] = Field(default=None, description="到期时间")
     points_amount: Optional[int] = Field(default=None, description="Points face value")
     batch_no: Optional[str] = Field(default=None, max_length=64, index=True, description="Kami batch number")
+    remark: Optional[str] = Field(default=None, description="Kami remark")
     points_valid_days: Optional[int] = Field(default=None, description="Points validity days after redeem")
     redeemed_by_user_id: Optional[int] = Field(default=None, index=True, description="Redeeming end-user ID")
     redeemed_at: Optional[datetime] = Field(default=None, description="Redeemed time")

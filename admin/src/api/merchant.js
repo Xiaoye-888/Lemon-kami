@@ -208,6 +208,14 @@ export function deleteMerchantKamis(data) {
   })
 }
 
+export function updateMerchantKamiRemark(kamiCode, data) {
+  return request({
+    url: `/merchant/kamis/${kamiCode}/remark`,
+    method: 'put',
+    data
+  })
+}
+
 export function getMerchantAppKamis(appId) {
   return request({
     url: `/merchant/apps/${appId}/kamis`,

@@ -364,7 +364,7 @@ PAGE_CONTRACTS = [
             action_group("spec-hero-actions", ("backFromDetail", "handleEditSpecGroup(selectedSpec)", "handleDeleteSpecGroup(selectedSpec)", "showGenerateForGroup(selectedSpec)")),
             action_group("batch-hero-actions", ("backFromDetail", "showBatchDialog(currentBatch)", "deleteBatch(currentBatch)")),
             action_group("batch-row-actions", ("openBatchDetail(row)", "showBatchDialog(row)", "deleteBatch(row)")),
-            action_group("card-panel-actions", ("handleDetailExport", "handleDeleteSelectedDetail", "showAppendDialog(currentBatch)", "deleteMerchantKamis")),
+            action_group("card-panel-actions", ("handleDetailExport", "handleDeleteSelectedDetail", "showAppendDialog(currentBatch)", "deleteMerchantKamis", "handleEditKamiRemark", "updateMerchantKamiRemark")),
         ],
         "tables": [
             table("batch-columns", ("批次名称", "类型", "权益", "剩余权益", "卡密有效期", "机器码限制", "总数/已用/剩余", "状态", "创建时间", "操作")),
@@ -394,9 +394,10 @@ PAGE_CONTRACTS = [
             action_group("toolbar-actions", ("openSdkTest", "goGenerateKamis", "loadCards")),
             action_group("filter-actions", ("handleSearch", "handleReset", "handleExport")),
             action_group("generate-actions", ("previewMerchantKamis", "issuePreview", "loadBatchStats", "selectedBatch", "loadIssuePreview", "handleGenerate")),
+            action_group("remark-actions", ("handleEditRemark", "updateMerchantKamiRemark")),
         ],
         "tables": [
-            table("cards-columns", ("卡密", "应用", "批次号", "类型", "状态", "绑定设备", "激活时间", "创建时间"))
+            table("cards-columns", ("卡密", "应用", "批次号", "类型", "状态", "绑定设备", "激活时间", "创建时间", "备注"))
         ],
         "forbidden_tokens": [
             "router.push({ path: '/merchant/batches'",

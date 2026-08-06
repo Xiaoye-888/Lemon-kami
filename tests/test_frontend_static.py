@@ -869,6 +869,7 @@ def test_merchant_batches_exposes_spec_first_workbench_and_scoped_apis():
         "updateMerchantBatch",
         "deleteMerchantBatch",
         "appendMerchantBatchKamis",
+        "updateMerchantKamiRemark",
     ):
         assert api_name in merchant_api
 
@@ -957,6 +958,8 @@ def test_merchant_batches_share_admin_workbench_contract_with_permission_clippin
         "openSpecGroup",
         "handleSaveBatch",
         "handleAppendKamis",
+        "handleEditKamiRemark",
+        "updateMerchantKamiRemark",
         "merchantBatchPermissions",
         "canManageSelectedApp",
         "resetListFilters",
@@ -1014,6 +1017,8 @@ def test_merchant_batch_spec_detail_matches_admin_card_panel_contract():
         "exportMerchantKamis(params)",
         "getMerchantSpecKamis(selectedSpec.value.id, params)",
         "getMerchantBatchKamis(selectedBatch.value.id, params)",
+        "generateForm.remark",
+        "appendForm.remark",
     ):
         assert token in merchant_batches
 
@@ -1482,7 +1487,11 @@ def test_phase2_merchant_card_search_export_and_batch_stats_are_visible():
     assert "/merchant/kamis" in merchant_api
     assert "/merchant/kamis/export" in merchant_api
     assert "exportMerchantKamis" in merchant_api
+    assert "updateMerchantKamiRemark" in merchant_api
     assert "\u6279\u6b21\u53f7" in merchant_cards
+    assert 'label="备注"' in merchant_cards
+    assert "generateForm.remark" in merchant_cards
+    assert "handleEditRemark" in merchant_cards
     assert "SDK 测试" in merchant_cards
     assert "生成卡密" in merchant_cards
     assert "openSdkTest" in merchant_cards
