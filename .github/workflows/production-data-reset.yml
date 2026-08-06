@@ -1,0 +1,173 @@
+name: One Time Production Data Reset
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/production-data-reset.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lemon-kami-production-data-reset
+  cancel-in-progress: false
+
+jobs:
+  reset-production-data:
+    name: Reset Production Data
+    runs-on: ubuntu-24.04
+    if: github.repository == 'Xiaoye-888/Lemon-kami'
+
+    steps:
+      - name: Prepare SSH
+        shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+
+          strip_leading_bom() {
+            local key="$1"
+            local value="${!key:-}"
+            value="${value#$'\xef\xbb\xbf'}"
+            printf -v "${key}" '%s' "${value}"
+          }
+
+          for key in SERVER_HOST SERVER_PORT SERVER_SSH_KEY; do
+            strip_leading_bom "${key}"
+          done
+
+          if [ -z "${SERVER_SSH_KEY:-}" ]; then
+            echo "Missing required GitHub secret: SERVER_SSH_KEY" >&2
+            exit 1
+          fi
+
+          SERVER_HOST="${SERVER_HOST:-154.12.26.231}"
+          SERVER_PORT="${SERVER_PORT:-22}"
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "${SERVER_SSH_KEY}" > ~/.ssh/lemon_kami_reset_key
+          chmod 600 ~/.ssh/lemon_kami_reset_key
+          ssh-keyscan -p "${SERVER_PORT}" "${SERVER_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Clear production business data
+        shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR }}
+        run: |
+          set -Eeuo pipefail
+
+          strip_leading_bom() {
+            local key="$1"
+            local value="${!key:-}"
+            value="${value#$'\xef\xbb\xbf'}"
+            printf -v "${key}" '%s' "${value}"
+          }
+
+          for key in SERVER_HOST SERVER_USER SERVER_PORT DEPLOY_APP_DIR; do
+            strip_leading_bom "${key}"
+          done
+
+          if [ -z "${SERVER_USER:-}" ]; then
+            echo "Missing required GitHub secret: SERVER_USER" >&2
+            exit 1
+          fi
+
+          SERVER_HOST="${SERVER_HOST:-154.12.26.231}"
+          SERVER_PORT="${SERVER_PORT:-22}"
+          DEPLOY_APP_DIR="${DEPLOY_APP_DIR:-/opt/lemon-kami}"
+          if [[ "${DEPLOY_APP_DIR}" != /* || "${DEPLOY_APP_DIR}" =~ [[:space:]] ]]; then
+            echo "Invalid DEPLOY_APP_DIR" >&2
+            exit 1
+          fi
+
+          REMOTE="${SERVER_USER}@${SERVER_HOST}"
+          printf -v REMOTE_CMD 'APP_DIR=%q bash -se' "${DEPLOY_APP_DIR}"
+
+          ssh -i ~/.ssh/lemon_kami_reset_key -p "${SERVER_PORT}" "${REMOTE}" "${REMOTE_CMD}" <<'REMOTE_SCRIPT'
+          set -Eeuo pipefail
+
+          cd "${APP_DIR}"
+          if [ ! -f docker-compose.prod.yml ]; then
+            echo "Missing docker-compose.prod.yml in APP_DIR" >&2
+            exit 1
+          fi
+
+          compose() {
+            docker compose -f docker-compose.prod.yml "$@"
+          }
+
+          admin_count="$(
+            compose exec -T mysql sh -lc 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot "$MYSQL_DATABASE" -N -B -e "SELECT COUNT(*) FROM admin_users WHERE username='\''admin'\'';"'
+          )"
+          admin_count="$(printf '%s' "${admin_count}" | tr -d '\r\n[:space:]')"
+          if [ "${admin_count}" != "1" ]; then
+            echo "Refusing reset: expected exactly one enabled admin username row before cleanup, got ${admin_count}" >&2
+            exit 1
+          fi
+
+          sql_file="$(mktemp)"
+          cat > "${sql_file}" <<'SQL'
+          SET FOREIGN_KEY_CHECKS=0;
+          TRUNCATE TABLE `admin_audit_logs`;
+          TRUNCATE TABLE `api_interfaces`;
+          TRUNCATE TABLE `app_authorizations`;
+          TRUNCATE TABLE `app_interface_configs`;
+          TRUNCATE TABLE `app_notices`;
+          TRUNCATE TABLE `app_versions`;
+          TRUNCATE TABLE `apps`;
+          TRUNCATE TABLE `authorization_accounts`;
+          TRUNCATE TABLE `authorization_lots`;
+          TRUNCATE TABLE `authorization_transactions`;
+          TRUNCATE TABLE `device_ip_risks`;
+          TRUNCATE TABLE `devices`;
+          TRUNCATE TABLE `end_users`;
+          TRUNCATE TABLE `event_logs`;
+          TRUNCATE TABLE `issue_quota_pricing_rules`;
+          TRUNCATE TABLE `kami_batches`;
+          TRUNCATE TABLE `kami_device_bindings`;
+          TRUNCATE TABLE `kami_specs`;
+          TRUNCATE TABLE `kamis`;
+          TRUNCATE TABLE `ops_backup_records`;
+          TRUNCATE TABLE `point_transactions`;
+          TRUNCATE TABLE `recharge_bonus_rules`;
+          TRUNCATE TABLE `recharge_options`;
+          TRUNCATE TABLE `recharge_orders`;
+          TRUNCATE TABLE `recharge_payment_channels`;
+          TRUNCATE TABLE `user_app_authorizations`;
+          TRUNCATE TABLE `user_point_accounts`;
+          TRUNCATE TABLE `user_point_lots`;
+          TRUNCATE TABLE `user_quota_accounts`;
+          TRUNCATE TABLE `user_quota_transactions`;
+          DELETE FROM `admin_users` WHERE `username` <> 'admin';
+          UPDATE `admin_users`
+             SET `status` = 1,
+                 `failed_attempts` = 0,
+                 `locked_until` = NULL
+           WHERE `username` = 'admin';
+          SET FOREIGN_KEY_CHECKS=1;
+          SQL
+
+          compose exec -T mysql sh -lc 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot "$MYSQL_DATABASE"' < "${sql_file}"
+          rm -f "${sql_file}"
+
+          compose exec -T redis redis-cli FLUSHALL >/dev/null
+          compose exec -T fastapi sh -lc 'for path in /app/uploads /app/backups /app/logs; do if [ -d "$path" ]; then find "$path" -mindepth 1 -exec rm -rf -- {} +; fi; done'
+          compose restart fastapi >/dev/null
+
+          compose exec -T mysql sh -lc 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot "$MYSQL_DATABASE" -N -B -e "
+          SELECT CONCAT('\''admin_users='\'', COUNT(*)) FROM admin_users;
+          SELECT CONCAT('\''apps='\'', COUNT(*)) FROM apps;
+          SELECT CONCAT('\''end_users='\'', COUNT(*)) FROM end_users;
+          SELECT CONCAT('\''kamis='\'', COUNT(*)) FROM kamis;
+          SELECT CONCAT('\''devices='\'', COUNT(*)) FROM devices;
+          SELECT CONCAT('\''recharge_orders='\'', COUNT(*)) FROM recharge_orders;
+          "'
+          REMOTE_SCRIPT
