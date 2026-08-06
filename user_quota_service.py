@@ -52,6 +52,35 @@ def generate_kami_code(length: int = 16, prefix: str = "", charset: str = "upper
     return f"{prefix}{''.join(random.choices(characters, k=length))}"
 
 
+def _batch_no_exists(session: Session, app_id: str, batch_no: str) -> bool:
+    return session.exec(
+        select(KamiBatch.id)
+        .where(KamiBatch.app_id == app_id, KamiBatch.batch_no == batch_no)
+        .limit(1)
+    ).first() is not None
+
+
+def _next_available_batch_no(session: Session, app_id: str, requested_batch_no: Optional[str]) -> str:
+    base = requested_batch_no.strip() if isinstance(requested_batch_no, str) else ""
+    if not base:
+        for _ in range(100):
+            candidate = f"user_{uuid.uuid4().hex[:12]}"
+            if not _batch_no_exists(session, app_id, candidate):
+                return candidate
+        raise ValueError("batch_no already exists")
+
+    candidate = base
+    if not _batch_no_exists(session, app_id, candidate):
+        return candidate
+
+    for index in range(2, 10000):
+        suffix = f"-{index}"
+        candidate = f"{base[:64 - len(suffix)]}{suffix}"
+        if not _batch_no_exists(session, app_id, candidate):
+            return candidate
+    raise ValueError("batch_no already exists")
+
+
 def _now() -> object:
     return get_now_naive()
 
@@ -469,15 +498,17 @@ def issue_user_kamis(
         raise ValueError("count must be greater than 0")
     if unit_cost <= 0:
         raise ValueError("unit_cost must be greater than 0")
-    effective_batch_no = batch_no or f"user_{uuid.uuid4().hex[:12]}"
-    existing_batch = session.exec(
-        select(KamiBatch).where(
-            KamiBatch.app_id == app.app_id,
-            KamiBatch.batch_no == effective_batch_no,
-        )
-    ).first()
-    if existing_batch and not allow_existing_batch:
-        raise ValueError("batch_no already exists")
+    if allow_existing_batch:
+        effective_batch_no = (batch_no.strip() if isinstance(batch_no, str) else batch_no) or f"user_{uuid.uuid4().hex[:12]}"
+        existing_batch = session.exec(
+            select(KamiBatch).where(
+                KamiBatch.app_id == app.app_id,
+                KamiBatch.batch_no == effective_batch_no,
+            )
+        ).first()
+    else:
+        effective_batch_no = _next_available_batch_no(session, app.app_id, batch_no)
+        existing_batch = None
 
     kami_type_enum = _normalize_kami_type(kami_type)
     if charset not in KAMI_CHARSETS:

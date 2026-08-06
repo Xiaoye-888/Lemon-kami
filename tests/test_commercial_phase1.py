@@ -2882,7 +2882,7 @@ def test_merchant_notice_and_version_management_follows_app_ownership_boundaries
         fastapi_app.dependency_overrides.clear()
 
 
-def test_duplicate_merchant_issue_batch_is_rejected_without_free_cards():
+def test_duplicate_merchant_issue_batch_auto_renames_and_deducts_once_per_batch():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)
 
@@ -2906,7 +2906,7 @@ def test_duplicate_merchant_issue_batch_is_rejected_without_free_cards():
         session.refresh(merchant)
         app.owner_user_id = merchant.id
         session.add(app)
-        session.add(UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=5))
+        session.add(UserQuotaAccount(user_id=merchant.id, username=merchant.username, kami_issue_balance=6))
         session.commit()
         token = routes_user.create_user_access_token(merchant)
         merchant_id = merchant.id
@@ -2932,14 +2932,22 @@ def test_duplicate_merchant_issue_batch_is_rejected_without_free_cards():
             headers=auth_headers(token),
             json=payload,
         )
-        assert duplicate_response.status_code == 400
-        assert "batch_no" in duplicate_response.json()["detail"]
+        assert duplicate_response.status_code == 200
+        duplicate_data = duplicate_response.json()["data"]
+        assert duplicate_data["batch_no"] == "DUP-001-2"
 
         with Session(engine) as session:
-            cards = session.exec(
+            first_cards = session.exec(
                 select(Kami).where(
                     Kami.app_id == "app_duplicate_issue",
                     Kami.batch_no == "DUP-001",
+                    Kami.created_by_user_id == merchant_id,
+                )
+            ).all()
+            duplicate_cards = session.exec(
+                select(Kami).where(
+                    Kami.app_id == "app_duplicate_issue",
+                    Kami.batch_no == "DUP-001-2",
                     Kami.created_by_user_id == merchant_id,
                 )
             ).all()
@@ -2950,12 +2958,16 @@ def test_duplicate_merchant_issue_batch_is_rejected_without_free_cards():
                 select(UserQuotaTransaction).where(
                     UserQuotaTransaction.user_id == merchant_id,
                     UserQuotaTransaction.quota_type == UserQuotaType.kami_issue,
-                    UserQuotaTransaction.biz_id == "kami_issue:app_duplicate_issue:DUP-001::2",
+                    UserQuotaTransaction.transaction_type == UserQuotaTransactionType.consume,
                 )
             ).all()
-            assert len(cards) == 2
-            assert account.kami_issue_balance == 3
-            assert len(consume_transactions) == 1
+            assert len(first_cards) == 2
+            assert len(duplicate_cards) == 2
+            assert account.kami_issue_balance == 2
+            assert sorted(transaction.biz_id for transaction in consume_transactions) == [
+                "kami_issue:app_duplicate_issue:DUP-001-2::2",
+                "kami_issue:app_duplicate_issue:DUP-001::2",
+            ]
     finally:
         fastapi_app.dependency_overrides.clear()
 
