@@ -2423,6 +2423,15 @@ def _batch_has_kamis(session: Session, batch: KamiBatch) -> bool:
     ).first() is not None
 
 
+def _admin_visible_batches_for_stats(session: Session, batches: list[KamiBatch]) -> list[KamiBatch]:
+    visible_batches = []
+    for batch in batches:
+        stats = _kami_batch_stats(session, batch, admin_owned_only=True)
+        if stats["total_count"] > 0 or not _batch_has_kamis(session, batch):
+            visible_batches.append(batch)
+    return visible_batches
+
+
 def _kami_code_validity_payload(kami: Kami, now: datetime) -> dict:
     expired = is_kami_code_expired(kami, now)
     return {
@@ -2438,13 +2447,14 @@ def _kami_code_validity_payload(kami: Kami, now: datetime) -> dict:
 
 def _kami_spec_stats(session: Session, spec_id: int, *, admin_owned_only: bool = False) -> dict:
     batches = session.exec(select(KamiBatch).where(KamiBatch.spec_id == spec_id)).all()
+    visible_batches = _admin_visible_batches_for_stats(session, batches) if admin_owned_only else batches
     kami_statement = select(Kami).where(Kami.spec_id == spec_id)
     if admin_owned_only:
         kami_statement = _admin_owned_kami_scope(kami_statement)
     kamis = session.exec(kami_statement).all()
     now = get_now().replace(tzinfo=None)
     stats = {
-        "batch_count": len(batches),
+        "batch_count": len(visible_batches),
         "total_count": len(kamis),
         "unused_count": 0,
         "active_count": 0,
@@ -2453,8 +2463,8 @@ def _kami_spec_stats(session: Session, spec_id: int, *, admin_owned_only: bool =
         "redeemed_count": 0,
         "times_remaining_total": 0,
         "points_remaining_total": 0,
-        "code_valid_days_values": [batch.code_valid_days for batch in batches],
-        "code_validity_text": _code_validity_summary([batch.code_valid_days for batch in batches]),
+        "code_valid_days_values": [batch.code_valid_days for batch in visible_batches],
+        "code_validity_text": _code_validity_summary([batch.code_valid_days for batch in visible_batches]),
     }
     point_source_by_code = _point_source_summary_by_code(
         session,

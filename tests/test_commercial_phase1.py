@@ -682,6 +682,16 @@ def test_admin_global_kamis_exclude_merchant_issued_authorized_app_cards():
         assert global_batches.status_code == 200
         assert [item["batch_no"] for item in global_batches.json()["data"]] == ["ADMIN-GLOBAL-BATCH"]
 
+        specs_response = client.get(
+            "/api/v1/admin/kami-specs",
+            params={"app_id": "app_authorized_global"},
+        )
+        assert specs_response.status_code == 200
+        listed_spec = specs_response.json()["data"]["items"][0]
+        assert listed_spec["batch_count"] == 1
+        assert listed_spec["total_count"] == 1
+        assert listed_spec["unused_count"] == 1
+
         spec_kamis = client.get(f"/api/v1/admin/kami-specs/{spec_id}/kamis")
         assert spec_kamis.status_code == 200
         assert [item["kami_code"] for item in spec_kamis.json()["data"]["items"]] == ["ADMIN-GLOBAL-CARD"]
