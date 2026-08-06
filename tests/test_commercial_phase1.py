@@ -567,6 +567,170 @@ def test_admin_apps_owner_scope_admin_excludes_merchant_self_owned_apps():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_admin_global_kamis_exclude_merchant_issued_authorized_app_cards():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_commercial.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    fastapi_app.dependency_overrides[routes_commercial.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        merchant = EndUser(username="authorized-issuer", password_hash=hash_password("secret123"), status=1)
+        app = App(
+            app_id="app_authorized_global",
+            name="Authorized Global App",
+            app_secret="secret-authorized-global",
+            rsa_public_key="public-authorized-global",
+            rsa_private_key="private-authorized-global",
+            created_by="admin",
+            status=1,
+        )
+        session.add_all([merchant, app])
+        session.commit()
+        session.refresh(merchant)
+        spec = KamiSpec(
+            app_id=app.app_id,
+            spec_key="authorized-global-points",
+            spec_name="Authorized Global Points",
+            kami_type=KamiType.points,
+            points_amount=100,
+            status=1,
+        )
+        session.add_all(
+            [
+                spec,
+                UserAppAuthorization(
+                    app_id=app.app_id,
+                    user_id=merchant.id,
+                    username=merchant.username,
+                    granted_by="admin",
+                ),
+            ]
+        )
+        session.commit()
+        session.refresh(spec)
+        session.add_all(
+            [
+                KamiBatch(
+                    app_id=app.app_id,
+                    spec_id=spec.id,
+                    batch_no="ADMIN-GLOBAL-BATCH",
+                    kami_type=KamiType.points,
+                    points_amount=100,
+                    status=1,
+                ),
+                KamiBatch(
+                    app_id=app.app_id,
+                    spec_id=spec.id,
+                    batch_no="MERCHANT-AUTH-BATCH",
+                    kami_type=KamiType.points,
+                    points_amount=100,
+                    status=1,
+                    remark=f"Merchant issued by {merchant.username}",
+                ),
+                Kami(
+                    app_id=app.app_id,
+                    spec_id=spec.id,
+                    kami_code="ADMIN-GLOBAL-CARD",
+                    kami_type=KamiType.points,
+                    status=KamiStatus.unused,
+                    batch_no="ADMIN-GLOBAL-BATCH",
+                    points_amount=100,
+                    remark="admin visible card",
+                ),
+                Kami(
+                    app_id=app.app_id,
+                    spec_id=spec.id,
+                    kami_code="MERCHANT-AUTH-CARD",
+                    kami_type=KamiType.points,
+                    status=KamiStatus.unused,
+                    batch_no="MERCHANT-AUTH-BATCH",
+                    points_amount=100,
+                    created_by_user_id=merchant.id,
+                    remark="merchant issued authorized app card",
+                ),
+            ]
+        )
+        session.commit()
+        merchant_id = merchant.id
+        spec_id = spec.id
+
+    try:
+        global_list = client.get(
+            "/api/v1/admin/kamis",
+            params={"app_id": "app_authorized_global", "page_size": 20},
+        )
+        assert global_list.status_code == 200
+        global_data = global_list.json()["data"]
+        assert global_data["total"] == 1
+        assert [item["kami_code"] for item in global_data["items"]] == ["ADMIN-GLOBAL-CARD"]
+
+        hidden_search = client.get(
+            "/api/v1/admin/kamis",
+            params={"app_id": "app_authorized_global", "keyword": "MERCHANT-AUTH-CARD"},
+        )
+        assert hidden_search.status_code == 200
+        assert hidden_search.json()["data"]["total"] == 0
+
+        global_batches = client.get(
+            "/api/v1/admin/kamis/batches",
+            params={"app_id": "app_authorized_global"},
+        )
+        assert global_batches.status_code == 200
+        assert [item["batch_no"] for item in global_batches.json()["data"]] == ["ADMIN-GLOBAL-BATCH"]
+
+        spec_kamis = client.get(f"/api/v1/admin/kami-specs/{spec_id}/kamis")
+        assert spec_kamis.status_code == 200
+        assert [item["kami_code"] for item in spec_kamis.json()["data"]["items"]] == ["ADMIN-GLOBAL-CARD"]
+
+        export_response = client.get(
+            "/api/v1/admin/kamis/export",
+            params={"app_id": "app_authorized_global"},
+        )
+        assert export_response.status_code == 200
+        export_text = export_response.content.decode("utf-8-sig")
+        assert "ADMIN-GLOBAL-CARD" in export_text
+        assert "MERCHANT-AUTH-CARD" not in export_text
+
+        scoped_list = client.get(
+            f"/api/v1/admin/commercial/merchants/{merchant_id}/kamis",
+            params={"app_id": "app_authorized_global"},
+        )
+        assert scoped_list.status_code == 200
+        assert [item["kami_code"] for item in scoped_list.json()["data"]["items"]] == ["MERCHANT-AUTH-CARD"]
+
+        remark_response = client.put(
+            "/api/v1/admin/kamis/MERCHANT-AUTH-CARD/remark",
+            json={"remark": "should stay scoped"},
+        )
+        assert remark_response.status_code == 404
+
+        freeze_response = client.put("/api/v1/admin/kamis/MERCHANT-AUTH-CARD/freeze")
+        assert freeze_response.status_code == 404
+
+        delete_response = client.post(
+            "/api/v1/admin/kamis/delete",
+            json={
+                "app_id": "app_authorized_global",
+                "kami_codes": ["MERCHANT-AUTH-CARD"],
+                "confirm_text": "确认删除卡密",
+            },
+        )
+        assert delete_response.status_code == 200
+        assert delete_response.json()["data"]["deleted_count"] == 0
+        assert delete_response.json()["data"]["skipped_count"] == 1
+
+        with Session(engine) as session:
+            assert session.exec(
+                select(Kami).where(Kami.kami_code == "MERCHANT-AUTH-CARD")
+            ).one().created_by_user_id == merchant_id
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_admin_commercial_merchant_delete_self_owned_app_requires_confirmation_and_scope():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

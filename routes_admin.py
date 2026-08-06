@@ -2411,6 +2411,18 @@ def _apply_kami_status_filter(statement, status: Optional[str], now: datetime):
     return statement
 
 
+def _admin_owned_kami_scope(statement):
+    return statement.where(Kami.created_by_user_id.is_(None))
+
+
+def _batch_has_kamis(session: Session, batch: KamiBatch) -> bool:
+    return session.exec(
+        select(Kami.id)
+        .where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
+        .limit(1)
+    ).first() is not None
+
+
 def _kami_code_validity_payload(kami: Kami, now: datetime) -> dict:
     expired = is_kami_code_expired(kami, now)
     return {
@@ -2424,9 +2436,12 @@ def _kami_code_validity_payload(kami: Kami, now: datetime) -> dict:
     }
 
 
-def _kami_spec_stats(session: Session, spec_id: int) -> dict:
+def _kami_spec_stats(session: Session, spec_id: int, *, admin_owned_only: bool = False) -> dict:
     batches = session.exec(select(KamiBatch).where(KamiBatch.spec_id == spec_id)).all()
-    kamis = session.exec(select(Kami).where(Kami.spec_id == spec_id)).all()
+    kami_statement = select(Kami).where(Kami.spec_id == spec_id)
+    if admin_owned_only:
+        kami_statement = _admin_owned_kami_scope(kami_statement)
+    kamis = session.exec(kami_statement).all()
     now = get_now().replace(tzinfo=None)
     stats = {
         "batch_count": len(batches),
@@ -2467,10 +2482,11 @@ def _kami_spec_stats(session: Session, spec_id: int) -> dict:
     return stats
 
 
-def _kami_batch_stats(session: Session, batch: KamiBatch) -> dict:
-    kamis = session.exec(
-        select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
-    ).all()
+def _kami_batch_stats(session: Session, batch: KamiBatch, *, admin_owned_only: bool = False) -> dict:
+    statement = select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
+    if admin_owned_only:
+        statement = _admin_owned_kami_scope(statement)
+    kamis = session.exec(statement).all()
     now = get_now().replace(tzinfo=None)
     stats = {
         "total_count": len(kamis),
@@ -2756,7 +2772,7 @@ async def list_kami_specs(
         statement = statement.where(KamiSpec.spec_name.like(f"%{keyword}%"))
 
     specs = session.exec(statement).all()
-    items = [_kami_spec_payload(spec, _kami_spec_stats(session, spec.id)) for spec in specs]
+    items = [_kami_spec_payload(spec, _kami_spec_stats(session, spec.id, admin_owned_only=True)) for spec in specs]
     items.sort(key=lambda item: (item["spec_group"] != "common", item["sort_order"], item["spec_name"]))
     return {"success": True, "data": {"items": items, "total": len(items)}}
 
@@ -3068,7 +3084,10 @@ async def list_kami_spec_batches(
     items = []
     for batch in batches:
         item = _kami_batch_payload(batch)
-        item.update(_kami_batch_stats(session, batch))
+        stats = _kami_batch_stats(session, batch, admin_owned_only=True)
+        if stats["total_count"] == 0 and _batch_has_kamis(session, batch):
+            continue
+        item.update(stats)
         items.append(item)
     return {"success": True, "data": items}
 
@@ -3088,7 +3107,7 @@ async def list_kami_spec_kamis(
     if not check_app_permission(session, spec.app_id, username, is_admin):
         raise HTTPException(status_code=403, detail="无权查看此规格的卡密")
     now = get_now().replace(tzinfo=None)
-    statement = select(Kami).where(Kami.spec_id == spec.id)
+    statement = _admin_owned_kami_scope(select(Kami).where(Kami.spec_id == spec.id))
     statement = _apply_kami_status_filter(statement, status, now)
     all_items = session.exec(statement.order_by(Kami.id.desc())).all()
     start = (page - 1) * page_size
@@ -3735,7 +3754,7 @@ async def list_kamis(
     _cleanup_used_times_kamis(session, app_id)
 
     now = get_now().replace(tzinfo=None)
-    statement = select(Kami).where(Kami.app_id == app_id)
+    statement = _admin_owned_kami_scope(select(Kami).where(Kami.app_id == app_id))
     statement = _apply_kami_status_filter(statement, status, now)
     if kami_type:
         try:
@@ -3796,7 +3815,7 @@ async def list_kamis(
                 last_consume_at_by_code[log.kami_code] = log.created_at
 
     # 统计总数
-    count_stmt = select(Kami).where(Kami.app_id == app_id)
+    count_stmt = _admin_owned_kami_scope(select(Kami).where(Kami.app_id == app_id))
     count_stmt = _apply_kami_status_filter(count_stmt, status, now)
     if kami_type:
         try:
@@ -3927,7 +3946,7 @@ async def list_kami_batches(
     if not check_app_permission(session, app_id, username, is_admin):
         raise HTTPException(status_code=403, detail="无权查看此应用的卡密")
 
-    statement = select(Kami).where(Kami.app_id == app_id)
+    statement = _admin_owned_kami_scope(select(Kami).where(Kami.app_id == app_id))
     if kami_type:
         try:
             statement = statement.where(Kami.kami_type == KamiType(kami_type))
@@ -3954,6 +3973,9 @@ async def list_kami_batches(
     batches = {}
     for batch in batch_configs:
         item = _kami_batch_payload(batch)
+        stats = _kami_batch_stats(session, batch, admin_owned_only=True)
+        if stats["total_count"] == 0 and _batch_has_kamis(session, batch):
+            continue
         spec = specs_by_id.get(batch.spec_id)
         item.update({
             "spec_name": spec.spec_name if spec else None,
@@ -3962,6 +3984,7 @@ async def list_kami_batches(
             "unused_count": 0,
             "active_count": 0,
             "frozen_count": 0,
+            "expired_count": 0,
             "redeemed_count": 0,
             "times_remaining_total": 0,
             "points_remaining_total": 0,
@@ -4056,7 +4079,7 @@ async def export_kamis(
     if not check_app_permission(session, app_id, username, is_admin):
         raise HTTPException(status_code=403, detail="无权导出此应用的卡密")
 
-    statement = select(Kami).where(Kami.app_id == app_id)
+    statement = _admin_owned_kami_scope(select(Kami).where(Kami.app_id == app_id))
     if status:
         try:
             statement = statement.where(Kami.status == KamiStatus(status))
@@ -4218,6 +4241,7 @@ async def delete_kamis(
         Kami.app_id == payload.app_id,
         Kami.kami_code.in_(kami_codes),
     )
+    statement = _admin_owned_kami_scope(statement)
     if payload.batch_no:
         statement = statement.where(Kami.batch_no == payload.batch_no)
     elif payload.spec_id:
@@ -4322,6 +4346,8 @@ async def update_kami_remark(
     kami = session.exec(select(Kami).where(Kami.kami_code == kami_code)).first()
     if not kami:
         raise HTTPException(status_code=404, detail="Kami not found")
+    if kami.created_by_user_id is not None:
+        raise HTTPException(status_code=404, detail="Kami not found")
 
     username = current_user.get("sub")
     is_admin = current_user.get("is_admin", False)
@@ -4366,6 +4392,8 @@ async def freeze_kami(
     kami = session.exec(statement).first()
 
     if not kami:
+        raise HTTPException(status_code=404, detail="Kami not found")
+    if kami.created_by_user_id is not None:
         raise HTTPException(status_code=404, detail="Kami not found")
 
     kami.status = KamiStatus.frozen
