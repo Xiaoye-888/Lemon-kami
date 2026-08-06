@@ -1628,3 +1628,13 @@ def test_admin_end_users_use_admin_owned_app_scope_only():
 
     assert "getApps({ owner_scope: 'admin' })" in end_users
     assert "getApps()" not in end_users
+
+
+def test_end_user_authorization_source_kami_prompt_and_404_detail_are_clear():
+    end_users = (PROJECT_ROOT / "admin/src/views/EndUsers.vue").read_text(encoding="utf-8")
+    request_js = (PROJECT_ROOT / "admin/src/utils/request.js").read_text(encoding="utf-8")
+
+    assert 'label="来源卡密号"' in end_users
+    assert "仅填写真实卡密号，说明请写到备注" in end_users
+    assert "case 404:" in request_js
+    assert "ElMessage.error(serverDetail || '请求资源不存在')" in request_js

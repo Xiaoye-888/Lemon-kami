@@ -100,7 +100,7 @@ request.interceptors.response.use(
           ElMessage.error('拒绝访问')
           break
         case 404:
-          ElMessage.error('请求资源不存在')
+          ElMessage.error(serverDetail || '请求资源不存在')
           break
         case 500:
           ElMessage.error(serverDetail || '服务器错误')

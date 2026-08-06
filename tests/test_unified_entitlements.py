@@ -2621,6 +2621,39 @@ def test_admin_authorization_grant_with_source_kami_links_card_to_user():
         fastapi_app.dependency_overrides.clear()
 
 
+def test_admin_authorization_grant_rejects_unknown_source_kami_with_clear_error():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    fastapi_app.dependency_overrides[routes_admin.get_session] = override_session_factory(engine)
+    fastapi_app.dependency_overrides[routes_admin.get_current_user] = override_admin_user
+    client = TestClient(fastapi_app)
+
+    with Session(engine) as session:
+        session.add(make_app("app_demo", "Demo"))
+        user = EndUser(app_id="app_demo", username="manual-grant", password_hash="hash")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        user_id = user.id
+
+    try:
+        response = client.post(
+            "/api/v1/admin/authorizations/grant",
+            json={
+                "app_id": "app_demo",
+                "user_id": user_id,
+                "benefit_type": "points",
+                "amount": 100,
+                "source_kami_code": "本人使用",
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "来源卡密不存在，请留空或填写真实卡密号"
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
 def test_admin_devices_keep_manual_risk_separate_from_ip_count_history():
     engine = make_engine()
     SQLModel.metadata.create_all(engine)

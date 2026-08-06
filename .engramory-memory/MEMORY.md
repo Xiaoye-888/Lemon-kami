@@ -12,3 +12,4 @@
 - [full-site-qa-hardening](2026-07-31-full-site-qa-hardening.md): Full-site QA now requires router/page-contract/browser-route coverage gates, real submenu navigation clicks, current SDK payloads, and dynamic production browser contexts for role-bound pages.
 - [production-data-reset-2026-08-06](2026-08-06-production-data-reset.md): Production business data was reset on 2026-08-06; only the `admin` administrator login should remain.
 - [kami-remark-support](2026-08-06-kami-remark-support.md): Single kami remarks are first-class data across admin and merchant generation, listing, editing, searching, and CSV export.
+- [authorization-grant-source-kami-ux](2026-08-06-authorization-grant-source-kami-ux.md): Manual user authorization grants should make source kami optional and show clear errors when a non-existent source kami is entered.

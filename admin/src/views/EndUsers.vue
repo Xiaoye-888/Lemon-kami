@@ -159,11 +159,11 @@
         <el-form-item v-else :label="grantForm.benefit_type === 'times' ? '授权次数' : '授权积分'" required>
           <el-input-number v-model="grantForm.amount" :min="1" :max="100000000" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="来源卡密">
-          <el-input v-model="grantForm.source_kami_code" clearable placeholder="可选，用于追溯来源卡密" />
+        <el-form-item label="来源卡密号">
+          <el-input v-model="grantForm.source_kami_code" clearable placeholder="可不填；仅填写真实卡密号，说明请写到备注" />
         </el-form-item>
         <el-form-item label="备注">
-          <el-input v-model="grantForm.remark" type="textarea" :rows="2" />
+          <el-input v-model="grantForm.remark" type="textarea" :rows="2" placeholder="例如：本人使用、补偿、线下授权原因" />
         </el-form-item>
       </el-form>
       <template #footer>

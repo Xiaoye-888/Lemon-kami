@@ -6196,7 +6196,7 @@ async def grant_user_authorization(
             )
         ).first()
         if not source_kami:
-            raise HTTPException(status_code=404, detail="来源卡密不存在")
+            raise HTTPException(status_code=400, detail="来源卡密不存在，请留空或填写真实卡密号")
         if source_kami.status == KamiStatus.frozen:
             raise HTTPException(status_code=400, detail="来源卡密已被冻结")
         if source_kami.redeemed_by_user_id and source_kami.redeemed_by_user_id != user.id:
