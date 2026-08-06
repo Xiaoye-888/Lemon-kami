@@ -1,0 +1,219 @@
+name: One Time Production Live Data Reset
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/production-live-data-reset.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lemon-kami-production-live-data-reset
+  cancel-in-progress: false
+
+jobs:
+  reset-live-production-data:
+    name: Reset Live Production Data
+    runs-on: ubuntu-24.04
+    if: github.repository == 'Xiaoye-888/Lemon-kami'
+
+    steps:
+      - name: Prepare SSH
+        shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          strip_leading_bom() {
+            local key="$1"
+            local value="${!key:-}"
+            value="${value#$'\xef\xbb\xbf'}"
+            printf -v "${key}" '%s' "${value}"
+          }
+          for key in SERVER_HOST SERVER_PORT SERVER_SSH_KEY; do
+            strip_leading_bom "${key}"
+          done
+          SERVER_HOST="${SERVER_HOST:-154.12.26.231}"
+          SERVER_PORT="${SERVER_PORT:-22}"
+          mkdir -p ~/.ssh
+          printf '%s\n' "${SERVER_SSH_KEY}" > ~/.ssh/lemon_kami_live_reset_key
+          chmod 600 ~/.ssh/lemon_kami_live_reset_key
+          ssh-keyscan -p "${SERVER_PORT}" "${SERVER_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Reset data through the live FastAPI container
+        shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -Eeuo pipefail
+          strip_leading_bom() {
+            local key="$1"
+            local value="${!key:-}"
+            value="${value#$'\xef\xbb\xbf'}"
+            printf -v "${key}" '%s' "${value}"
+          }
+          for key in SERVER_HOST SERVER_USER SERVER_PORT; do
+            strip_leading_bom "${key}"
+          done
+          if [ -z "${SERVER_USER:-}" ]; then
+            echo "Missing required GitHub secret: SERVER_USER" >&2
+            exit 1
+          fi
+          SERVER_HOST="${SERVER_HOST:-154.12.26.231}"
+          SERVER_PORT="${SERVER_PORT:-22}"
+          REMOTE="${SERVER_USER}@${SERVER_HOST}"
+
+          ssh -i ~/.ssh/lemon_kami_live_reset_key -p "${SERVER_PORT}" "${REMOTE}" 'bash -se' <<'REMOTE_SCRIPT'
+          set -Eeuo pipefail
+
+          frontend_container="$(docker ps --filter publish=80 --format '{{.Names}}' | head -n 1)"
+          project_name=""
+          if [ -n "${frontend_container}" ]; then
+            project_name="$(
+              docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "${frontend_container}" 2>/dev/null || true
+            )"
+          fi
+
+          fastapi_container=""
+          if [ -n "${project_name}" ]; then
+            fastapi_container="$(
+              docker ps \
+                --filter "label=com.docker.compose.project=${project_name}" \
+                --filter 'label=com.docker.compose.service=fastapi' \
+                --format '{{.Names}}' |
+                head -n 1
+            )"
+          fi
+          if [ -z "${fastapi_container}" ]; then
+            fastapi_container="$(
+              docker ps --format '{{.Names}} {{.Image}}' |
+                awk '$2 ~ /^lemon-kami-fastapi:/ { print $1; exit }'
+            )"
+          fi
+          if [ -z "${fastapi_container}" ]; then
+            echo "Unable to locate running live FastAPI container" >&2
+            exit 1
+          fi
+
+          if [ -z "${project_name}" ]; then
+            project_name="$(
+              docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "${fastapi_container}" 2>/dev/null || true
+            )"
+          fi
+          redis_container=""
+          if [ -n "${project_name}" ]; then
+            redis_container="$(
+              docker ps \
+                --filter "label=com.docker.compose.project=${project_name}" \
+                --filter 'label=com.docker.compose.service=redis' \
+                --format '{{.Names}}' |
+                head -n 1
+            )"
+          fi
+          if [ -z "${redis_container}" ]; then
+            redis_container="$(
+              docker ps --format '{{.Names}} {{.Image}}' |
+                awk '$2 ~ /^redis:/ { print $1; exit }'
+            )"
+          fi
+
+          echo "LIVE_FASTAPI_CONTAINER=${fastapi_container}"
+          echo "LIVE_COMPOSE_PROJECT=${project_name:-unknown}"
+          echo "LIVE_REDIS_CONTAINER=${redis_container:-not-found}"
+
+          docker exec -i "${fastapi_container}" python - <<'PY'
+          from sqlalchemy import text
+          from database import engine
+
+          business_tables = [
+              "admin_audit_logs",
+              "api_interfaces",
+              "app_authorizations",
+              "app_interface_configs",
+              "app_notices",
+              "app_versions",
+              "apps",
+              "authorization_accounts",
+              "authorization_lots",
+              "authorization_transactions",
+              "device_ip_risks",
+              "devices",
+              "end_users",
+              "event_logs",
+              "issue_quota_pricing_rules",
+              "kami_batches",
+              "kami_device_bindings",
+              "kami_specs",
+              "kamis",
+              "ops_backup_records",
+              "point_transactions",
+              "recharge_bonus_rules",
+              "recharge_options",
+              "recharge_orders",
+              "recharge_payment_channels",
+              "user_app_authorizations",
+              "user_point_accounts",
+              "user_point_lots",
+              "user_quota_accounts",
+              "user_quota_transactions",
+          ]
+
+          with engine.begin() as conn:
+              conn.execute(text("SET FOREIGN_KEY_CHECKS=0"))
+              for table in business_tables:
+                  conn.execute(text(f"DELETE FROM `{table}`"))
+              conn.execute(text("DELETE FROM `admin_users` WHERE `username` <> 'admin'"))
+              conn.execute(
+                  text(
+                      "UPDATE `admin_users` "
+                      "SET `status` = 1, `failed_attempts` = 0, `locked_until` = NULL "
+                      "WHERE `username` = 'admin'"
+                  )
+              )
+              conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
+
+          with engine.connect() as conn:
+              admin_rows = conn.execute(text("SELECT COUNT(*) FROM `admin_users`")).scalar_one()
+              admin_login_rows = conn.execute(
+                  text("SELECT COUNT(*) FROM `admin_users` WHERE `username` = 'admin' AND `status` = 1")
+              ).scalar_one()
+              counts = {
+                  table: conn.execute(text(f"SELECT COUNT(*) FROM `{table}`")).scalar_one()
+                  for table in business_tables
+              }
+
+          print("admin_users=%s" % admin_rows)
+          print("admin_login_rows=%s" % admin_login_rows)
+          for key in ("apps", "kami_specs", "kami_batches", "kamis", "devices", "end_users", "event_logs", "recharge_orders"):
+              print("%s=%s" % (key, counts[key]))
+
+          if admin_rows != 1 or admin_login_rows != 1:
+              raise SystemExit("admin preservation check failed")
+          nonzero = {key: value for key, value in counts.items() if value}
+          if nonzero:
+              raise SystemExit("business table reset check failed: %r" % nonzero)
+          PY
+
+          if [ -n "${redis_container}" ]; then
+            docker exec "${redis_container}" redis-cli FLUSHALL >/dev/null
+          fi
+          docker exec "${fastapi_container}" sh -lc 'for path in /app/uploads /app/backups /app/logs; do if [ -d "$path" ]; then find "$path" -mindepth 1 -exec rm -rf -- {} +; fi; done'
+          docker restart "${fastapi_container}" >/dev/null
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1/health >/dev/null 2>&1; then
+              echo "health=ok"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Health check did not recover after live reset" >&2
+          exit 1
+          REMOTE_SCRIPT
