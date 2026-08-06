@@ -194,6 +194,20 @@ def test_shared_register_creates_merchant_and_blocks_application_user_console_ac
         assert register_data["user_info"]["username"] == "merchant-new"
         assert register_data["user_info"]["app_id"] is None
 
+        two_char_response = client.post(
+            "/api/v1/auth/register",
+            json={"username": "元元", "password": "merchant-pass"},
+        )
+        assert two_char_response.status_code == 200
+        assert two_char_response.json()["user_info"]["username"] == "元元"
+
+        too_short_response = client.post(
+            "/api/v1/auth/register",
+            json={"username": "元", "password": "merchant-pass"},
+        )
+        assert too_short_response.status_code == 400
+        assert too_short_response.json()["detail"] == "用户名长度需为 2 到 64 位"
+
         with Session(engine) as session:
             merchant = session.exec(
                 select(EndUser).where(EndUser.username == "merchant-new")
@@ -273,42 +287,42 @@ def test_merchant_profile_update_syncs_visible_profile_and_cached_relations():
             "/api/v1/merchant/me",
             headers=auth_headers(token),
             json={
-                "username": "merchant-renamed",
+                "username": "元元",
                 "email": "merchant@example.com",
                 "phone": "13800000000",
             },
         )
         assert update_response.status_code == 200
         update_data = update_response.json()["data"]
-        assert update_data["username"] == "merchant-renamed"
+        assert update_data["username"] == "元元"
         assert update_data["email"] == "merchant@example.com"
         assert update_data["phone"] == "13800000000"
 
         me_response = client.get("/api/v1/merchant/me", headers=auth_headers(token))
         assert me_response.status_code == 200
-        assert me_response.json()["data"]["username"] == "merchant-renamed"
+        assert me_response.json()["data"]["username"] == "元元"
 
         with Session(engine) as session:
             updated_merchant = session.get(EndUser, merchant_id)
             assert updated_merchant is not None
-            assert updated_merchant.username == "merchant-renamed"
+            assert updated_merchant.username == "元元"
             assert updated_merchant.email == "merchant@example.com"
             assert updated_merchant.phone == "13800000000"
 
             owned_app_row = session.exec(
                 select(App).where(App.app_id == owned_app.app_id)
             ).one()
-            assert owned_app_row.created_by == "merchant-renamed"
+            assert owned_app_row.created_by == "元元"
 
             quota_account = session.exec(
                 select(UserQuotaAccount).where(UserQuotaAccount.user_id == merchant_id)
             ).one()
-            assert quota_account.username == "merchant-renamed"
+            assert quota_account.username == "元元"
 
             authorization = session.exec(
                 select(UserAppAuthorization).where(UserAppAuthorization.app_id == authorized_app.app_id)
             ).one()
-            assert authorization.username == "merchant-renamed"
+            assert authorization.username == "元元"
     finally:
         fastapi_app.dependency_overrides.clear()
 

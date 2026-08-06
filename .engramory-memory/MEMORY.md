@@ -13,3 +13,4 @@
 - [production-data-reset-2026-08-06](2026-08-06-production-data-reset.md): Production business data was reset on 2026-08-06; only the `admin` administrator login should remain.
 - [kami-remark-support](2026-08-06-kami-remark-support.md): Single kami remarks are first-class data across admin and merchant generation, listing, editing, searching, and CSV export.
 - [authorization-grant-source-kami-ux](2026-08-06-authorization-grant-source-kami-ux.md): Manual user authorization grants should make source kami optional and show clear errors when a non-existent source kami is entered.
+- [merchant-register-two-char-username](2026-08-06-merchant-register-two-char-username.md): Merchant registration accepts two-character Chinese usernames and frontend parses FastAPI validation arrays into Chinese prompts.

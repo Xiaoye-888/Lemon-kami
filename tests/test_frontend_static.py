@@ -1373,6 +1373,7 @@ def test_commercial_phase1_corrections_keep_identity_and_quota_scope_clear():
     auth_api = (PROJECT_ROOT / "admin/src/api/auth.js").read_text(encoding="utf-8")
     store = (PROJECT_ROOT / "admin/src/stores/user.js").read_text(encoding="utf-8")
     login = (PROJECT_ROOT / "admin/src/views/Login.vue").read_text(encoding="utf-8")
+    account_profile = (PROJECT_ROOT / "admin/src/views/AccountProfile.vue").read_text(encoding="utf-8")
     layout = (PROJECT_ROOT / "admin/src/layouts/MainLayout.vue").read_text(encoding="utf-8")
     router = (PROJECT_ROOT / "admin/src/router/index.js").read_text(encoding="utf-8")
     end_users = (PROJECT_ROOT / "admin/src/views/EndUsers.vue").read_text(encoding="utf-8")
@@ -1383,6 +1384,10 @@ def test_commercial_phase1_corrections_keep_identity_and_quota_scope_clear():
     assert "userRegister" in store
     assert "registerVisible" in login
     assert "registerForm" in login
+    assert "Array.isArray(detail)" in login
+    assert "用户名长度需为 2 到 64 位" in login
+    assert "String(registerForm.username || '').trim()" in login
+    assert "accountRole.value === 'merchant' ? 2 : 3" in account_profile
 
     assert "index: '/admin/commercial', label:" not in layout
     assert "index: '/admin/commercial/quota-transactions'" in layout

@@ -1268,8 +1268,8 @@ async def update_merchant_me(
     session: Session = Depends(get_session),
 ):
     new_username = (payload.username or "").strip()
-    if len(new_username) < 3 or len(new_username) > 64:
-        raise HTTPException(status_code=400, detail="用户名长度需为 3 到 64 位")
+    if len(new_username) < 2 or len(new_username) > 64:
+        raise HTTPException(status_code=400, detail="用户名长度需为 2 到 64 位")
     if re.search(r"\s", new_username):
         raise HTTPException(status_code=400, detail="用户名不能包含空格")
 

@@ -26,7 +26,7 @@ class SharedLoginRequest(BaseModel):
 
 
 class SharedMerchantRegisterRequest(BaseModel):
-    username: str = PydanticField(..., min_length=3, max_length=64)
+    username: str = PydanticField(..., max_length=64)
     password: str = PydanticField(..., min_length=6, max_length=128)
     email: Optional[str] = None
     phone: Optional[str] = None
@@ -158,7 +158,9 @@ async def shared_merchant_register(
 ):
     username = payload.username.strip()
     if not username:
-        raise HTTPException(status_code=400, detail="username is required")
+        raise HTTPException(status_code=400, detail="用户名不能为空")
+    if len(username) < 2:
+        raise HTTPException(status_code=400, detail="用户名长度需为 2 到 64 位")
     admin = session.exec(select(AdminUser).where(AdminUser.username == username)).first()
     existing = session.exec(select(EndUser).where(EndUser.username == username)).first()
     if admin or existing:

@@ -362,6 +362,25 @@ function extractErrorDetail(error) {
   if (typeof detail === 'string') {
     return detail
   }
+  if (Array.isArray(detail)) {
+    const fieldMap = {
+      username: '用户名',
+      password: '密码',
+      email: '邮箱',
+      phone: '手机号'
+    }
+    const first = detail[0] || {}
+    const loc = Array.isArray(first.loc) ? first.loc : []
+    const field = fieldMap[loc[loc.length - 1]] || '请求参数'
+    const ctx = first.ctx || {}
+    if (first.type === 'string_too_short' && ctx.min_length) {
+      return `${field}长度不能少于 ${ctx.min_length} 位`
+    }
+    if (first.type === 'string_too_long' && ctx.max_length) {
+      return `${field}长度不能超过 ${ctx.max_length} 位`
+    }
+    return first.msg ? `${field}${first.msg}` : `${field}格式不正确`
+  }
   if (detail && typeof detail === 'object') {
     return detail.message || detail.detail || detail.error || ''
   }
@@ -443,11 +462,24 @@ const handleLogin = async () => {
 }
 
 const handleRegister = async () => {
-  if (!registerForm.username || !registerForm.password) {
+  const username = String(registerForm.username || '').trim()
+  const password = String(registerForm.password || '')
+  const email = String(registerForm.email || '').trim()
+  const phone = String(registerForm.phone || '').trim()
+
+  if (!username || !password) {
     ElMessage.warning('请填写用户名和密码')
     return
   }
-  if (registerForm.password.length < 6) {
+  if (username.length < 2 || username.length > 64) {
+    ElMessage.warning('用户名长度需为 2 到 64 位')
+    return
+  }
+  if (/\s/.test(username)) {
+    ElMessage.warning('用户名不能包含空格')
+    return
+  }
+  if (password.length < 6) {
     ElMessage.warning('密码至少 6 位')
     return
   }
@@ -455,10 +487,10 @@ const handleRegister = async () => {
   registering.value = true
   try {
     const result = await userStore.userRegister({
-      username: registerForm.username,
-      password: registerForm.password,
-      email: registerForm.email || null,
-      phone: registerForm.phone || null
+      username,
+      password,
+      email: email || null,
+      phone: phone || null
     })
     registerVisible.value = false
     ElMessage.success('注册成功')

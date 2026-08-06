@@ -125,8 +125,9 @@ const usernameRule = (_, value, callback) => {
     callback(new Error('请输入用户名'))
     return
   }
-  if (text.length < 3 || text.length > 64) {
-    callback(new Error('用户名长度需为 3 到 64 位'))
+  const minLength = accountRole.value === 'merchant' ? 2 : 3
+  if (text.length < minLength || text.length > 64) {
+    callback(new Error(`用户名长度需为 ${minLength} 到 64 位`))
     return
   }
   if (/\s/.test(text)) {
