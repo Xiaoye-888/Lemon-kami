@@ -111,7 +111,7 @@
           <el-table-column label="发布时间" width="180">
             <template #default="{ row }">{{ formatBeijingTime(row.published_at || row.updated_at) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="300" fixed="right">
+          <el-table-column label="操作" width="250">
             <template #default="{ row }">
               <div class="action-group">
                 <el-button
@@ -321,7 +321,7 @@
 
     <el-dialog
       v-model="createDialogVisible"
-      title="新增完整版本"
+      :title="versionDialogTitle"
       width="760px"
       class="version-dialog"
       :close-on-click-modal="!saving"
@@ -452,6 +452,7 @@ const form = reactive({
 const selectedApp = computed(() => apps.value.find((app) => app.app_id === selectedAppId.value) || null)
 const selectedAppName = computed(() => selectedApp.value?.name || '应用')
 const canManageSelectedApp = computed(() => !isMerchantContentRoute() || selectedApp.value?.is_owned === true)
+const versionDialogTitle = computed(() => (editingVersion.value ? '编辑版本更新' : '新增完整版本'))
 
 const sortedVersions = computed(() => [...versions.value].sort((left, right) => {
   const codeDiff = Number(right.version_code || 0) - Number(left.version_code || 0)
@@ -657,10 +658,10 @@ const openEdit = (row) => {
     ElMessage.warning('授权应用版本仅可查看')
     return
   }
-  createDialogVisible.value = false
   editingVersion.value = row
   selectedVersion.value = row
   applyVersionToForm(row)
+  createDialogVisible.value = true
 }
 
 function versionPayloadFromForm(statusOverride) {

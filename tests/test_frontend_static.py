@@ -272,6 +272,22 @@ def test_app_versions_release_console_is_chinese_and_directly_editable():
     assert "@click=\"saveVersion('published')\"" in source
 
 
+def test_app_versions_edit_action_opens_prefilled_dialog_and_compact_actions():
+    source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
+
+    assert ':title="versionDialogTitle"' in source
+
+    edit_source = source.split("const openEdit = (row) => {", 1)[1].split("function versionPayloadFromForm", 1)[0]
+    assert "applyVersionToForm(row)" in edit_source
+    assert "createDialogVisible.value = true" in edit_source
+    assert "createDialogVisible.value = false" not in edit_source
+
+    action_column = source.split('label="操作"', 1)[1].split("</el-table-column>", 1)[0]
+    assert 'fixed="right"' not in action_column
+    assert 'width="300"' not in action_column
+    assert 'width="250"' in action_column or 'min-width="230"' in action_column
+
+
 def test_app_versions_bottom_cards_are_bounded_to_prevent_overflow():
     source = (PROJECT_ROOT / "admin/src/views/AppVersions.vue").read_text(encoding="utf-8")
 
