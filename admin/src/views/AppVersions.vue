@@ -219,104 +219,6 @@
         </div>
       </section>
 
-      <aside class="release-sidebar">
-        <section class="panel draft-panel">
-          <div class="panel-heading panel-heading--compact">
-            <div>
-              <h2>快捷发布</h2>
-              <p>{{ editingVersion ? '正在编辑历史版本' : '常用字段快速创建并发布新版本' }}</p>
-            </div>
-            <el-tag type="info" effect="plain">Windows</el-tag>
-          </div>
-
-          <el-form class="release-form" :model="form" label-position="top">
-            <div class="release-form__row">
-              <el-form-item label="版本号" required>
-                <el-input v-model="form.version" placeholder="例如 1.1.0" />
-              </el-form-item>
-              <el-form-item label="版本编码" required>
-                <el-input-number v-model="form.version_code" :min="1" :max="999999999" controls-position="right" />
-              </el-form-item>
-            </div>
-            <div v-if="showLowCodeHint" class="form-hint">低编码发布通常不会触发高版本客户端。</div>
-
-            <div class="release-form__row">
-              <el-form-item label="发布状态">
-                <el-select v-model="form.status">
-                  <el-option label="草稿" value="draft" />
-                  <el-option label="已发布" value="published" />
-                  <el-option label="已下架" value="archived" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="按钮文案">
-                <el-input v-model="form.button_text" maxlength="64" />
-              </el-form-item>
-            </div>
-
-            <el-form-item label="更新标题" required>
-              <el-input v-model="form.title" maxlength="128" show-word-limit />
-            </el-form-item>
-
-            <el-form-item label="更新说明">
-              <el-input
-                v-model="form.notes"
-                type="textarea"
-                :rows="3"
-                maxlength="1000"
-                show-word-limit
-                placeholder="填写本次更新内容，客户端弹窗会展示这里的说明"
-              />
-            </el-form-item>
-
-            <el-form-item label="下载地址">
-              <el-input v-model="form.download_url" placeholder="https://..." />
-              <div v-if="showForceDownloadHint" class="form-hint form-hint--danger">强制发布前必须填写下载地址。</div>
-            </el-form-item>
-
-            <div class="release-form__row release-form__row--compact">
-              <el-form-item label="地址类型">
-                <el-select v-model="form.url_type">
-                  <el-option label="直链" value="direct" />
-                  <el-option label="网盘/外链" value="external" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="强制更新">
-                <el-switch
-                  v-model="form.force_update"
-                  inline-prompt
-                  active-text="开启"
-                  inactive-text="关闭"
-                />
-              </el-form-item>
-            </div>
-          </el-form>
-
-          <div v-if="showLowCodeHint" class="compact-warning">
-            低于当前生效编码时，已升级客户端不会触发更新。
-          </div>
-          <div v-if="showForceDownloadHint" class="compact-warning compact-warning--danger">
-            强制发布需要下载地址。
-          </div>
-
-          <div class="workspace-actions">
-            <el-button
-              :loading="saving && pendingSaveStatus === 'draft'"
-              :disabled="!selectedAppId || saving || Boolean(rowActionLoading)"
-              @click="saveVersion('draft')"
-            >
-              保存草稿
-            </el-button>
-            <el-button
-              type="primary"
-              :loading="saving && pendingSaveStatus === 'published'"
-              :disabled="!selectedAppId || saving || Boolean(rowActionLoading)"
-              @click="saveVersion('published')"
-            >
-              检查并发布
-            </el-button>
-          </div>
-        </section>
-      </aside>
     </main>
 
     <el-dialog
@@ -1027,7 +929,7 @@ onMounted(async () => {
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 440px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   align-items: stretch;
 }
@@ -1035,10 +937,6 @@ onMounted(async () => {
 .panel {
   min-width: 0;
   padding: 16px;
-}
-
-.history-panel {
-  height: 100%;
 }
 
 .panel-heading,
@@ -1233,19 +1131,6 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.release-sidebar {
-  display: flex;
-  height: 100%;
-  min-width: 0;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.draft-panel {
-  flex: 1;
-  height: 100%;
-}
-
 .release-form {
   margin-bottom: 12px;
 }
@@ -1357,16 +1242,6 @@ onMounted(async () => {
   overflow: hidden;
 }
 
-.workspace-actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 10px;
-}
-
-.workspace-actions :deep(.el-button) {
-  margin-left: 0;
-}
-
 .dialog-intro {
   display: flex;
   flex-direction: column;
@@ -1412,19 +1287,8 @@ onMounted(async () => {
 }
 
 @media (max-width: 1200px) {
-  .current-release,
-  .workspace-grid {
+  .current-release {
     grid-template-columns: 1fr 1fr;
-  }
-
-  .history-panel,
-  .release-sidebar {
-    grid-column: 1 / -1;
-    height: auto;
-  }
-
-  .draft-panel {
-    height: auto;
   }
 }
 
@@ -1454,8 +1318,7 @@ onMounted(async () => {
   .current-release,
   .history-secondary,
   .release-form__row,
-  .check-list,
-  .workspace-actions {
+  .check-list {
     grid-template-columns: 1fr;
   }
 }

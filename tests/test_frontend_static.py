@@ -200,7 +200,7 @@ def test_app_versions_has_quick_publish_and_history_actions():
     assert '@click.stop="publishDraft(row)"' in source
     assert '@click.stop="archiveVersion(row)"' in source
     assert '@click.stop="deleteVersion(row)"' in source
-    assert "快捷发布" in source
+    assert "快捷发布" not in source
     assert "检查并发布" in source
     assert "弹窗预览" in source
     assert "复制新版本" not in source
@@ -241,13 +241,16 @@ def test_app_versions_release_console_is_chinese_and_directly_editable():
     assert "当前选择版本详情" not in source
     assert "还没有发布过 Windows 版本" in source
 
-    history_secondary_source = source.split('class="history-secondary"', 1)[1].split('class="release-sidebar"', 1)[0]
-    sidebar_source = source.split('class="release-sidebar"', 1)[1]
+    history_secondary_source = source.split('class="history-secondary"', 1)[1].split('</main>', 1)[0]
     assert "客户端弹窗预览" in history_secondary_source
+    assert "发布检查" in history_secondary_source
     assert "update-preview" in history_secondary_source
-    assert "客户端弹窗预览" not in sidebar_source
 
-    workspace_source = source.split('class="release-form"', 1)[1].split('class="workspace-actions"', 1)[0]
+    assert 'class="release-sidebar"' not in source
+    assert 'class="draft-panel"' not in source
+    assert 'class="workspace-actions"' not in source
+
+    dialog_source = source.split('<el-dialog', 1)[1].split('</el-dialog>', 1)[0]
     for binding in (
         'v-model="form.version"',
         'v-model="form.version_code"',
@@ -259,9 +262,8 @@ def test_app_versions_release_console_is_chinese_and_directly_editable():
         'v-model="form.url_type"',
         'v-model="form.force_update"',
     ):
-        assert binding in workspace_source
+        assert binding in dialog_source
 
-    dialog_source = source.split('<el-dialog', 1)[1].split('</el-dialog>', 1)[0]
     assert "完整版本信息" in dialog_source
     assert "@click=\"saveVersion('draft')\"" in dialog_source
     assert "@click=\"saveVersion('published')\"" in dialog_source
@@ -306,19 +308,15 @@ def test_app_versions_desktop_columns_share_equal_height():
 
     workspace_blocks = [block.split("}", 1)[0] for block in source.split(".workspace-grid {")[1:]]
     workspace_css = next(block for block in workspace_blocks if "grid-template-columns" in block)
-    assert "align-items: stretch" in workspace_css
+    assert "grid-template-columns: minmax(0, 1fr)" in workspace_css
     assert "align-items: start" not in workspace_css
 
-    history_css = source.split(".history-panel {", 1)[1].split("}", 1)[0]
-    sidebar_css = source.split(".release-sidebar {", 1)[1].split("}", 1)[0]
-    draft_css = source.split(".draft-panel {", 1)[1].split("}", 1)[0]
-    assert "height: 100%" in history_css
-    assert "height: 100%" in sidebar_css
-    assert "height: 100%" in draft_css
+    assert ".history-panel {" not in source
+    assert ".release-sidebar {" not in source
+    assert ".draft-panel {" not in source
 
     desktop_media_source = source.split("@media (max-width: 1200px)", 1)[1]
-    assert ".draft-panel" in desktop_media_source
-    assert "height: auto" in desktop_media_source
+    assert ".draft-panel" not in desktop_media_source
 
 
 def test_devices_page_defaults_to_all_apps_with_keyword_search():
