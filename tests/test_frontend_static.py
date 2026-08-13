@@ -1541,6 +1541,15 @@ def test_phase2_merchant_card_search_export_and_batch_stats_are_visible():
     assert "if (queryParams.keyword) params.keyword = queryParams.keyword" in admin_kamis
 
 
+def test_merchant_spec_batch_rows_flatten_nested_stats_for_counts():
+    merchant_batches = (PROJECT_ROOT / "admin/src/views/MerchantBatches.vue").read_text(encoding="utf-8")
+
+    assert "function normalizeMerchantBatchRow" in merchant_batches
+    assert "row.stats?.total_count" in merchant_batches
+    assert "row.stats?.unused_count" in merchant_batches
+    assert "responseItems(res).map(normalizeMerchantBatchRow)" in merchant_batches
+
+
 def test_admin_merchants_username_drilldown_exposes_apps_users_and_quick_actions():
     admin_merchants = (PROJECT_ROOT / "admin/src/views/AdminMerchants.vue").read_text(encoding="utf-8")
     admin_merchant_detail = (PROJECT_ROOT / "admin/src/views/AdminMerchantDetail.vue").read_text(encoding="utf-8")

@@ -1300,6 +1300,23 @@ function responsePayload(res) {
   return res.data?.items ? res.data : { items: res.items || [], total: res.total || 0 }
 }
 
+function normalizeMerchantBatchRow(row) {
+  const stats = row.stats || {}
+  const totalCount = Number(row.total_count ?? row.stats?.total_count ?? row.count ?? 0)
+  const unusedCount = Number(row.unused_count ?? row.stats?.unused_count ?? 0)
+  const activeCount = Number(row.active_count ?? row.stats?.active_count ?? 0)
+  return {
+    ...row,
+    total_count: Number.isFinite(totalCount) ? totalCount : 0,
+    unused_count: Number.isFinite(unusedCount) ? unusedCount : 0,
+    active_count: Number.isFinite(activeCount) ? activeCount : 0,
+    frozen_count: Number(row.frozen_count ?? stats.frozen_count ?? 0) || 0,
+    expired_count: Number(row.expired_count ?? stats.expired_count ?? 0) || 0,
+    device_bound_count: Number(row.device_bound_count ?? stats.device_bound_count ?? 0) || 0,
+    redeemed_count: Number(row.redeemed_count ?? stats.redeemed_count ?? activeCount) || 0
+  }
+}
+
 function normalizeMerchantApp(row) {
   return {
     ...row,
@@ -1769,7 +1786,7 @@ async function hydrateRouteAction() {
 
 async function findBatchByNo(batchNo) {
   const res = await getMerchantBatches(queryParams.app_id)
-  const batches = responseItems(res)
+  const batches = responseItems(res).map(normalizeMerchantBatchRow)
   const batch = batches.find((item) => item.batch_no === batchNo)
   const spec = batch?.spec_id ? specRows.value.find((item) => item.id === batch.spec_id) : null
   if (spec) {
@@ -1818,7 +1835,7 @@ async function loadSpecBatches() {
     return
   }
   const res = await getMerchantSpecBatches(selectedSpec.value.id)
-  specBatches.value = responseItems(res)
+  specBatches.value = responseItems(res).map(normalizeMerchantBatchRow)
 }
 
 function resetDetailState() {
