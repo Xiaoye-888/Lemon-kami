@@ -233,7 +233,7 @@
         <strong>完整版本信息</strong>
         <span>适合编辑正式版本、详细更新说明和下载动作。</span>
       </div>
-      <el-form class="release-form release-form--dialog" :model="form" label-position="top">
+      <el-form class="release-form" :class="'release-form--dialog'" :model="form" label-position="top">
         <div class="release-form__row">
           <el-form-item label="版本号" required>
             <el-input v-model="form.version" placeholder="例如 1.1.0" />
