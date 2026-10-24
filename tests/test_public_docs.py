@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, Session, create_engine, select
 
@@ -62,6 +63,42 @@ def test_public_docs_interfaces_keeps_json_for_api_clients():
         assert body["success"] is True
         assert body["data"]["total"] >= 1
     finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def test_public_docs_second_read_does_not_write_unchanged_builtin_interfaces():
+    engine = make_engine()
+    SQLModel.metadata.create_all(engine)
+
+    def override_session():
+        with Session(engine) as session:
+            yield session
+
+    fastapi_app.dependency_overrides[routes_docs.get_session] = override_session
+    client = TestClient(fastapi_app)
+    write_statements = []
+
+    def capture_writes(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")):
+            write_statements.append(statement)
+
+    try:
+        first_response = client.get(
+            "/api/v1/docs/interfaces",
+            headers={"accept": "application/json"},
+        )
+        assert first_response.status_code == 200
+
+        event.listen(engine, "before_cursor_execute", capture_writes)
+        second_response = client.get(
+            "/api/v1/docs/interfaces",
+            headers={"accept": "application/json"},
+        )
+
+        assert second_response.status_code == 200
+        assert write_statements == []
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_writes)
         fastapi_app.dependency_overrides.clear()
 
 
