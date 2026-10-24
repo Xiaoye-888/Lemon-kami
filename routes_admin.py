@@ -25,8 +25,8 @@ def get_now():
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel, Field as PydanticField
-from sqlalchemy import or_
-from sqlmodel import Session, select
+from sqlalchemy import case, func, or_
+from sqlmodel import Session, delete, select, update
 from auth_utils import hash_password, verify_password
 from audit_service import record_admin_audit, require_sensitive_confirmation
 from database import get_session
@@ -447,6 +447,7 @@ def log_admin_action(session: Session, username: str, event_type: str, app_id: O
     session.commit()
 
 router = APIRouter(prefix="/api/v1/admin", tags=["Admin"])
+EVENT_LOG_DELETE_BATCH_SIZE = 500
 _runtime_login_aes_key_b64: Optional[str] = None
 
 
@@ -821,7 +822,7 @@ def verify_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
-async def get_current_user(
+def get_current_user(
     token: Optional[str] = Query(None, description="JWT Token"),
     authorization: Optional[str] = Header(None, description="Bearer JWT Token"),
 ):
@@ -895,7 +896,7 @@ def _get_current_admin_user(session: Session, current_user: dict) -> AdminUser:
 
 
 @router.get("/me", summary="Get current admin profile")
-async def get_admin_me(
+def get_admin_me(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -904,7 +905,7 @@ async def get_admin_me(
 
 
 @router.put("/me", summary="Update current admin profile")
-async def update_admin_me(
+def update_admin_me(
     payload: AdminProfileUpdateRequest,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
@@ -973,7 +974,7 @@ async def upload_admin_avatar(
 
 
 @router.put("/me/password", summary="Update current admin password")
-async def update_admin_password(
+def update_admin_password(
     payload: AdminPasswordUpdateRequest,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
@@ -992,7 +993,7 @@ async def update_admin_password(
 # ==================== 仪表盘接口 ====================
 
 @router.get("/dashboard", summary="获取运营仪表盘")
-async def get_dashboard(
+def get_dashboard(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
@@ -1091,24 +1092,41 @@ async def get_dashboard(
             AuthorizationTransaction.created_at >= today_start,
         )
     )
-    api_calls_today = count_rows(
-        EventLog,
-        EventLog.event_type.in_(sdk_event_types),
-        EventLog.created_at >= today_start,
-    )
-    active_apps_statement = (
-        select(EventLog.app_id)
-        .where(
-            EventLog.event_type.in_(sdk_event_types),
-            EventLog.created_at >= today_start,
-            EventLog.app_id.is_not(None),
-        )
-        .distinct()
-    )
-    active_apps_conditions = scoped_conditions(EventLog)
-    if active_apps_conditions:
-        active_apps_statement = active_apps_statement.where(*active_apps_conditions)
-    active_apps_today = len([app_id for app_id in session.exec(active_apps_statement).all() if app_id])
+    today_event_conditions = [EventLog.created_at >= today_start]
+    today_event_conditions.extend(scoped_conditions(EventLog))
+    today_event_statement = select(
+        func.coalesce(
+            func.sum(case((EventLog.event_type == "verify", 1), else_=0)),
+            0,
+        ),
+        func.coalesce(
+            func.sum(case((EventLog.event_type == "consume", 1), else_=0)),
+            0,
+        ),
+        func.coalesce(
+            func.sum(case((EventLog.status == 0, 1), else_=0)),
+            0,
+        ),
+        func.coalesce(
+            func.sum(case((EventLog.event_type.in_(sdk_event_types), 1), else_=0)),
+            0,
+        ),
+        func.count(
+            func.distinct(
+                case(
+                    (EventLog.event_type.in_(sdk_event_types), EventLog.app_id),
+                    else_=None,
+                )
+            )
+        ),
+    ).where(*today_event_conditions)
+    (
+        verify_events_today,
+        consume_events_today,
+        failed_events_today,
+        api_calls_today,
+        active_apps_today,
+    ) = (int(value or 0) for value in session.exec(today_event_statement).one())
 
     latest_sdk_statement = select(EventLog).where(EventLog.event_type.in_(sdk_event_types))
     latest_sdk_conditions = scoped_conditions(EventLog)
@@ -1135,9 +1153,9 @@ async def get_dashboard(
             },
             "today": {
                 "new_kamis": count_rows(Kami, Kami.created_at >= today_start),
-                "verify_events": count_rows(EventLog, EventLog.event_type == "verify", EventLog.created_at >= today_start),
-                "consume_events": count_rows(EventLog, EventLog.event_type == "consume", EventLog.created_at >= today_start),
-                "failed_events": count_rows(EventLog, EventLog.status == 0, EventLog.created_at >= today_start),
+                "verify_events": verify_events_today,
+                "consume_events": consume_events_today,
+                "failed_events": failed_events_today,
                 "points_consumed": points_consumed_today,
                 "times_consumed": times_consumed_today,
                 "new_end_users": count_rows(EndUser, EndUser.created_at >= today_start),
@@ -1192,7 +1210,7 @@ def _get_manageable_app(
 
 
 @router.post("/apps", summary="创建应用")
-async def create_app(
+def create_app(
     name: str,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
@@ -1247,7 +1265,7 @@ async def create_app(
 
 
 @router.get("/apps", summary="获取应用列表")
-async def list_apps(
+def list_apps(
     owner_scope: Optional[str] = Query(None, pattern="^(admin)$"),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
@@ -1287,7 +1305,7 @@ async def list_apps(
 
 
 @router.put("/apps/{app_id}", summary="更新应用状态")
-async def update_app_status(
+def update_app_status(
     app_id: str,
     status: Optional[int] = Query(None),
     name: Optional[str] = Query(None),
@@ -1351,7 +1369,7 @@ async def update_app_status(
 
 
 @router.get("/apps/{app_id}/notices", summary="公告管理列表")
-async def list_app_notices(
+def list_app_notices(
     app_id: str,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
@@ -1372,7 +1390,7 @@ async def list_app_notices(
 
 
 @router.post("/apps/{app_id}/notices", summary="发布公告")
-async def create_app_notice(
+def create_app_notice(
     app_id: str,
     payload: AppNoticeRequest,
     current_user: dict = Depends(get_current_user),
@@ -1414,7 +1432,7 @@ async def create_app_notice(
 
 
 @router.put("/apps/{app_id}/notices/{notice_id}", summary="更新公告")
-async def update_app_notice(
+def update_app_notice(
     app_id: str,
     notice_id: int,
     payload: AppNoticeRequest,
@@ -1447,7 +1465,7 @@ async def update_app_notice(
 
 
 @router.delete("/apps/{app_id}/notices/{notice_id}", summary="删除公告")
-async def delete_app_notice(
+def delete_app_notice(
     app_id: str,
     notice_id: int,
     current_user: dict = Depends(get_current_user),
@@ -1488,7 +1506,7 @@ def _validate_version_payload(payload: AppVersionRequest) -> None:
 
 
 @router.get("/apps/{app_id}/updates", summary="版本更新列表")
-async def list_app_versions(
+def list_app_versions(
     app_id: str,
     platform: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
@@ -1511,7 +1529,7 @@ async def list_app_versions(
 
 
 @router.post("/apps/{app_id}/updates", summary="新增版本更新")
-async def create_app_version(
+def create_app_version(
     app_id: str,
     payload: AppVersionRequest,
     current_user: dict = Depends(get_current_user),
@@ -1563,7 +1581,7 @@ async def create_app_version(
 
 
 @router.put("/apps/{app_id}/updates/{version_id}", summary="更新版本")
-async def update_app_version(
+def update_app_version(
     app_id: str,
     version_id: int,
     payload: AppVersionRequest,
@@ -1610,7 +1628,7 @@ async def update_app_version(
 
 
 @router.delete("/apps/{app_id}/updates/{version_id}", summary="删除版本")
-async def delete_app_version(
+def delete_app_version(
     app_id: str,
     version_id: int,
     current_user: dict = Depends(get_current_user),
@@ -1643,7 +1661,7 @@ async def delete_app_version(
 
 
 @router.post("/interfaces", summary="新增接口")
-async def create_interface(
+def create_interface(
     payload: InterfaceCreateRequest,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
@@ -1695,7 +1713,7 @@ async def create_interface(
 
 
 @router.get("/interfaces", summary="接口列表")
-async def list_interfaces(
+def list_interfaces(
     category: Optional[str] = Query(None, description="接口分类"),
     status: Optional[int] = Query(None, ge=0, le=1, description="接口状态"),
     keyword: Optional[str] = Query(None, description="接口名称、标识、说明或地址关键字"),
@@ -1708,7 +1726,7 @@ async def list_interfaces(
     _require_admin(current_user)
     _ensure_builtin_interfaces(session)
     statement = select(ApiInterface)
-    count_statement = select(ApiInterface)
+    count_statement = select(func.count(ApiInterface.id))
     conditions = []
     if category:
         conditions.append(ApiInterface.category == category)
@@ -1726,7 +1744,7 @@ async def list_interfaces(
         statement = statement.where(*conditions)
         count_statement = count_statement.where(*conditions)
 
-    total = len(session.exec(count_statement).all())
+    total = int(session.exec(count_statement).one() or 0)
     interfaces = session.exec(
         statement.order_by(ApiInterface.sort_order, ApiInterface.id.desc())
         .offset((page - 1) * page_size)
@@ -1745,7 +1763,7 @@ async def list_interfaces(
 
 
 @router.put("/interfaces/{interface_id}", summary="编辑接口")
-async def update_interface(
+def update_interface(
     interface_id: int,
     payload: InterfaceUpdateRequest,
     current_user: dict = Depends(get_current_user),
@@ -1808,7 +1826,7 @@ async def update_interface(
 
 
 @router.get("/apps/{app_id}/interfaces", summary="应用接口列表")
-async def list_app_interfaces(
+def list_app_interfaces(
     app_id: str,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
@@ -1844,7 +1862,7 @@ async def list_app_interfaces(
 
 
 @router.put("/apps/{app_id}/interfaces/{interface_id}", summary="配置应用接口")
-async def update_app_interface(
+def update_app_interface(
     app_id: str,
     interface_id: int,
     payload: AppInterfaceConfigRequest,
@@ -1912,7 +1930,7 @@ async def update_app_interface(
 
 
 @router.delete("/apps/{app_id}", summary="删除应用")
-async def delete_app(
+def delete_app(
     app_id: str,
     request: Request,
     payload: Optional[SensitiveConfirmRequest] = None,
@@ -2008,15 +2026,17 @@ async def delete_app(
     log_conditions = [EventLog.app_id == app_id]
     if kami_codes:
         log_conditions.append(EventLog.kami_code.in_(kami_codes))
-    event_logs = session.exec(select(EventLog).where(or_(*log_conditions))).all()
+    event_log_filter = or_(*log_conditions)
+    event_log_count = int(
+        session.exec(select(func.count(EventLog.id)).where(event_log_filter)).one() or 0
+    )
 
     kami_count = len(kamis)
     device_count = len(devices)
     binding_count = len(bindings)
     legacy_access_count = len(legacy_access_rows)
 
-    for log in event_logs:
-        session.delete(log)
+    session.exec(delete(EventLog).where(event_log_filter))
     for notice in notices:
         session.delete(notice)
     for version in versions:
@@ -2088,7 +2108,7 @@ async def delete_app(
                 "device_count": device_count,
                 "binding_count": binding_count,
                 "legacy_access_count": legacy_access_count,
-                "event_log_count": len(event_logs),
+                "event_log_count": event_log_count,
                 "notice_count": len(notices),
                 "version_count": len(versions),
                 "interface_config_count": len(interface_configs),
@@ -2111,7 +2131,7 @@ async def delete_app(
             "device_count": device_count,
             "binding_count": binding_count,
             "legacy_access_count": legacy_access_count,
-            "event_log_count": len(event_logs),
+            "event_log_count": event_log_count,
             "notice_count": len(notices),
             "version_count": len(versions),
             "interface_config_count": len(interface_configs),
@@ -2313,6 +2333,28 @@ def _point_source_summary_by_code(session: Session, kami_codes: list[str]) -> di
         summary["remaining"] += lot.points_remaining or 0
         summary["has_source"] = 1
     return summaries
+
+
+def _latest_event_at_by_kami(
+    session: Session,
+    kami_codes: list[str],
+    event_type: str,
+) -> dict[str, datetime]:
+    if not kami_codes:
+        return {}
+    rows = session.exec(
+        select(EventLog.kami_code, func.max(EventLog.created_at))
+        .where(
+            EventLog.kami_code.in_(kami_codes),
+            EventLog.event_type == event_type,
+        )
+        .group_by(EventLog.kami_code)
+    ).all()
+    return {
+        kami_code: created_at
+        for kami_code, created_at in rows
+        if kami_code and created_at
+    }
 
 
 def _point_source_payload(kami: Kami, source_summaries: dict[str, dict[str, int]]) -> dict:
@@ -2772,7 +2814,7 @@ def _get_spec_or_404(session: Session, spec_id: int) -> KamiSpec:
 
 
 @router.get("/kami-specs", summary="获取卡密规格列表")
-async def list_kami_specs(
+def list_kami_specs(
     app_id: str,
     kami_type: Optional[str] = Query(None, description="卡密类型"),
     spec_group: Optional[str] = Query(None, description="common/custom"),
@@ -2809,7 +2851,7 @@ async def list_kami_specs(
 
 
 @router.post("/kami-specs", summary="创建卡密规格")
-async def create_kami_spec(
+def create_kami_spec(
     payload: KamiSpecCreateRequest,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
@@ -2894,7 +2936,7 @@ async def create_kami_spec(
 
 
 @router.put("/kami-specs/{spec_id}", summary="更新卡密规格")
-async def update_kami_spec(
+def update_kami_spec(
     spec_id: int,
     payload: KamiSpecUpdateRequest,
     current_user: dict = Depends(get_current_user),
@@ -2925,7 +2967,7 @@ async def update_kami_spec(
 
 
 @router.delete("/kami-specs/{spec_id}", summary="删除卡密规格")
-async def delete_kami_spec(
+def delete_kami_spec(
     spec_id: int,
     request: Request,
     payload: Optional[SensitiveConfirmRequest] = None,
@@ -3031,7 +3073,7 @@ async def delete_kami_spec(
 
 
 @router.post("/kami-specs/{spec_id}/generate", summary="按规格生成卡密")
-async def generate_kamis_for_spec(
+def generate_kamis_for_spec(
     spec_id: int,
     payload: KamiSpecGenerateRequest,
     current_user: dict = Depends(get_current_user),
@@ -3085,7 +3127,7 @@ async def generate_kamis_for_spec(
     session.add(batch)
     session.commit()
     session.refresh(batch)
-    result = await batch_create_kamis(
+    result = batch_create_kamis(
         app_id=spec.app_id,
         count=payload.count,
         batch_no=batch.batch_no,
@@ -3103,7 +3145,7 @@ async def generate_kamis_for_spec(
 
 
 @router.get("/kami-specs/{spec_id}/batches", summary="获取规格下批次")
-async def list_kami_spec_batches(
+def list_kami_spec_batches(
     spec_id: int,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
@@ -3128,7 +3170,7 @@ async def list_kami_spec_batches(
 
 
 @router.get("/kami-specs/{spec_id}/kamis", summary="获取规格下卡密")
-async def list_kami_spec_kamis(
+def list_kami_spec_kamis(
     spec_id: int,
     status: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
@@ -3144,9 +3186,14 @@ async def list_kami_spec_kamis(
     now = get_now().replace(tzinfo=None)
     statement = _admin_owned_kami_scope(select(Kami).where(Kami.spec_id == spec.id))
     statement = _apply_kami_status_filter(statement, status, now)
-    all_items = session.exec(statement.order_by(Kami.id.desc())).all()
-    start = (page - 1) * page_size
-    page_items = all_items[start:start + page_size]
+    total = int(session.exec(
+        select(func.count()).select_from(statement.order_by(None).subquery())
+    ).one() or 0)
+    page_items = session.exec(
+        statement.order_by(Kami.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
     page_codes = [kami.kami_code for kami in page_items]
     device_summary_by_code = _kami_device_summary_by_code(session, page_items)
     point_source_by_code = _point_source_summary_by_code(session, page_codes)
@@ -3193,7 +3240,7 @@ async def list_kami_spec_kamis(
                 }
                 for kami in page_items
             ],
-            "total": len(all_items),
+            "total": total,
             "page": page,
             "page_size": page_size,
         },
@@ -3201,7 +3248,7 @@ async def list_kami_spec_kamis(
 
 
 @router.post("/kamis/batches", summary="创建卡密批次")
-async def create_kami_batch(
+def create_kami_batch(
     payload: KamiBatchCreateRequest,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
@@ -3278,7 +3325,7 @@ async def create_kami_batch(
 
 
 @router.put("/kamis/batches/{batch_id}", summary="Update kami batch")
-async def update_kami_batch(
+def update_kami_batch(
     batch_id: int,
     payload: KamiBatchUpdateRequest,
     current_user: dict = Depends(get_current_user),
@@ -3406,7 +3453,7 @@ def _audit_target_user_for_app(session: Session, app_id: str) -> tuple[Optional[
 
 
 @router.delete("/kamis/batches/{batch_id}", summary="Delete kami batch")
-async def delete_kami_batch(
+def delete_kami_batch(
     batch_id: int,
     request: Request,
     confirm_text: Optional[str] = Query(None),
@@ -3475,13 +3522,18 @@ async def delete_kami_batch(
                     session.delete(binding)
                 deleted_device_binding_count += len(bindings)
 
-                related_logs = session.exec(
-                    select(EventLog).where(EventLog.kami_code == kami.kami_code)
-                ).all()
-                for log in related_logs:
-                    log.kami_code = None
-                    session.add(log)
-                detached_event_log_count += len(related_logs)
+                related_log_count = int(
+                    session.exec(
+                        select(func.count(EventLog.id)).where(EventLog.kami_code == kami.kami_code)
+                    ).one()
+                    or 0
+                )
+                session.exec(
+                    update(EventLog)
+                    .where(EventLog.kami_code == kami.kami_code)
+                    .values(kami_code=None)
+                )
+                detached_event_log_count += related_log_count
 
                 session.delete(kami)
                 deleted_kami_count += 1
@@ -3550,7 +3602,7 @@ async def delete_kami_batch(
 
 
 @router.post("/kamis/batch", summary="批量生成卡密")
-async def batch_create_kamis(
+def batch_create_kamis(
     app_id: str,
     kami_type: Optional[str] = Query(None, description="兼容旧参数；实际以批次配置为准"),
     count: int = Query(ge=1, le=1000, description="生成数量"),
@@ -3766,7 +3818,7 @@ async def batch_create_kamis(
 
 
 @router.get("/kamis", summary="获取卡密列表")
-async def list_kamis(
+def list_kamis(
     app_id: str,
     status: Optional[str] = Query(None, description="卡密状态过滤"),
     kami_type: Optional[str] = Query(None, description="卡密类型过滤"),
@@ -3842,19 +3894,7 @@ async def list_kamis(
     kami_codes = [kami.kami_code for kami in kamis]
     device_summary_by_code = _kami_device_summary_by_code(session, kamis)
     point_source_by_code = _point_source_summary_by_code(session, kami_codes)
-    last_consume_at_by_code = {}
-    if kami_codes:
-        consume_logs = session.exec(
-            select(EventLog)
-            .where(
-                EventLog.kami_code.in_(kami_codes),
-                EventLog.event_type == "consume",
-            )
-            .order_by(EventLog.created_at.desc())
-        ).all()
-        for log in consume_logs:
-            if log.kami_code and log.kami_code not in last_consume_at_by_code:
-                last_consume_at_by_code[log.kami_code] = log.created_at
+    last_consume_at_by_code = _latest_event_at_by_kami(session, kami_codes, "consume")
 
     # 统计总数
     count_stmt = _admin_owned_kami_scope(select(Kami).where(Kami.app_id == app_id))
@@ -3878,7 +3918,12 @@ async def list_kamis(
                 Kami.remark.like(keyword_like),
             )
         )
-    total = len(session.exec(count_stmt).all())
+    total = int(
+        session.exec(
+            select(func.count()).select_from(count_stmt.order_by(None).subquery())
+        ).one()
+        or 0
+    )
 
     return {
         "success": True,
@@ -3972,7 +4017,7 @@ async def list_kamis(
 
 
 @router.get("/kamis/batches", summary="获取卡密批次汇总")
-async def list_kami_batches(
+def list_kami_batches(
     app_id: str,
     kami_type: Optional[str] = Query(None, description="卡密类型"),
     current_user: dict = Depends(get_current_user),
@@ -4104,7 +4149,7 @@ async def list_kami_batches(
 
 
 @router.get("/kamis/export", summary="导出卡密 CSV")
-async def export_kamis(
+def export_kamis(
     app_id: str,
     status: Optional[str] = Query(None, description="卡密状态"),
     kami_type: Optional[str] = Query(None, description="卡密类型"),
@@ -4247,7 +4292,7 @@ async def export_kamis(
 
 
 @router.post("/kamis/delete", summary="批量删除卡密")
-async def delete_kamis(
+def delete_kamis(
     payload: DeleteKamisRequest,
     request: Request,
     current_user: dict = Depends(get_current_user),
@@ -4310,12 +4355,17 @@ async def delete_kamis(
         for binding in bindings:
             session.delete(binding)
 
-        related_logs = session.exec(
-            select(EventLog).where(EventLog.kami_code == kami.kami_code)
-        ).all()
-        for log in related_logs:
-            log.kami_code = None
-            session.add(log)
+        related_log_count = int(
+            session.exec(
+                select(func.count(EventLog.id)).where(EventLog.kami_code == kami.kami_code)
+            ).one()
+            or 0
+        )
+        session.exec(
+            update(EventLog)
+            .where(EventLog.kami_code == kami.kami_code)
+            .values(kami_code=None)
+        )
 
         deleted_details.append({
             "kami_code": code,
@@ -4325,7 +4375,7 @@ async def delete_kamis(
             "bind_uuid": kami.bind_uuid,
             "redeemed_by_user_id": kami.redeemed_by_user_id,
             "device_binding_count": len(bindings),
-            "detached_event_log_count": len(related_logs),
+            "detached_event_log_count": related_log_count,
         })
         deleted_codes.append(code)
         session.delete(kami)
@@ -4381,7 +4431,7 @@ async def delete_kamis(
 
 
 @router.put("/kamis/{kami_code}/remark", summary="更新卡密备注")
-async def update_kami_remark(
+def update_kami_remark(
     kami_code: str,
     payload: KamiRemarkUpdateRequest,
     request: Request,
@@ -4427,7 +4477,7 @@ async def update_kami_remark(
 
 
 @router.put("/kamis/{kami_code}/freeze", summary="冻结卡密")
-async def freeze_kami(
+def freeze_kami(
     kami_code: str,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
@@ -4451,7 +4501,7 @@ async def freeze_kami(
 # ==================== 日志查询接口 ====================
 
 @router.get("/logs", summary="查询行为日志")
-async def list_event_logs(
+def list_event_logs(
     app_id: str,
     kami_code: Optional[str] = Query(None, description="卡密代码过滤"),
     event_type: Optional[str] = Query(None, description="事件类型过滤"),
@@ -4612,6 +4662,18 @@ def _fingerprint_from_event_payload(payload_value: Optional[str]) -> Optional[st
     return str(fingerprint) if fingerprint else None
 
 
+def _latest_device_event_logs(session: Session, *conditions) -> list[EventLog]:
+    latest_ids = (
+        select(func.max(EventLog.id).label("event_id"))
+        .where(*conditions)
+        .group_by(EventLog.app_id, EventLog.device_uuid)
+        .subquery()
+    )
+    return session.exec(
+        select(EventLog).join(latest_ids, EventLog.id == latest_ids.c.event_id)
+    ).all()
+
+
 def _historical_device_candidates(
     session: Session,
     app_id: Optional[str],
@@ -4682,13 +4744,13 @@ def _historical_device_candidates(
             last_ip=binding.bind_ip,
         )
 
-    log_statement = select(EventLog).where(
+    log_conditions = [
         EventLog.status == 1,
         EventLog.device_uuid.is_not(None),
-    )
+    ]
     if app_id:
-        log_statement = log_statement.where(EventLog.app_id == app_id)
-    logs = session.exec(log_statement.order_by(EventLog.created_at.desc())).all()
+        log_conditions.append(EventLog.app_id == app_id)
+    logs = _latest_device_event_logs(session, *log_conditions)
     for log in logs:
         add_virtual_device(
             log.app_id,
@@ -4728,7 +4790,7 @@ def _device_payload_matches_keyword(payload: dict, keyword: Optional[str]) -> bo
 
 
 @router.get("/devices", summary="获取设备列表")
-async def list_devices(
+def list_devices(
     app_id: Optional[str] = Query(None, description="应用ID，为空返回全部应用"),
     risk_level: Optional[int] = Query(None, description="风险等级过滤"),
     keyword: Optional[str] = Query(None, description="搜索卡密、设备或应用"),
@@ -4857,24 +4919,38 @@ async def list_devices(
     ip_sets_by_device_key = {(device.app_id, device.uuid): set() for device in all_devices}
     event_user_by_device_key = {}
     if device_uuids:
-        log_statement = select(EventLog).where(EventLog.device_uuid.in_(device_uuids))
+        log_conditions = [EventLog.device_uuid.in_(device_uuids)]
         if selected_app_id:
-            log_statement = log_statement.where(EventLog.app_id == selected_app_id)
-        logs = session.exec(log_statement.order_by(EventLog.created_at.desc())).all()
-        for log in logs:
+            log_conditions.append(EventLog.app_id == selected_app_id)
+        distinct_ip_statement = select(EventLog.app_id, EventLog.device_uuid, EventLog.ip_address).distinct()
+        distinct_ip_statement = distinct_ip_statement.where(
+            *log_conditions,
+            EventLog.ip_address.is_not(None),
+        )
+        for log_app_id, log_device_uuid, ip_address in session.exec(distinct_ip_statement).all():
+            device_key = (log_app_id, log_device_uuid)
+            if device_key in ip_sets_by_device_key and ip_address:
+                ip_sets_by_device_key[device_key].add(ip_address)
+
+        user_log_conditions = [
+            *log_conditions,
+            EventLog.payload.is_not(None),
+            or_(
+                EventLog.payload.like('%"user_id"%'),
+                EventLog.payload.like('%"username"%'),
+            ),
+        ]
+        for log in _latest_device_event_logs(session, *user_log_conditions):
             device_key = (log.app_id, log.device_uuid)
-            if device_key in ip_sets_by_device_key and log.ip_address:
-                ip_sets_by_device_key[device_key].add(log.ip_address)
-            if log.device_uuid and device_key not in event_user_by_device_key and log.payload:
-                try:
-                    payload = json.loads(log.payload)
-                except json.JSONDecodeError:
-                    payload = {}
-                if payload.get("user_id") or payload.get("username"):
-                    event_user_by_device_key[device_key] = {
-                        "user_id": payload.get("user_id"),
-                        "username": payload.get("username"),
-                    }
+            try:
+                payload = json.loads(log.payload or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            if payload.get("user_id") or payload.get("username"):
+                event_user_by_device_key[device_key] = {
+                    "user_id": payload.get("user_id"),
+                    "username": payload.get("username"),
+                }
     for device in all_devices:
         if device.last_ip:
             ip_sets_by_device_key.setdefault((device.app_id, device.uuid), set()).add(device.last_ip)
@@ -4936,7 +5012,7 @@ async def list_devices(
 
 
 @router.put("/devices/{device_id}/risk", summary="更新设备风险等级")
-async def update_device_risk(
+def update_device_risk(
     device_id: int,
     risk_level: int,
     current_user: dict = Depends(get_current_user),
@@ -4979,7 +5055,7 @@ async def update_device_risk(
 # ==================== 登录接口（简化版）====================
 
 @router.get("/login/public-key", summary="获取登录 AES 密钥")
-async def get_login_aes_key():
+def get_login_aes_key():
     """
     获取用于登录加密的 AES 密钥
     前端在登录前调用此接口获取密钥
@@ -5271,7 +5347,7 @@ def _record_login_log(redis_client, log_data: dict):
 
 
 @router.get("/login-logs", summary="获取登录日志")
-async def get_login_logs(
+def get_login_logs(
     limit: int = Query(50, ge=1, le=100, description="返回条数"),
     current_user: dict = Depends(get_current_user),
     redis_client = Depends(get_redis)
@@ -5288,7 +5364,7 @@ async def get_login_logs(
 
 
 @router.get("/event-logs", summary="获取事件日志")
-async def get_event_logs(
+def get_event_logs(
     event_type: Optional[str] = Query(None, description="事件类型过滤"),
     app_id: Optional[str] = Query(None, description="应用ID过滤"),
     status: Optional[int] = Query(None, description="状态过滤：1成功，0失败"),
@@ -5479,7 +5555,7 @@ def _end_user_filter_conditions(
 
 
 @router.get("/end-users/stats", summary="获取普通用户统计")
-async def get_end_user_stats(
+def get_end_user_stats(
     app_id: Optional[str] = Query(None, description="应用 ID"),
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
@@ -5558,7 +5634,7 @@ async def get_end_user_stats(
 
 
 @router.get("/end-users", summary="获取普通用户列表")
-async def list_end_users(
+def list_end_users(
     keyword: Optional[str] = Query(None, description="用户名/邮箱关键字"),
     app_id: Optional[str] = Query(None, description="应用 ID"),
     status: Optional[int] = Query(None, description="状态：1启用，0禁用"),
@@ -5571,7 +5647,7 @@ async def list_end_users(
     _require_admin(current_user)
     admin_app_ids = _require_admin_owned_app_scope(session, app_id)
     statement = select(EndUser)
-    count_statement = select(EndUser)
+    count_statement = select(func.count(EndUser.id))
 
     conditions = _end_user_filter_conditions(
         keyword=keyword,
@@ -5588,7 +5664,7 @@ async def list_end_users(
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
-    total = len(session.exec(count_statement).all())
+    total = int(session.exec(count_statement).one() or 0)
     _backfill_legacy_points_for_users(session, users, app_id)
     user_ids = [user.id for user in users]
     authorization_map = {}
@@ -5642,7 +5718,7 @@ async def list_end_users(
 
 
 @router.get("/end-users/{user_id}/kamis", summary="获取普通用户卡密使用明细")
-async def list_end_user_kamis(
+def list_end_user_kamis(
     user_id: int,
     app_id: Optional[str] = Query(None, description="应用 ID"),
     current_user: dict = Depends(get_current_user),
@@ -5684,16 +5760,7 @@ async def list_end_user_kamis(
     kami_codes = [kami.kami_code for kami in kamis]
     device_summary_by_code = _kami_device_summary_by_code(session, kamis)
     point_source_by_code = _point_source_summary_by_code(session, kami_codes)
-    last_consume_at_by_code = {}
-    if kami_codes:
-        consume_logs = session.exec(
-            select(EventLog)
-            .where(EventLog.kami_code.in_(kami_codes), EventLog.event_type == "consume")
-            .order_by(EventLog.created_at.desc())
-        ).all()
-        for log in consume_logs:
-            if log.kami_code and log.kami_code not in last_consume_at_by_code:
-                last_consume_at_by_code[log.kami_code] = log.created_at
+    last_consume_at_by_code = _latest_event_at_by_kami(session, kami_codes, "consume")
 
     def lot_payload(lot: AuthorizationLot) -> dict:
         return {
@@ -5910,7 +5977,7 @@ async def list_end_user_kamis(
 
 
 @router.post("/end-users/delete", summary="批量硬删除普通用户")
-async def delete_end_users(
+def delete_end_users(
     payload: EndUserDeleteRequest,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
@@ -5987,13 +6054,9 @@ async def delete_end_users(
     user_app_ids.update(kami.app_id for kami in redeemed_kamis if kami.app_id)
 
     kami_bindings = []
-    kami_logs = []
     if kami_codes:
         kami_bindings = session.exec(
             select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code.in_(kami_codes))
-        ).all()
-        kami_logs = session.exec(
-            select(EventLog).where(EventLog.kami_code.in_(kami_codes))
         ).all()
 
     payload_conditions = []
@@ -6012,16 +6075,6 @@ async def delete_end_users(
             EventLog.payload.like(f'%"username": "{safe_username}"%', escape="\\"),
             EventLog.payload.like(f'%"username":"{safe_username}"%', escape="\\"),
         ])
-    payload_logs = session.exec(
-        select(EventLog).where(or_(*payload_conditions))
-    ).all() if payload_conditions else []
-
-    logs_by_id = {
-        log.id: log
-        for log in [*kami_logs, *payload_logs]
-        if log.id is not None
-    }
-
     device_uuids = {
         binding.device_uuid
         for binding in kami_bindings
@@ -6032,21 +6085,48 @@ async def delete_end_users(
         for binding in kami_bindings
         if binding.fingerprint
     }
-    for log in logs_by_id.values():
-        if log.device_uuid:
-            device_uuids.add(log.device_uuid)
-        if log.payload:
-            try:
-                parsed_payload = json.loads(log.payload)
-            except json.JSONDecodeError:
-                parsed_payload = {}
-            if isinstance(parsed_payload, dict):
-                if parsed_payload.get("device_uuid"):
-                    device_uuids.add(str(parsed_payload["device_uuid"]))
-                if parsed_payload.get("uuid"):
-                    device_uuids.add(str(parsed_payload["uuid"]))
-                if parsed_payload.get("fingerprint"):
-                    fingerprints.add(str(parsed_payload["fingerprint"]))
+
+    event_log_conditions = []
+    if kami_codes:
+        event_log_conditions.append(EventLog.kami_code.in_(kami_codes))
+    if payload_conditions:
+        event_log_conditions.append(or_(*payload_conditions))
+
+    deleted_event_logs = 0
+    if event_log_conditions:
+        event_log_filter = or_(*event_log_conditions)
+        while True:
+            log_rows = session.exec(
+                select(EventLog.id, EventLog.device_uuid, EventLog.payload)
+                .where(event_log_filter)
+                .order_by(EventLog.id)
+                .limit(EVENT_LOG_DELETE_BATCH_SIZE)
+            ).all()
+            if not log_rows:
+                break
+
+            log_ids = []
+            for log_id, log_device_uuid, log_payload in log_rows:
+                log_ids.append(log_id)
+                if log_device_uuid:
+                    device_uuids.add(log_device_uuid)
+                if not log_payload:
+                    continue
+                try:
+                    parsed_payload = json.loads(log_payload)
+                except json.JSONDecodeError:
+                    parsed_payload = {}
+                if isinstance(parsed_payload, dict):
+                    if parsed_payload.get("device_uuid"):
+                        device_uuids.add(str(parsed_payload["device_uuid"]))
+                    if parsed_payload.get("uuid"):
+                        device_uuids.add(str(parsed_payload["uuid"]))
+                    if parsed_payload.get("fingerprint"):
+                        fingerprints.add(str(parsed_payload["fingerprint"]))
+
+            session.exec(delete(EventLog).where(EventLog.id.in_(log_ids)))
+            deleted_event_logs += len(log_ids)
+            session.flush()
 
     device_conditions = []
     if device_uuids:
@@ -6076,8 +6156,6 @@ async def delete_end_users(
         if not session.exec(remaining_binding_statement).first():
             devices_to_delete.append(device)
 
-    for log in logs_by_id.values():
-        session.delete(log)
     for binding in kami_bindings:
         session.delete(binding)
     for tx in authorization_transactions:
@@ -6117,7 +6195,7 @@ async def delete_end_users(
         "deleted_kamis": len(redeemed_kamis),
         "deleted_kami_device_bindings": len(kami_bindings),
         "deleted_devices": len(devices_to_delete),
-        "deleted_event_logs": len(logs_by_id),
+        "deleted_event_logs": deleted_event_logs,
     }
     session.commit()
 
@@ -6136,7 +6214,7 @@ async def delete_end_users(
 
 
 @router.get("/end-users/export", summary="导出普通用户 CSV")
-async def export_end_users(
+def export_end_users(
     keyword: Optional[str] = Query(None, description="用户名/邮箱关键字"),
     app_id: Optional[str] = Query(None, description="应用 ID"),
     status: Optional[int] = Query(None, description="状态：1启用，0禁用"),
@@ -6207,7 +6285,7 @@ async def export_end_users(
 
 
 @router.put("/end-users/{user_id}/password", summary="重置普通用户密码")
-async def reset_end_user_password(
+def reset_end_user_password(
     user_id: int,
     payload: EndUserPasswordResetRequest,
     current_user: dict = Depends(get_current_user),
@@ -6226,7 +6304,7 @@ async def reset_end_user_password(
 
 
 @router.put("/end-users/{user_id}/status", summary="更新普通用户状态")
-async def update_end_user_status(
+def update_end_user_status(
     user_id: int,
     status: int,
     current_user: dict = Depends(get_current_user),
@@ -6247,7 +6325,7 @@ async def update_end_user_status(
 
 
 @router.post("/authorizations/grant", summary="管理员分配用户授权")
-async def grant_user_authorization(
+def grant_user_authorization(
     payload: AuthorizationGrantRequest,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
@@ -6368,7 +6446,7 @@ async def grant_user_authorization(
 
 
 @router.get("/points/accounts", summary="获取积分账户列表")
-async def list_point_accounts(
+def list_point_accounts(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
@@ -6376,7 +6454,7 @@ async def list_point_accounts(
 ):
     """获取积分账户列表"""
     _require_admin(current_user)
-    all_accounts = session.exec(select(UserPointAccount)).all()
+    total = int(session.exec(select(func.count(UserPointAccount.id))).one() or 0)
     accounts = session.exec(
         select(UserPointAccount)
         .order_by(UserPointAccount.updated_at.desc())
@@ -6390,7 +6468,7 @@ async def list_point_accounts(
     return {
         "success": True,
         "data": {
-            "total": len(all_accounts),
+            "total": total,
             "page": page,
             "page_size": page_size,
             "items": [
@@ -6411,7 +6489,7 @@ async def list_point_accounts(
 
 
 @router.get("/points/lots", summary="获取积分批次明细")
-async def list_point_lots(
+def list_point_lots(
     user_id: Optional[int] = Query(None),
     only_available: bool = Query(False, description="仅查看仍有剩余积分的批次"),
     page: int = Query(1, ge=1),
@@ -6422,7 +6500,7 @@ async def list_point_lots(
     """查看用户积分批次、剩余积分和到期时间。"""
     _require_admin(current_user)
     statement = select(UserPointLot)
-    count_statement = select(UserPointLot)
+    count_statement = select(func.count(UserPointLot.id))
     conditions = []
     if user_id is not None:
         conditions.append(UserPointLot.user_id == user_id)
@@ -6432,7 +6510,7 @@ async def list_point_lots(
         statement = statement.where(*conditions)
         count_statement = count_statement.where(*conditions)
 
-    total = len(session.exec(count_statement).all())
+    total = int(session.exec(count_statement).one() or 0)
     lots = session.exec(
         statement.order_by(UserPointLot.id.desc())
         .offset((page - 1) * page_size)
@@ -6469,7 +6547,7 @@ async def list_point_lots(
 
 
 @router.get("/points/transactions/export", summary="导出积分流水 CSV")
-async def export_point_transactions(
+def export_point_transactions(
     user_id: Optional[int] = Query(None),
     transaction_type: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
@@ -6538,7 +6616,7 @@ async def export_point_transactions(
 
 
 @router.get("/points/transactions", summary="获取积分流水")
-async def list_point_transactions(
+def list_point_transactions(
     user_id: Optional[int] = Query(None),
     transaction_type: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
@@ -6549,7 +6627,7 @@ async def list_point_transactions(
     """获取积分流水列表"""
     _require_admin(current_user)
     statement = select(PointTransaction)
-    count_statement = select(PointTransaction)
+    count_statement = select(func.count(PointTransaction.id))
     conditions = []
     if user_id is not None:
         conditions.append(PointTransaction.user_id == user_id)
@@ -6562,7 +6640,7 @@ async def list_point_transactions(
         statement = statement.where(*conditions)
         count_statement = count_statement.where(*conditions)
 
-    total = len(session.exec(count_statement).all())
+    total = int(session.exec(count_statement).one() or 0)
     transactions = session.exec(
         statement.order_by(PointTransaction.id.desc())
         .offset((page - 1) * page_size)
@@ -6603,7 +6681,7 @@ async def list_point_transactions(
 
 
 @router.post("/points/adjust", summary="管理员调整积分")
-async def admin_adjust_points(
+def admin_adjust_points(
     payload: PointAdjustRequest,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
@@ -6631,7 +6709,7 @@ async def admin_adjust_points(
 
 
 @router.post("/points/refund", summary="管理员退款返还积分")
-async def admin_refund_points(
+def admin_refund_points(
     payload: PointRefundRequest,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
@@ -6663,7 +6741,7 @@ async def admin_refund_points(
 # ==================== 管理员账号管理 ====================
 
 @router.get("/users", summary="获取管理员列表")
-async def list_admin_users(
+def list_admin_users(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
@@ -6692,7 +6770,7 @@ async def list_admin_users(
 
 
 @router.post("/users", summary="创建管理员账号")
-async def create_admin_user(
+def create_admin_user(
     username: str,
     password: str,
     email: Optional[str] = None,
@@ -6745,7 +6823,7 @@ async def create_admin_user(
 
 
 @router.put("/users/{user_id}", summary="更新管理员账号")
-async def update_admin_user(
+def update_admin_user(
     user_id: int,
     email: Optional[str] = None,
     phone: Optional[str] = None,
@@ -6802,7 +6880,7 @@ async def update_admin_user(
 
 
 @router.put("/users/{user_id}/password", summary="重置密码")
-async def reset_password(
+def reset_password(
     user_id: int,
     new_password: str,
     current_user: dict = Depends(get_current_user),
@@ -6839,7 +6917,7 @@ async def reset_password(
 
 
 @router.delete("/users/{user_id}", summary="删除管理员账号")
-async def delete_admin_user(
+def delete_admin_user(
     user_id: int,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session)

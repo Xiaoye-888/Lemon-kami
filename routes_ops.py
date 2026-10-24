@@ -46,7 +46,7 @@ def _require_admin(current_user: dict) -> None:
 
 
 @router.get("/health", summary="Admin ops health")
-async def get_ops_health(
+def get_ops_health(
     current_user: dict = Depends(get_current_admin),
     session: Session = Depends(get_session),
 ):
@@ -56,7 +56,7 @@ async def get_ops_health(
 
 
 @router.get("/backups", summary="List ops backups")
-async def get_ops_backups(
+def get_ops_backups(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: dict = Depends(get_current_admin),
@@ -68,7 +68,7 @@ async def get_ops_backups(
 
 
 @router.post("/backups", summary="Create ops backup")
-async def create_ops_backup(
+def create_ops_backup(
     payload: OpsBackupCreateRequest,
     request: Request,
     current_user: dict = Depends(get_current_admin),
@@ -112,7 +112,7 @@ async def create_ops_backup(
 
 
 @router.post("/backups/{backup_no}/download", summary="Download ops backup")
-async def download_ops_backup(
+def download_ops_backup(
     backup_no: str,
     payload: OpsBackupDownloadRequest,
     request: Request,
@@ -151,7 +151,7 @@ async def download_ops_backup(
 
 
 @router.post("/uploads/proofs/cleanup", summary="Clean old recharge proof files")
-async def cleanup_proof_uploads(
+def cleanup_proof_uploads(
     payload: OpsProofCleanupRequest,
     request: Request,
     current_user: dict = Depends(get_current_admin),
@@ -196,7 +196,7 @@ async def cleanup_proof_uploads(
 
 
 @router.get("/logs/recent-errors", summary="Read recent application errors")
-async def get_recent_errors(
+def get_recent_errors(
     max_lines: int = Query(settings.OPS_RECENT_LOG_LINES, ge=1, le=2000),
     current_user: dict = Depends(get_current_admin),
 ):

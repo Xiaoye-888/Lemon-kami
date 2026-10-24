@@ -3,7 +3,7 @@ from typing import Optional, List
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from enum import Enum
-from sqlalchemy import Column, ForeignKey, String, Text, TypeDecorator, UniqueConstraint
+from sqlalchemy import Column, ForeignKey, Index, String, Text, TypeDecorator, UniqueConstraint
 
 # 中国时区
 CST = ZoneInfo("Asia/Shanghai")
@@ -770,6 +770,13 @@ class DeviceIpRisk(SQLModel, table=True):
 
 class EventLog(SQLModel, table=True):
     __tablename__ = "event_logs"
+    __table_args__ = (
+        Index("idx_event_logs_app_created", "app_id", "created_at"),
+        Index("idx_event_logs_event_created", "event_type", "created_at"),
+        Index("idx_event_logs_status_created", "status", "created_at"),
+        Index("idx_event_logs_app_device_created", "app_id", "device_uuid", "created_at"),
+        Index("idx_event_logs_device_created", "device_uuid", "created_at"),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     app_id: Optional[str] = Field(default=None, max_length=64, index=True, description="所属应用ID（管理员登录为None）")

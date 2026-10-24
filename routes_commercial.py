@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field as PydanticField
-from sqlalchemy import or_
+from sqlalchemy import case, func, or_
 from sqlmodel import Session, select
 
 import routes_admin
@@ -236,7 +236,7 @@ def _usage_user_payload(user: EndUser, app_name_by_id: dict[str, str]) -> dict:
 
 
 @public_router.get("/payment-qrcodes/{filename}", summary="Get payment QR code")
-async def get_payment_qrcode(filename: str):
+def get_payment_qrcode(filename: str):
     try:
         path = payment_qrcode_file_path(filename)
     except ValueError:
@@ -247,7 +247,7 @@ async def get_payment_qrcode(filename: str):
 
 
 @router.get("/merchants", summary="List merchant/card issuer users")
-async def list_merchants(
+def list_merchants(
     keyword: Optional[str] = Query(None),
     status: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
@@ -257,7 +257,7 @@ async def list_merchants(
 ):
     _require_admin(current_user)
     statement = select(EndUser).where(EndUser.app_id.is_(None))
-    count_statement = select(EndUser).where(EndUser.app_id.is_(None))
+    count_statement = select(func.count(EndUser.id)).where(EndUser.app_id.is_(None))
     conditions = []
     if keyword:
         conditions.append(or_(EndUser.username.contains(keyword), EndUser.email.contains(keyword)))
@@ -272,7 +272,7 @@ async def list_merchants(
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
-    total = len(session.exec(count_statement).all())
+    total = int(session.exec(count_statement).one() or 0)
     user_ids = [user.id for user in merchants if user.id is not None]
     accounts = session.exec(
         select(UserQuotaAccount).where(UserQuotaAccount.user_id.in_(user_ids))
@@ -293,7 +293,7 @@ async def list_merchants(
 
 
 @router.get("/merchants/{merchant_id}/detail", summary="Get merchant/card issuer detail")
-async def get_merchant_detail(
+def get_merchant_detail(
     merchant_id: int,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
@@ -394,7 +394,7 @@ def _merchant_batch_apps(session: Session, merchant: EndUser) -> list[dict]:
 
 
 @router.get("/merchants/{merchant_id}/batch-apps", summary="List batch-manageable apps for a merchant")
-async def list_admin_scoped_merchant_batch_apps(
+def list_admin_scoped_merchant_batch_apps(
     merchant_id: int,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
@@ -405,7 +405,7 @@ async def list_admin_scoped_merchant_batch_apps(
 
 
 @router.delete("/merchants/{merchant_id}/apps/{app_id}", summary="Delete merchant self-owned app as admin")
-async def delete_admin_scoped_merchant_app(
+def delete_admin_scoped_merchant_app(
     merchant_id: int,
     app_id: str,
     request: Request,
@@ -440,7 +440,7 @@ async def delete_admin_scoped_merchant_app(
         raise HTTPException(status_code=404, detail="Merchant app not found")
 
     request.state.skip_delete_app_confirmation = True
-    return await routes_admin.delete_app(
+    return routes_admin.delete_app(
         app_id=app_id,
         request=request,
         payload=None,
@@ -451,7 +451,7 @@ async def delete_admin_scoped_merchant_app(
 
 
 @router.put("/merchants/{merchant_id}/apps/{app_id}", summary="Rename merchant self-owned app as admin")
-async def update_admin_scoped_merchant_app(
+def update_admin_scoped_merchant_app(
     merchant_id: int,
     app_id: str,
     payload: routes_merchant.MerchantAppUpdateRequest,
@@ -459,7 +459,7 @@ async def update_admin_scoped_merchant_app(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.update_merchant_app(
+    return routes_merchant.update_merchant_app(
         app_id=app_id,
         payload=payload,
         current_user=merchant,
@@ -468,17 +468,17 @@ async def update_admin_scoped_merchant_app(
 
 
 @router.get("/merchants/{merchant_id}/quotas", summary="Get merchant quota as admin")
-async def get_admin_scoped_merchant_quotas(
+def get_admin_scoped_merchant_quotas(
     merchant_id: int,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.get_merchant_quotas(current_user=merchant, session=session)
+    return routes_merchant.get_merchant_quotas(current_user=merchant, session=session)
 
 
 @router.get("/merchants/{merchant_id}/apps/{app_id}/specs", summary="List merchant app specs as admin")
-async def list_admin_scoped_merchant_app_specs(
+def list_admin_scoped_merchant_app_specs(
     merchant_id: int,
     app_id: str,
     kami_type: Optional[str] = Query(None),
@@ -488,7 +488,7 @@ async def list_admin_scoped_merchant_app_specs(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.list_merchant_app_specs(
+    return routes_merchant.list_merchant_app_specs(
         app_id,
         kami_type=kami_type,
         spec_group=spec_group,
@@ -499,7 +499,7 @@ async def list_admin_scoped_merchant_app_specs(
 
 
 @router.post("/merchants/{merchant_id}/apps/{app_id}/specs", summary="Create merchant app spec as admin")
-async def create_admin_scoped_merchant_app_spec(
+def create_admin_scoped_merchant_app_spec(
     merchant_id: int,
     app_id: str,
     payload: routes_merchant.MerchantSpecCreateRequest,
@@ -507,11 +507,11 @@ async def create_admin_scoped_merchant_app_spec(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.create_merchant_app_spec(app_id, payload, current_user=merchant, session=session)
+    return routes_merchant.create_merchant_app_spec(app_id, payload, current_user=merchant, session=session)
 
 
 @router.put("/merchants/{merchant_id}/apps/{app_id}/specs/{spec_id}", summary="Update merchant app spec as admin")
-async def update_admin_scoped_merchant_app_spec(
+def update_admin_scoped_merchant_app_spec(
     merchant_id: int,
     app_id: str,
     spec_id: int,
@@ -520,11 +520,11 @@ async def update_admin_scoped_merchant_app_spec(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.update_merchant_app_spec(app_id, spec_id, payload, current_user=merchant, session=session)
+    return routes_merchant.update_merchant_app_spec(app_id, spec_id, payload, current_user=merchant, session=session)
 
 
 @router.delete("/merchants/{merchant_id}/apps/{app_id}/specs/{spec_id}", summary="Delete merchant app spec as admin")
-async def delete_admin_scoped_merchant_app_spec(
+def delete_admin_scoped_merchant_app_spec(
     merchant_id: int,
     app_id: str,
     spec_id: int,
@@ -532,11 +532,11 @@ async def delete_admin_scoped_merchant_app_spec(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.delete_merchant_app_spec(app_id, spec_id, current_user=merchant, session=session)
+    return routes_merchant.delete_merchant_app_spec(app_id, spec_id, current_user=merchant, session=session)
 
 
 @router.post("/merchants/{merchant_id}/apps/{app_id}/kamis/preview", summary="Preview merchant kami issue as admin")
-async def preview_admin_scoped_merchant_kamis(
+def preview_admin_scoped_merchant_kamis(
     merchant_id: int,
     app_id: str,
     payload: routes_merchant.MerchantKamiIssueRequest,
@@ -544,11 +544,11 @@ async def preview_admin_scoped_merchant_kamis(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.preview_merchant_kamis(app_id, payload, current_user=merchant, session=session)
+    return routes_merchant.preview_merchant_kamis(app_id, payload, current_user=merchant, session=session)
 
 
 @router.post("/merchants/{merchant_id}/apps/{app_id}/kamis/batch", summary="Issue merchant kamis as admin")
-async def issue_admin_scoped_merchant_kamis(
+def issue_admin_scoped_merchant_kamis(
     merchant_id: int,
     app_id: str,
     payload: routes_merchant.MerchantKamiIssueRequest,
@@ -556,22 +556,22 @@ async def issue_admin_scoped_merchant_kamis(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.issue_merchant_kamis(app_id, payload, current_user=merchant, session=session)
+    return routes_merchant.issue_merchant_kamis(app_id, payload, current_user=merchant, session=session)
 
 
 @router.get("/merchants/{merchant_id}/apps/{app_id}/batches", summary="List merchant batches as admin")
-async def list_admin_scoped_merchant_batches(
+def list_admin_scoped_merchant_batches(
     merchant_id: int,
     app_id: str,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.list_merchant_batches(app_id, current_user=merchant, session=session)
+    return routes_merchant.list_merchant_batches(app_id, current_user=merchant, session=session)
 
 
 @router.get("/merchants/{merchant_id}/kamis/export", summary="Export merchant kamis as admin")
-async def export_admin_scoped_merchant_kamis(
+def export_admin_scoped_merchant_kamis(
     merchant_id: int,
     app_id: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
@@ -582,7 +582,7 @@ async def export_admin_scoped_merchant_kamis(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.export_merchant_kamis(
+    return routes_merchant.export_merchant_kamis(
         app_id=app_id,
         keyword=keyword,
         status=status,
@@ -594,7 +594,7 @@ async def export_admin_scoped_merchant_kamis(
 
 
 @router.get("/merchants/{merchant_id}/kamis", summary="List merchant kamis as admin")
-async def list_admin_scoped_merchant_kamis(
+def list_admin_scoped_merchant_kamis(
     merchant_id: int,
     app_id: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
@@ -607,7 +607,7 @@ async def list_admin_scoped_merchant_kamis(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.list_merchant_global_kamis(
+    return routes_merchant.list_merchant_global_kamis(
         app_id=app_id,
         keyword=keyword,
         status=status,
@@ -621,14 +621,14 @@ async def list_admin_scoped_merchant_kamis(
 
 
 @router.post("/merchants/{merchant_id}/kamis/delete", summary="Delete merchant kamis as admin")
-async def delete_admin_scoped_merchant_kamis(
+def delete_admin_scoped_merchant_kamis(
     merchant_id: int,
     payload: routes_merchant.MerchantKamiDeleteRequest,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    result = await routes_merchant.delete_merchant_kamis(payload, current_user=merchant, session=session)
+    result = routes_merchant.delete_merchant_kamis(payload, current_user=merchant, session=session)
     deleted_codes = (result.get("data") or {}).get("deleted_codes") or []
     if deleted_codes:
         admin_username = current_user.get("sub") or current_user.get("username")
@@ -661,7 +661,7 @@ async def delete_admin_scoped_merchant_kamis(
 
 
 @router.put("/merchants/{merchant_id}/kamis/{kami_code}/remark", summary="Update merchant kami remark as admin")
-async def update_admin_scoped_merchant_kami_remark(
+def update_admin_scoped_merchant_kami_remark(
     merchant_id: int,
     kami_code: str,
     payload: routes_merchant.MerchantKamiRemarkUpdateRequest,
@@ -669,7 +669,7 @@ async def update_admin_scoped_merchant_kami_remark(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.update_merchant_kami_remark(
+    return routes_merchant.update_merchant_kami_remark(
         kami_code,
         payload,
         current_user=merchant,
@@ -678,18 +678,18 @@ async def update_admin_scoped_merchant_kami_remark(
 
 
 @router.get("/merchants/{merchant_id}/kami-specs/{spec_id}/batches", summary="List merchant spec batches as admin")
-async def list_admin_scoped_merchant_spec_batches(
+def list_admin_scoped_merchant_spec_batches(
     merchant_id: int,
     spec_id: int,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.list_merchant_spec_batches(spec_id, current_user=merchant, session=session)
+    return routes_merchant.list_merchant_spec_batches(spec_id, current_user=merchant, session=session)
 
 
 @router.get("/merchants/{merchant_id}/kami-specs/{spec_id}/kamis", summary="List merchant spec kamis as admin")
-async def list_admin_scoped_merchant_spec_kamis(
+def list_admin_scoped_merchant_spec_kamis(
     merchant_id: int,
     spec_id: int,
     keyword: Optional[str] = Query(None),
@@ -701,7 +701,7 @@ async def list_admin_scoped_merchant_spec_kamis(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.list_merchant_spec_kamis(
+    return routes_merchant.list_merchant_spec_kamis(
         spec_id,
         keyword=keyword,
         status=status,
@@ -714,7 +714,7 @@ async def list_admin_scoped_merchant_spec_kamis(
 
 
 @router.get("/merchants/{merchant_id}/batches/{batch_id}/kamis", summary="List merchant batch kamis as admin")
-async def list_admin_scoped_merchant_batch_kamis(
+def list_admin_scoped_merchant_batch_kamis(
     merchant_id: int,
     batch_id: int,
     keyword: Optional[str] = Query(None),
@@ -725,7 +725,7 @@ async def list_admin_scoped_merchant_batch_kamis(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.list_merchant_batch_kamis(
+    return routes_merchant.list_merchant_batch_kamis(
         batch_id,
         keyword=keyword,
         status=status,
@@ -737,7 +737,7 @@ async def list_admin_scoped_merchant_batch_kamis(
 
 
 @router.put("/merchants/{merchant_id}/batches/{batch_id}", summary="Update merchant batch as admin")
-async def update_admin_scoped_merchant_batch(
+def update_admin_scoped_merchant_batch(
     merchant_id: int,
     batch_id: int,
     payload: routes_merchant.MerchantBatchUpdateRequest,
@@ -745,22 +745,22 @@ async def update_admin_scoped_merchant_batch(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.update_merchant_batch(batch_id, payload, current_user=merchant, session=session)
+    return routes_merchant.update_merchant_batch(batch_id, payload, current_user=merchant, session=session)
 
 
 @router.delete("/merchants/{merchant_id}/batches/{batch_id}", summary="Delete merchant batch as admin")
-async def delete_admin_scoped_merchant_batch(
+def delete_admin_scoped_merchant_batch(
     merchant_id: int,
     batch_id: int,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.delete_merchant_batch(batch_id, current_user=merchant, session=session)
+    return routes_merchant.delete_merchant_batch(batch_id, current_user=merchant, session=session)
 
 
 @router.post("/merchants/{merchant_id}/batches/{batch_id}/append", summary="Append merchant batch as admin")
-async def append_admin_scoped_merchant_batch_kamis(
+def append_admin_scoped_merchant_batch_kamis(
     merchant_id: int,
     batch_id: int,
     payload: routes_merchant.MerchantBatchAppendRequest,
@@ -768,32 +768,50 @@ async def append_admin_scoped_merchant_batch_kamis(
     session: Session = Depends(get_session),
 ):
     merchant = _get_admin_scoped_merchant_or_404(session, merchant_id, current_user)
-    return await routes_merchant.append_merchant_batch_kamis(batch_id, payload, current_user=merchant, session=session)
+    return routes_merchant.append_merchant_batch_kamis(batch_id, payload, current_user=merchant, session=session)
 
 
 @router.get("/overview", summary="Commercial operations overview")
-async def commercial_overview(
+def commercial_overview(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     _require_admin(current_user)
-    orders = session.exec(select(RechargeOrder)).all()
-    pending = [order for order in orders if order.status == RechargeOrderStatus.pending_review]
-    approved = [order for order in orders if order.status == RechargeOrderStatus.approved]
+    (
+        orders_total,
+        orders_pending_review,
+        orders_approved,
+        approved_amount_cents,
+        credited_issue_quota,
+    ) = session.exec(
+        select(
+            func.count(RechargeOrder.id),
+            func.coalesce(func.sum(case((RechargeOrder.status == RechargeOrderStatus.pending_review, 1), else_=0)), 0),
+            func.coalesce(func.sum(case((RechargeOrder.status == RechargeOrderStatus.approved, 1), else_=0)), 0),
+            func.coalesce(
+                func.sum(case((RechargeOrder.status == RechargeOrderStatus.approved, RechargeOrder.amount_cents), else_=0)),
+                0,
+            ),
+            func.coalesce(
+                func.sum(case((RechargeOrder.status == RechargeOrderStatus.approved, RechargeOrder.credit_quota), else_=0)),
+                0,
+            ),
+        )
+    ).one()
     return {
         "success": True,
         "data": {
-            "orders_total": len(orders),
-            "orders_pending_review": len(pending),
-            "orders_approved": len(approved),
-            "approved_amount": sum(order.amount_cents for order in approved) // 100,
-            "credited_issue_quota": sum(order.credit_quota for order in approved),
+            "orders_total": int(orders_total or 0),
+            "orders_pending_review": int(orders_pending_review or 0),
+            "orders_approved": int(orders_approved or 0),
+            "approved_amount": int(approved_amount_cents or 0) // 100,
+            "credited_issue_quota": int(credited_issue_quota or 0),
         },
     }
 
 
 @router.get("/recharge-config", summary="Get recharge configuration")
-async def get_recharge_config(
+def get_recharge_config(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -802,7 +820,7 @@ async def get_recharge_config(
 
 
 @router.get("/issue-pricing/rules", summary="List issue quota pricing rules")
-async def get_issue_pricing_rules(
+def get_issue_pricing_rules(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -817,7 +835,7 @@ async def get_issue_pricing_rules(
 
 
 @router.post("/issue-pricing/rules", summary="Create or update issue quota pricing rule")
-async def save_issue_pricing_rule(
+def save_issue_pricing_rule(
     payload: IssuePricingRuleRequest,
     request: Request,
     current_user: dict = Depends(get_current_user),
@@ -865,7 +883,7 @@ async def save_issue_pricing_rule(
 
 
 @router.delete("/issue-pricing/rules/{rule_id}", summary="Delete issue quota pricing rule")
-async def delete_issue_pricing_rule(
+def delete_issue_pricing_rule(
     rule_id: int,
     payload: OrderReviewRequest,
     request: Request,
@@ -906,7 +924,7 @@ async def delete_issue_pricing_rule(
 
 
 @router.get("/payment-channels", summary="List payment channels")
-async def list_payment_channels_route(
+def list_payment_channels_route(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -915,7 +933,7 @@ async def list_payment_channels_route(
 
 
 @router.post("/payment-channels", summary="Create or update payment channel")
-async def save_payment_channel(
+def save_payment_channel(
     payload: PaymentChannelRequest,
     request: Request,
     current_user: dict = Depends(get_current_user),
@@ -1064,7 +1082,7 @@ async def save_payment_channel_with_upload(
 
 
 @router.delete("/payment-channels/{channel}/qrcode", summary="Delete payment channel QR code")
-async def delete_payment_channel_qrcode(
+def delete_payment_channel_qrcode(
     channel: str,
     request: Request,
     confirm_text: Optional[str] = Query(None),
@@ -1118,7 +1136,7 @@ async def delete_payment_channel_qrcode(
 
 
 @router.post("/recharge-options", summary="Create or update fixed recharge option")
-async def save_recharge_option(
+def save_recharge_option(
     payload: RechargeOptionRequest,
     request: Request,
     current_user: dict = Depends(get_current_user),
@@ -1167,7 +1185,7 @@ async def save_recharge_option(
 
 
 @router.delete("/recharge-options/{option_id}", summary="Delete or archive fixed recharge option")
-async def delete_recharge_option(
+def delete_recharge_option(
     option_id: int,
     request: Request,
     confirm_text: Optional[str] = Query(None),
@@ -1220,7 +1238,7 @@ async def delete_recharge_option(
 
 
 @router.post("/recharge-bonus-rules", summary="Create custom amount bonus rule")
-async def save_bonus_rule(
+def save_bonus_rule(
     payload: BonusRuleRequest,
     request: Request,
     current_user: dict = Depends(get_current_user),
@@ -1269,7 +1287,7 @@ async def save_bonus_rule(
 
 
 @router.delete("/recharge-bonus-rules/{rule_id}", summary="Delete or archive custom recharge bonus rule")
-async def delete_bonus_rule(
+def delete_bonus_rule(
     rule_id: int,
     request: Request,
     confirm_text: Optional[str] = Query(None),
@@ -1322,7 +1340,7 @@ async def delete_bonus_rule(
 
 
 @router.post("/recharge-preview", summary="Preview recharge crediting")
-async def preview_recharge_as_admin(
+def preview_recharge_as_admin(
     amount: int | float | str,
     mode: str = "custom",
     option_id: Optional[int] = None,
@@ -1338,7 +1356,7 @@ async def preview_recharge_as_admin(
 
 
 @router.get("/audit-logs", summary="List admin audit logs")
-async def list_admin_audit_logs(
+def list_admin_audit_logs(
     action: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
@@ -1349,7 +1367,7 @@ async def list_admin_audit_logs(
 ):
     _require_admin(current_user)
     statement = select(AdminAuditLog)
-    count_statement = select(AdminAuditLog)
+    count_statement = select(func.count(AdminAuditLog.id))
     conditions = []
     if action:
         conditions.append(AdminAuditLog.action == action)
@@ -1367,7 +1385,7 @@ async def list_admin_audit_logs(
     if conditions:
         statement = statement.where(*conditions)
         count_statement = count_statement.where(*conditions)
-    total = len(session.exec(count_statement).all())
+    total = int(session.exec(count_statement).one() or 0)
     logs = session.exec(
         statement.order_by(AdminAuditLog.id.desc())
         .offset((page - 1) * page_size)
@@ -1386,7 +1404,7 @@ async def list_admin_audit_logs(
 
 
 @router.get("/recharge-orders", summary="List recharge orders")
-async def list_recharge_orders(
+def list_recharge_orders(
     status: Optional[str] = Query(None),
     user_id: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
@@ -1396,7 +1414,7 @@ async def list_recharge_orders(
 ):
     _require_admin(current_user)
     statement = select(RechargeOrder)
-    count_statement = select(RechargeOrder)
+    count_statement = select(func.count(RechargeOrder.id))
     conditions = []
     if status:
         try:
@@ -1408,7 +1426,7 @@ async def list_recharge_orders(
     if conditions:
         statement = statement.where(*conditions)
         count_statement = count_statement.where(*conditions)
-    total = len(session.exec(count_statement).all())
+    total = int(session.exec(count_statement).one() or 0)
     orders = session.exec(
         statement.order_by(RechargeOrder.id.desc())
         .offset((page - 1) * page_size)
@@ -1426,7 +1444,7 @@ async def list_recharge_orders(
 
 
 @router.get("/finance/summary", summary="Commercial finance summary")
-async def finance_summary(
+def finance_summary(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
@@ -1441,7 +1459,7 @@ async def finance_summary(
 
 
 @router.get("/finance/merchant-ranking", summary="Commercial merchant recharge ranking")
-async def finance_merchant_ranking(
+def finance_merchant_ranking(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
@@ -1457,7 +1475,7 @@ async def finance_merchant_ranking(
 
 
 @router.get("/recharge-orders/export", summary="Export recharge orders CSV")
-async def export_recharge_orders(
+def export_recharge_orders(
     status: Optional[str] = Query(None),
     username: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
@@ -1484,7 +1502,7 @@ async def export_recharge_orders(
 
 
 @router.get("/recharge-orders/{order_no}", summary="Get recharge order detail")
-async def get_recharge_order(
+def get_recharge_order(
     order_no: str,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
@@ -1495,7 +1513,7 @@ async def get_recharge_order(
 
 
 @router.post("/recharge-proofs/cleanup", summary="Clean old terminal recharge proof files")
-async def cleanup_old_recharge_proofs(
+def cleanup_old_recharge_proofs(
     payload: RechargeProofCleanupRequest,
     request: Request,
     current_user: dict = Depends(get_current_user),
@@ -1552,7 +1570,7 @@ async def cleanup_old_recharge_proofs(
 
 
 @router.get("/recharge-orders/{order_no}/proof", summary="Get recharge proof image")
-async def get_recharge_order_proof(
+def get_recharge_order_proof(
     order_no: str,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_session),
@@ -1565,7 +1583,7 @@ async def get_recharge_order_proof(
 
 
 @router.post("/recharge-orders/{order_no}/approve", summary="Approve recharge order")
-async def approve_order(
+def approve_order(
     order_no: str,
     payload: OrderReviewRequest,
     request: Request,
@@ -1636,7 +1654,7 @@ async def approve_order(
 
 
 @router.post("/recharge-orders/{order_no}/reject", summary="Reject recharge order")
-async def reject_order(
+def reject_order(
     order_no: str,
     payload: OrderReviewRequest,
     request: Request,
@@ -1697,7 +1715,7 @@ async def reject_order(
 
 
 @router.post("/recharge-orders/{order_no}/expire", summary="Expire recharge order")
-async def expire_order(
+def expire_order(
     order_no: str,
     payload: OrderReviewRequest,
     request: Request,
@@ -1763,7 +1781,7 @@ async def expire_order(
 
 
 @router.post("/recharge-orders/{order_no}/abnormal", summary="Mark recharge order abnormal")
-async def mark_order_abnormal(
+def mark_order_abnormal(
     order_no: str,
     payload: OrderReviewRequest,
     request: Request,
@@ -1823,7 +1841,7 @@ async def mark_order_abnormal(
 
 
 @router.get("/quota-transactions/export", summary="Export issue quota transactions CSV")
-async def export_quota_transactions(
+def export_quota_transactions(
     username: Optional[str] = Query(None),
     transaction_type: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
@@ -1850,7 +1868,7 @@ async def export_quota_transactions(
 
 
 @router.get("/quota-transactions", summary="List issue quota transactions")
-async def list_quota_transactions(
+def list_quota_transactions(
     user_id: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),

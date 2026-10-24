@@ -1,14 +1,18 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '../router'
+import {
+  DEFAULT_REQUEST_RETRIES,
+  DEFAULT_REQUEST_RETRY_DELAY_MS,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  isRetryableRequestError
+} from './requestPolicy'
 
 // 从环境变量获取 API 配置
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
-const REQUEST_TIMEOUT = parseInt(import.meta.env.VITE_REQUEST_TIMEOUT) || 20000
-const REQUEST_RETRIES = parseInt(import.meta.env.VITE_REQUEST_RETRIES) || 1
-const REQUEST_RETRY_DELAY = parseInt(import.meta.env.VITE_REQUEST_RETRY_DELAY) || 350
-const retryableMethods = new Set(['get', 'head', 'options'])
-const retryableStatusCodes = new Set([502, 503, 504])
+const REQUEST_TIMEOUT = parseInt(import.meta.env.VITE_REQUEST_TIMEOUT) || DEFAULT_REQUEST_TIMEOUT_MS
+const REQUEST_RETRIES = parseInt(import.meta.env.VITE_REQUEST_RETRIES) || DEFAULT_REQUEST_RETRIES
+const REQUEST_RETRY_DELAY = parseInt(import.meta.env.VITE_REQUEST_RETRY_DELAY) || DEFAULT_REQUEST_RETRY_DELAY_MS
 const authEndpoints = new Set(['/auth/login', '/auth/register'])
 
 const waitForRetry = () => new Promise(resolve => setTimeout(resolve, REQUEST_RETRY_DELAY))
@@ -16,22 +20,6 @@ const waitForRetry = () => new Promise(resolve => setTimeout(resolve, REQUEST_RE
 function isAuthRequest(config) {
   const url = String(config?.url || '').split('?')[0]
   return authEndpoints.has(url)
-}
-
-function isRetryableRequestError(error) {
-  if (!error.config) {
-    return false
-  }
-
-  const config = error.config
-  const method = String(config.method || 'get').toLowerCase()
-
-  if (error.code === 'ERR_CANCELED' || !retryableMethods.has(method)) {
-    return false
-  }
-
-  const status = error.response?.status
-  return !error.response || retryableStatusCodes.has(status)
 }
 
 const request = axios.create({

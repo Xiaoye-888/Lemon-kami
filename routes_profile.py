@@ -8,7 +8,7 @@ router = APIRouter(prefix="/api/v1/profile", tags=["Profile Assets"])
 
 
 @router.get("/avatars/{filename}", summary="Serve profile avatar")
-async def get_profile_avatar(filename: str):
+def get_profile_avatar(filename: str):
     try:
         path = avatar_file_path(filename)
     except ValueError:

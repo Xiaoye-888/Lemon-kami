@@ -35,8 +35,10 @@ if settings.DATABASE_URL.startswith("sqlite"):
     engine_kwargs["connect_args"] = {"check_same_thread": False}
 else:
     engine_kwargs.update({
-        "pool_size": 10,
-        "max_overflow": 20,
+        "pool_size": settings.DB_POOL_SIZE,
+        "max_overflow": settings.DB_MAX_OVERFLOW,
+        "pool_timeout": settings.DB_POOL_TIMEOUT,
+        "pool_recycle": settings.DB_POOL_RECYCLE,
     })
 
 engine = create_engine(settings.DATABASE_URL, **engine_kwargs)
@@ -1001,6 +1003,36 @@ def _ensure_devices_schema():
             conn.commit()
 
 
+EVENT_LOG_QUERY_INDEXES = {
+    "idx_event_logs_app_created": ("app_id", "created_at"),
+    "idx_event_logs_event_created": ("event_type", "created_at"),
+    "idx_event_logs_status_created": ("status", "created_at"),
+    "idx_event_logs_app_device_created": ("app_id", "device_uuid", "created_at"),
+    "idx_event_logs_device_created": ("device_uuid", "created_at"),
+}
+
+
+def ensure_event_log_indexes(target_engine=None) -> None:
+    """Add event-log query indexes to databases created before they existed."""
+    from sqlalchemy import inspect, text
+
+    selected_engine = target_engine or engine
+    with selected_engine.begin() as conn:
+        inspector = inspect(conn)
+        if "event_logs" not in inspector.get_table_names():
+            return
+        existing_indexes = {
+            item["name"]
+            for item in inspector.get_indexes("event_logs")
+            if item.get("name")
+        }
+        for index_name, columns in EVENT_LOG_QUERY_INDEXES.items():
+            if index_name in existing_indexes:
+                continue
+            column_list = ", ".join(columns)
+            conn.execute(text(f"CREATE INDEX {index_name} ON event_logs ({column_list})"))
+
+
 def wait_for_db(max_retries=30, retry_interval=2):
     """
     等待数据库就绪
@@ -1060,6 +1092,7 @@ def _init_db_unlocked():
         _ensure_sqlite_schema()
         _ensure_devices_schema()
         _ensure_phase2_recharge_order_schema()
+        ensure_event_log_indexes()
         from kami_spec_service import backfill_specs_for_session
         with Session(engine) as session:
             backfill_specs_for_session(session)
@@ -1303,6 +1336,7 @@ def _init_db_unlocked():
     SQLModel.metadata.create_all(engine)
     _ensure_devices_schema()
     _ensure_phase2_recharge_order_schema()
+    ensure_event_log_indexes()
     
     _ensure_points_schema()
 

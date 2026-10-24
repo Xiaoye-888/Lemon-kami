@@ -67,12 +67,12 @@ def _merchant_user_info(user: EndUser) -> dict:
 
 
 @router.get("/login/public-key", summary="Get shared login AES key")
-async def get_shared_login_key():
-    return await routes_admin.get_login_aes_key()
+def get_shared_login_key():
+    return routes_admin.get_login_aes_key()
 
 
 @router.post("/login", summary="Shared admin/merchant login")
-async def shared_login(
+def shared_login(
     payload: SharedLoginRequest,
     request: Request,
     session: Session = Depends(get_session),
@@ -152,7 +152,7 @@ async def shared_login(
 
 
 @router.post("/register", summary="Shared merchant register")
-async def shared_merchant_register(
+def shared_merchant_register(
     payload: SharedMerchantRegisterRequest,
     session: Session = Depends(get_session),
 ):

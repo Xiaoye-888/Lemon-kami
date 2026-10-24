@@ -2,8 +2,10 @@
 Lemon Kami - FastAPI 主应用入口
 """
 
+import asyncio
 import logging
 import os
+from contextlib import suppress
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from fastapi import FastAPI
@@ -24,6 +26,7 @@ from routes_docs import router as docs_router
 from config import settings
 from commercial_service import ensure_upload_directories
 from profile_service import ensure_avatar_directories
+from task_clean_logs import run_event_log_cleanup_loop
 
 # 创建 logs 目录
 log_dir = "logs"
@@ -174,6 +177,25 @@ async def startup_event():
     app_logger.info("✅ Database initialized successfully")
     app_logger.info(f"Application started in {'DEBUG' if settings.DEBUG else 'PRODUCTION'} mode")
     app_logger.info(f"Log file: {log_file}")
+    app.state.event_log_cleanup_task = asyncio.create_task(
+        run_event_log_cleanup_loop(
+            retention_days=settings.EVENT_LOG_RETENTION_DAYS,
+            batch_size=settings.EVENT_LOG_CLEANUP_BATCH_SIZE,
+            interval_seconds=settings.EVENT_LOG_CLEANUP_INTERVAL_SECONDS,
+            initial_delay_seconds=settings.EVENT_LOG_CLEANUP_INITIAL_DELAY_SECONDS,
+            logger=app_logger,
+        )
+    )
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    cleanup_task = getattr(app.state, "event_log_cleanup_task", None)
+    if cleanup_task is None:
+        return
+    cleanup_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await cleanup_task
 
 
 @app.get("/", tags=["Root"])

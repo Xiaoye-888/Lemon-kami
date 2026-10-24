@@ -2,6 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import RedirectResponse
+from sqlalchemy import func
 from sqlmodel import Session, or_, select
 
 from database import get_session
@@ -18,7 +19,7 @@ def _browser_prefers_html(accept_header: str) -> bool:
 
 
 @router.get("/interfaces", summary="公开接口文档列表")
-async def list_public_interface_docs(
+def list_public_interface_docs(
     request: Request,
     category: Optional[str] = Query(None, description="接口分类"),
     keyword: Optional[str] = Query(None, description="接口名称、标识、说明或地址关键字"),
@@ -32,7 +33,7 @@ async def list_public_interface_docs(
 
     ensure_builtin_interfaces(session)
     statement = select(ApiInterface).where(ApiInterface.status == 1)
-    count_statement = select(ApiInterface).where(ApiInterface.status == 1)
+    count_statement = select(func.count(ApiInterface.id)).where(ApiInterface.status == 1)
     conditions = []
     if category:
         conditions.append(ApiInterface.category == category)
@@ -48,7 +49,7 @@ async def list_public_interface_docs(
         statement = statement.where(*conditions)
         count_statement = count_statement.where(*conditions)
 
-    total = len(session.exec(count_statement).all())
+    total = int(session.exec(count_statement).one() or 0)
     interfaces = session.exec(
         statement.order_by(ApiInterface.sort_order, ApiInterface.id.desc())
         .offset((page - 1) * page_size)

@@ -4,6 +4,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, Session, create_engine, select
 
@@ -2288,7 +2289,14 @@ def test_merchant_dashboard_aggregates_workbench_data_for_visible_resources():
             kami_type="points",
             points_amount=100,
         )
-        session.add(batch)
+        other_shared_batch = KamiBatch(
+            app_id=authorized_app.app_id,
+            batch_no="DASH-BATCH-OTHER",
+            kami_type="points",
+            points_amount=100,
+            created_by_user_id=other.id,
+        )
+        session.add_all([batch, other_shared_batch])
         session.commit()
         session.add_all(
             [
@@ -2308,10 +2316,26 @@ def test_merchant_dashboard_aggregates_workbench_data_for_visible_resources():
                     points_amount=100,
                     created_by_user_id=other.id,
                 ),
+                Kami(
+                    app_id=authorized_app.app_id,
+                    kami_code="OTHER-SHARED-DASH-CARD-001",
+                    kami_type="points",
+                    batch_no=other_shared_batch.batch_no,
+                    points_amount=100,
+                    created_by_user_id=other.id,
+                ),
             ]
         )
         session.commit()
         token = routes_user.create_user_access_token(merchant)
+
+    kami_selects = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def capture_dashboard_kami_queries(_conn, _cursor, statement, _parameters, _context, _executemany):
+        normalized = " ".join(statement.lower().split())
+        if normalized.startswith("select") and "kamis" in normalized:
+            kami_selects.append(normalized)
 
     try:
         response = client.get("/api/v1/merchant/dashboard", headers=auth_headers(token))
@@ -2326,8 +2350,9 @@ def test_merchant_dashboard_aggregates_workbench_data_for_visible_resources():
         assert data["orders"]["pending_review"] == 1
         assert data["cards"]["total"] == 1
         assert [item["title"] for item in data["notifications"]] == ["额度维护通知"]
-        assert data["recent_batches"][0]["batch_no"] == "DASH-BATCH-001"
+        assert [item["batch_no"] for item in data["recent_batches"]] == ["DASH-BATCH-001"]
         assert data["recent_orders"][0]["order_no"] == "RC_DASHBOARD_001"
+        assert len(kami_selects) <= 2
     finally:
         fastapi_app.dependency_overrides.clear()
 

@@ -277,6 +277,22 @@ def test_finance_summary_uses_admin_reviewed_at_for_approved_income():
                 "bonus_issue_quota": 0,
             }
         ]
+
+        ranking = client.get(
+            "/api/v1/admin/commercial/finance/merchant-ranking",
+            params={"start_date": "2026-07-25", "end_date": "2026-07-25"},
+        )
+        assert ranking.status_code == 200
+        assert ranking.json()["items"] == [
+            {
+                "user_id": merchant.id,
+                "username": merchant.username,
+                "approved_order_count": 1,
+                "approved_amount": 10,
+                "credited_issue_quota": 10,
+                "bonus_issue_quota": 0,
+            }
+        ]
     finally:
         fastapi_app.dependency_overrides.clear()
 

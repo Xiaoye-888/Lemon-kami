@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import or_
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 import routes_admin as legacy_admin
 from audit_service import record_admin_audit, require_sensitive_confirmation
@@ -128,15 +128,11 @@ def _delete_kami_side_rows(session: Session, kami_codes: list[str]) -> None:
     for binding in bindings:
         session.delete(binding)
 
-    logs = session.exec(
-        select(EventLog).where(EventLog.kami_code.in_(kami_codes))
-    ).all()
-    for log in logs:
-        session.delete(log)
+    session.exec(delete(EventLog).where(EventLog.kami_code.in_(kami_codes)))
 
 
 @router.get("/end-users/{user_id}/quotas", summary="Get user quota summary")
-async def get_end_user_quotas(
+def get_end_user_quotas(
     user_id: int,
     current_user: dict = Depends(legacy_admin.get_current_user),
     session: Session = Depends(get_session),
@@ -153,7 +149,7 @@ async def get_end_user_quotas(
 
 
 @router.post("/end-users/{user_id}/quotas/grant", summary="Grant user quota")
-async def grant_end_user_quota(
+def grant_end_user_quota(
     user_id: int,
     payload: UserQuotaGrantRequest,
     request: Request,
@@ -229,7 +225,7 @@ async def grant_end_user_quota(
 
 
 @router.get("/end-users/{user_id}/app-authorizations", summary="List user app authorizations")
-async def list_end_user_app_authorizations(
+def list_end_user_app_authorizations(
     user_id: int,
     current_user: dict = Depends(legacy_admin.get_current_user),
     session: Session = Depends(get_session),
@@ -266,7 +262,7 @@ async def list_end_user_app_authorizations(
 
 
 @router.post("/end-users/{user_id}/app-authorizations", summary="Grant user app authorization")
-async def grant_end_user_app_authorization(
+def grant_end_user_app_authorization(
     user_id: int,
     payload: UserAppAuthorizationGrantRequest,
     request: Request,
@@ -356,7 +352,7 @@ async def grant_end_user_app_authorization(
 
 
 @router.delete("/end-users/{user_id}/app-authorizations/{authorization_id}", summary="Revoke user app authorization")
-async def revoke_end_user_app_authorization(
+def revoke_end_user_app_authorization(
     user_id: int,
     authorization_id: int,
     request: Request,
@@ -439,7 +435,7 @@ async def revoke_end_user_app_authorization(
 
 
 @router.delete("/apps/{app_id}", summary="Delete app")
-async def delete_app(
+def delete_app(
     app_id: str,
     request: Request,
     confirm_text: Optional[str] = Query(None),
@@ -485,7 +481,7 @@ async def delete_app(
     try:
         request.state.skip_delete_app_confirmation = True
         request.state.skip_delete_app_audit = True
-        result = await legacy_admin.delete_app(
+        result = legacy_admin.delete_app(
             app_id,
             request=request,
             current_user=current_user,
@@ -525,7 +521,7 @@ async def delete_app(
 
 
 @router.post("/end-users/delete", summary="Hard delete end users")
-async def delete_end_users(
+def delete_end_users(
     payload: EndUserDeleteConfirmRequest,
     request: Request,
     current_user: dict = Depends(legacy_admin.get_current_user),
@@ -645,7 +641,7 @@ async def delete_end_users(
         try:
             request.state.skip_delete_app_confirmation = True
             request.state.skip_delete_app_audit = True
-            await legacy_admin.delete_app(
+            legacy_admin.delete_app(
                 app.app_id,
                 request=request,
                 current_user=current_user,
@@ -669,7 +665,7 @@ async def delete_end_users(
         deleted_app_count += 1
 
     try:
-        result = await legacy_admin.delete_end_users(payload, current_user=current_user, session=session)
+        result = legacy_admin.delete_end_users(payload, current_user=current_user, session=session)
     except Exception as error:
         _record_sensitive_business_failure(
             session,

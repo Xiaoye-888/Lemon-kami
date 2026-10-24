@@ -1,9 +1,9 @@
 import csv
 import io
-from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
 
+from sqlalchemy import case, func
 from sqlmodel import Session, select
 
 from datetime_utils import to_api_beijing_iso
@@ -30,63 +30,86 @@ def finance_summary_payload(
     end_date: Optional[str],
 ) -> dict:
     start, end = parse_date_range(start_date, end_date)
-    orders = session.exec(select(RechargeOrder)).all()
-    transactions = session.exec(select(UserQuotaTransaction)).all()
+    approved_conditions = [
+        RechargeOrder.status == RechargeOrderStatus.approved,
+        RechargeOrder.reviewed_at.is_not(None),
+        *_range_conditions(RechargeOrder.reviewed_at, start, end),
+    ]
+    (
+        approved_order_count,
+        approved_amount_cents,
+        credited_issue_quota,
+        bonus_issue_quota,
+    ) = session.exec(
+        select(
+            func.count(RechargeOrder.id),
+            func.coalesce(func.sum(RechargeOrder.amount_cents), 0),
+            func.coalesce(func.sum(RechargeOrder.credit_quota), 0),
+            func.coalesce(func.sum(RechargeOrder.bonus_quota), 0),
+        ).where(*approved_conditions)
+    ).one()
 
-    approved_income_orders = [
-        order
-        for order in orders
-        if order.status == RechargeOrderStatus.approved
-        and order.reviewed_at is not None
-        and _in_range(order.reviewed_at, start, end)
-    ]
-    status_orders = [
-        order
-        for order in orders
-        if _in_range(order.created_at, start, end)
-    ]
-    ranged_transactions = [
-        transaction
-        for transaction in transactions
-        if _in_range(transaction.created_at, start, end)
-    ]
+    status_conditions = _range_conditions(RechargeOrder.created_at, start, end)
+    status_statement = select(
+        func.coalesce(func.sum(case((RechargeOrder.status == RechargeOrderStatus.pending_review, 1), else_=0)), 0),
+        func.coalesce(func.sum(case((RechargeOrder.status == RechargeOrderStatus.rejected, 1), else_=0)), 0),
+        func.coalesce(func.sum(case((RechargeOrder.status == RechargeOrderStatus.abnormal, 1), else_=0)), 0),
+    )
+    if status_conditions:
+        status_statement = status_statement.where(*status_conditions)
+    pending_review_count, rejected_count, abnormal_count = session.exec(status_statement).one()
 
-    daily_map: dict[str, dict] = {}
-    for order in approved_income_orders:
-        day = order.reviewed_at.date().isoformat()
-        row = daily_map.setdefault(
-            day,
-            {
-                "date": day,
-                "approved_order_count": 0,
-                "approved_amount": 0,
-                "credited_issue_quota": 0,
-                "bonus_issue_quota": 0,
-            },
+    approved_without_reviewed_at_count = int(session.exec(
+        select(func.count(RechargeOrder.id)).where(
+            RechargeOrder.status == RechargeOrderStatus.approved,
+            RechargeOrder.reviewed_at.is_(None),
         )
-        row["approved_order_count"] += 1
-        row["approved_amount"] += _amount_yuan(order.amount_cents)
-        row["credited_issue_quota"] += order.credit_quota or 0
-        row["bonus_issue_quota"] += order.bonus_quota or 0
+    ).one() or 0)
+
+    transaction_statement = select(func.count(UserQuotaTransaction.id))
+    transaction_conditions = _range_conditions(UserQuotaTransaction.created_at, start, end)
+    if transaction_conditions:
+        transaction_statement = transaction_statement.where(*transaction_conditions)
+    quota_transaction_count = int(session.exec(transaction_statement).one() or 0)
+
+    day_expression = func.date(RechargeOrder.reviewed_at)
+    daily_rows = session.exec(
+        select(
+            day_expression.label("day"),
+            func.count(RechargeOrder.id),
+            func.coalesce(func.sum(RechargeOrder.amount_cents), 0),
+            func.coalesce(func.sum(RechargeOrder.credit_quota), 0),
+            func.coalesce(func.sum(RechargeOrder.bonus_quota), 0),
+        )
+        .where(*approved_conditions)
+        .group_by(day_expression)
+        .order_by(day_expression)
+    ).all()
+    daily = [
+        {
+            "date": day.isoformat() if hasattr(day, "isoformat") else str(day),
+            "approved_order_count": int(order_count or 0),
+            "approved_amount": _amount_yuan(int(amount_cents or 0)),
+            "credited_issue_quota": int(credited_quota or 0),
+            "bonus_issue_quota": int(bonus_quota or 0),
+        }
+        for day, order_count, amount_cents, credited_quota, bonus_quota in daily_rows
+    ]
 
     return {
         "income_basis": "reviewed_at",
-        "approved_order_count": len(approved_income_orders),
-        "approved_amount": _sum_amount_yuan(order.amount_cents for order in approved_income_orders),
-        "credited_issue_quota": sum(order.credit_quota or 0 for order in approved_income_orders),
-        "bonus_issue_quota": sum(order.bonus_quota or 0 for order in approved_income_orders),
-        "pending_review_count": sum(
-            1 for order in status_orders if order.status == RechargeOrderStatus.pending_review
-        ),
-        "rejected_count": sum(1 for order in status_orders if order.status == RechargeOrderStatus.rejected),
-        "abnormal_count": sum(1 for order in status_orders if order.status == RechargeOrderStatus.abnormal),
-        "approved_without_reviewed_at_count": sum(
-            1 for order in orders if order.status == RechargeOrderStatus.approved and order.reviewed_at is None
-        ),
-        "quota_transaction_count": len(ranged_transactions),
+        "approved_order_count": int(approved_order_count or 0),
+        "approved_amount": _amount_yuan(int(approved_amount_cents or 0)),
+        "credited_issue_quota": int(credited_issue_quota or 0),
+        "bonus_issue_quota": int(bonus_issue_quota or 0),
+        "pending_review_count": int(pending_review_count or 0),
+        "rejected_count": int(rejected_count or 0),
+        "abnormal_count": int(abnormal_count or 0),
+        "approved_without_reviewed_at_count": approved_without_reviewed_at_count,
+        "quota_transaction_count": quota_transaction_count,
         "refund_amount": 0,
         "reversal_amount": 0,
-        "daily": [daily_map[day] for day in sorted(daily_map)],
+        "daily": daily,
     }
 
 
@@ -97,36 +120,39 @@ def merchant_recharge_ranking_payload(
     limit: int = 20,
 ) -> dict:
     start, end = parse_date_range(start_date, end_date)
-    grouped: dict[tuple[Optional[int], str], dict] = defaultdict(
-        lambda: {
-            "user_id": None,
-            "username": "",
-            "approved_order_count": 0,
-            "approved_amount": 0,
-            "credited_issue_quota": 0,
-            "bonus_issue_quota": 0,
-        }
+    approved_order_count = func.count(RechargeOrder.id).label("approved_order_count")
+    approved_amount_cents = func.coalesce(func.sum(RechargeOrder.amount_cents), 0).label(
+        "approved_amount_cents"
     )
-    orders = session.exec(select(RechargeOrder)).all()
-    for order in orders:
-        if order.status != RechargeOrderStatus.approved or order.reviewed_at is None:
-            continue
-        if not _in_range(order.reviewed_at, start, end):
-            continue
-        key = (order.user_id, order.username or "")
-        row = grouped[key]
-        row["user_id"] = order.user_id
-        row["username"] = order.username or ""
-        row["approved_order_count"] += 1
-        row["approved_amount"] += _amount_yuan(order.amount_cents)
-        row["credited_issue_quota"] += order.credit_quota or 0
-        row["bonus_issue_quota"] += order.bonus_quota or 0
-
-    items = sorted(
-        grouped.values(),
-        key=lambda item: (item["approved_amount"], item["approved_order_count"]),
-        reverse=True,
-    )[:limit]
+    rows = session.exec(
+        select(
+            RechargeOrder.user_id,
+            RechargeOrder.username,
+            approved_order_count,
+            approved_amount_cents,
+            func.coalesce(func.sum(RechargeOrder.credit_quota), 0),
+            func.coalesce(func.sum(RechargeOrder.bonus_quota), 0),
+        )
+        .where(
+            RechargeOrder.status == RechargeOrderStatus.approved,
+            RechargeOrder.reviewed_at.is_not(None),
+            *_range_conditions(RechargeOrder.reviewed_at, start, end),
+        )
+        .group_by(RechargeOrder.user_id, RechargeOrder.username)
+        .order_by(approved_amount_cents.desc(), approved_order_count.desc())
+        .limit(limit)
+    ).all()
+    items = [
+        {
+            "user_id": user_id,
+            "username": username or "",
+            "approved_order_count": int(order_count or 0),
+            "approved_amount": _amount_yuan(int(amount_cents or 0)),
+            "credited_issue_quota": int(credited_quota or 0),
+            "bonus_issue_quota": int(bonus_quota or 0),
+        }
+        for user_id, username, order_count, amount_cents, credited_quota, bonus_quota in rows
+    ]
     return {"income_basis": "reviewed_at", "items": items}
 
 
@@ -257,6 +283,15 @@ def _in_range(value: Optional[datetime], start: Optional[datetime], end: Optiona
     if end is not None and value >= end:
         return False
     return True
+
+
+def _range_conditions(column, start: Optional[datetime], end: Optional[datetime]) -> list:
+    conditions = []
+    if start is not None:
+        conditions.append(column >= start)
+    if end is not None:
+        conditions.append(column < end)
+    return conditions
 
 
 def _order_in_export_range(

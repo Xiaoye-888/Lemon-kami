@@ -27,7 +27,7 @@ function Invoke-Checked($Command, $WorkingDirectory = $root) {
 
 function Remove-GeneratedCaches {
     $targets = @()
-    Get-ChildItem -Path $root -Recurse -Force -Directory -Filter "__pycache__" | Where-Object {
+    Get-ChildItem -Path $root -Recurse -Force -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue | Where-Object {
         $_.FullName -notmatch "\\.venv\\" -and $_.FullName -notmatch "\\admin\\node_modules\\"
     } | ForEach-Object { $targets += $_.FullName }
 

@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     BACKUP_ROOT: str = "/app/backups"
     MERCHANT_LOW_ISSUE_QUOTA_THRESHOLD: int = 20
     OPS_RECENT_LOG_LINES: int = 200
+    EVENT_LOG_RETENTION_DAYS: int = 30
+    EVENT_LOG_CLEANUP_BATCH_SIZE: int = 1000
+    EVENT_LOG_CLEANUP_INTERVAL_SECONDS: int = 86400
+    EVENT_LOG_CLEANUP_INITIAL_DELAY_SECONDS: int = 60
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 5
+    DB_POOL_TIMEOUT: int = 10
+    DB_POOL_RECYCLE: int = 1800
 
 
 settings = Settings()

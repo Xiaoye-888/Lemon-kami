@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field as PydanticField
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from auth_utils import hash_password, verify_password
@@ -76,7 +77,7 @@ def create_user_access_token(user: EndUser) -> str:
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
-async def get_current_end_user(
+def get_current_end_user(
     token: Optional[str] = Query(None),
     authorization: Optional[str] = Header(None),
     session: Session = Depends(get_session),
@@ -234,7 +235,7 @@ def _record_point_consume_device(
 
 
 @router.post("/register", summary="End-user register")
-async def register_user(payload: RegisterRequest, session: Session = Depends(get_session)):
+def register_user(payload: RegisterRequest, session: Session = Depends(get_session)):
     if not payload.app_id:
         raise HTTPException(
             status_code=400,
@@ -290,7 +291,7 @@ async def register_user(payload: RegisterRequest, session: Session = Depends(get
 
 
 @router.post("/login", summary="End-user login")
-async def login_user(payload: LoginRequest, session: Session = Depends(get_session)):
+def login_user(payload: LoginRequest, session: Session = Depends(get_session)):
     user = session.exec(
         select(EndUser).where(EndUser.username == payload.username)
     ).first()
@@ -315,7 +316,7 @@ async def login_user(payload: LoginRequest, session: Session = Depends(get_sessi
 
 
 @router.get("/me", summary="Get current end user")
-async def get_me(
+def get_me(
     current_user: EndUser = Depends(get_current_end_user),
     session: Session = Depends(get_session),
 ):
@@ -325,32 +326,32 @@ async def get_me(
 
 
 @router.get("/quotas", summary="Deprecated merchant quota route")
-async def get_user_quotas():
+def get_user_quotas():
     _raise_merchant_console_moved()
 
 
 @router.get("/apps", summary="Deprecated merchant app list route")
-async def list_user_apps():
+def list_user_apps():
     _raise_merchant_console_moved()
 
 
 @router.post("/apps", summary="Deprecated merchant app create route")
-async def create_user_app_route():
+def create_user_app_route():
     _raise_merchant_console_moved()
 
 
 @router.post("/apps/{app_id}/kamis/batch", summary="Deprecated merchant kami issue route")
-async def issue_user_kamis_route(app_id: str):
+def issue_user_kamis_route(app_id: str):
     _raise_merchant_console_moved()
 
 
 @router.get("/apps/{app_id}/kamis", summary="Deprecated merchant kami list route")
-async def list_user_kamis_route(app_id: str):
+def list_user_kamis_route(app_id: str):
     _raise_merchant_console_moved()
 
 
 @router.get("/points/balance", summary="Get current points balance")
-async def get_points_balance(
+def get_points_balance(
     current_user: EndUser = Depends(get_current_end_user),
     session: Session = Depends(get_session),
 ):
@@ -373,7 +374,7 @@ async def get_points_balance(
 
 
 @router.post("/points/redeem", summary="Redeem a points kami")
-async def redeem_points(
+def redeem_points(
     payload: RedeemRequest,
     current_user: EndUser = Depends(get_current_end_user),
     session: Session = Depends(get_session),
@@ -390,7 +391,7 @@ async def redeem_points(
 
 
 @router.post("/points/consume", summary="Consume points")
-async def consume_user_points(
+def consume_user_points(
     payload: ConsumeRequest,
     request: Request,
     current_user: EndUser = Depends(get_current_end_user),
@@ -433,7 +434,7 @@ async def consume_user_points(
 
 
 @router.get("/points/lots", summary="List current user's points lots")
-async def list_user_point_lots(
+def list_user_point_lots(
     only_available: bool = Query(False),
     current_user: EndUser = Depends(get_current_end_user),
     session: Session = Depends(get_session),
@@ -474,7 +475,7 @@ async def list_user_point_lots(
 
 
 @router.get("/points/transactions", summary="List current user's points transactions")
-async def list_user_point_transactions(
+def list_user_point_transactions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: EndUser = Depends(get_current_end_user),
@@ -489,14 +490,19 @@ async def list_user_point_transactions(
             AuthorizationAccount.app_id == app_id,
         )
     ).first()
-    all_items = []
+    total = 0
     items = []
     if account:
         base = select(AuthorizationTransaction).where(
             AuthorizationTransaction.account_id == account.id,
             AuthorizationTransaction.benefit_type == AuthorizationBenefitType.points,
         )
-        all_items = session.exec(base).all()
+        total = int(session.exec(
+            select(func.count(AuthorizationTransaction.id)).where(
+                AuthorizationTransaction.account_id == account.id,
+                AuthorizationTransaction.benefit_type == AuthorizationBenefitType.points,
+            )
+        ).one() or 0)
         items = session.exec(
             base.order_by(AuthorizationTransaction.id.desc())
             .offset((page - 1) * page_size)
@@ -506,7 +512,7 @@ async def list_user_point_transactions(
     return {
         "success": True,
         "data": {
-            "total": len(all_items),
+            "total": total,
             "page": page,
             "page_size": page_size,
             "items": [

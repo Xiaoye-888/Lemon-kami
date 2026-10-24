@@ -3,6 +3,7 @@ name: lemon-kami-prod
 services:
   mysql:
     image: mysql:8.0
+    mem_limit: 768m
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-lemon_kami}
@@ -24,6 +25,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    mem_limit: 128m
     volumes:
       - redis_data:/data
     networks:
@@ -38,6 +40,7 @@ services:
 
   fastapi:
     image: lemon-kami-fastapi:${APP_IMAGE_TAG:-latest}
+    mem_limit: 768m
     environment:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -57,6 +60,15 @@ services:
       BACKUP_ROOT: ${BACKUP_ROOT:-/app/backups}
       MERCHANT_LOW_ISSUE_QUOTA_THRESHOLD: ${MERCHANT_LOW_ISSUE_QUOTA_THRESHOLD:-20}
       OPS_RECENT_LOG_LINES: ${OPS_RECENT_LOG_LINES:-200}
+      EVENT_LOG_RETENTION_DAYS: ${EVENT_LOG_RETENTION_DAYS:-30}
+      EVENT_LOG_CLEANUP_BATCH_SIZE: ${EVENT_LOG_CLEANUP_BATCH_SIZE:-1000}
+      EVENT_LOG_CLEANUP_INTERVAL_SECONDS: ${EVENT_LOG_CLEANUP_INTERVAL_SECONDS:-86400}
+      EVENT_LOG_CLEANUP_INITIAL_DELAY_SECONDS: ${EVENT_LOG_CLEANUP_INITIAL_DELAY_SECONDS:-60}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
+      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-10}
+      DB_POOL_RECYCLE: ${DB_POOL_RECYCLE:-1800}
+      MALLOC_ARENA_MAX: ${MALLOC_ARENA_MAX:-2}
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - fastapi_logs:/app/logs
@@ -73,6 +85,7 @@ services:
 
   frontend:
     image: lemon-kami-frontend:${APP_IMAGE_TAG:-latest}
+    mem_limit: 128m
     ports:
       - "${HTTP_PORT:-80}:8080"
     depends_on:

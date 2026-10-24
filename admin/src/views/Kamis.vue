@@ -500,8 +500,7 @@ const loadKamis = async () => {
   loading.value = true
   try {
     await loadSpecs()
-    await loadBatches()
-    const res = await getKamis(normalizeKamiParams())
+    const [, res] = await Promise.all([loadBatches(), getKamis(normalizeKamiParams())])
     kamis.value = res.data.items || []
     total.value = res.data.total || 0
     selectedKamis.value = []

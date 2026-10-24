@@ -9,8 +9,8 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field as PydanticField
-from sqlalchemy import or_
-from sqlmodel import Session, select
+from sqlalchemy import func, or_
+from sqlmodel import Session, delete, select, update
 
 import routes_user
 from auth_utils import hash_password, verify_password
@@ -48,6 +48,7 @@ from app_release_service import (
 from profile_service import avatar_public_url, save_avatar_upload
 from kami_query_service import (
     batch_stats_payload,
+    batch_stats_payloads,
     kami_csv,
     kami_search_payload,
     merchant_kami_statement,
@@ -573,7 +574,10 @@ def _delete_merchant_app_related_rows(session: Session, app_id: str) -> dict:
     log_conditions = [EventLog.app_id == app_id]
     if kami_codes:
         log_conditions.append(EventLog.kami_code.in_(kami_codes))
-    event_logs = session.exec(select(EventLog).where(or_(*log_conditions))).all()
+    event_log_filter = or_(*log_conditions)
+    event_log_count = int(
+        session.exec(select(func.count(EventLog.id)).where(event_log_filter)).one() or 0
+    )
 
     counts = {
         "kami_count": len(kamis),
@@ -581,7 +585,7 @@ def _delete_merchant_app_related_rows(session: Session, app_id: str) -> dict:
         "binding_count": len(bindings),
         "legacy_access_count": len(legacy_access_rows),
         "user_authorization_count": len(user_authorizations),
-        "event_log_count": len(event_logs),
+        "event_log_count": event_log_count,
         "notice_count": len(notices),
         "version_count": len(versions),
         "interface_config_count": len(interface_configs),
@@ -594,8 +598,7 @@ def _delete_merchant_app_related_rows(session: Session, app_id: str) -> dict:
         "point_transaction_count": len(point_transactions),
     }
 
-    for row in event_logs:
-        session.delete(row)
+    session.exec(delete(EventLog).where(event_log_filter))
     for row in notices:
         session.delete(row)
     for row in versions:
@@ -876,8 +879,8 @@ def _merchant_batch_has_user_cards(
 ) -> bool:
     if batch.created_by_user_id is not None and batch.created_by_user_id != user_id:
         return False
-    if stats is not None and int(stats.get("total_count", 0) or 0) > 0:
-        return True
+    if stats is not None:
+        return int(stats.get("total_count", 0) or 0) > 0
     if batch.created_by_user_id is not None:
         visibility_conditions = [Kami.created_by_user_id == batch.created_by_user_id]
     else:
@@ -1288,7 +1291,7 @@ EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 PHONE_RE = re.compile(r"^[0-9+\-\s()]{6,32}$")
 
 
-async def get_current_merchant(
+def get_current_merchant(
     current_user: EndUser = Depends(routes_user.get_current_end_user),
 ) -> EndUser:
     if current_user.app_id is not None:
@@ -1297,7 +1300,7 @@ async def get_current_merchant(
 
 
 @router.get("/me", summary="Get current merchant profile")
-async def get_merchant_me(
+def get_merchant_me(
     current_user: EndUser = Depends(get_current_merchant),
 ):
     return {
@@ -1307,7 +1310,7 @@ async def get_merchant_me(
 
 
 @router.put("/me", summary="Update current merchant profile")
-async def update_merchant_me(
+def update_merchant_me(
     payload: MerchantProfileUpdateRequest,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -1382,7 +1385,7 @@ async def upload_merchant_avatar(
 
 
 @router.put("/me/password", summary="Update merchant password")
-async def update_merchant_password(
+def update_merchant_password(
     payload: MerchantPasswordUpdateRequest,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -1401,7 +1404,7 @@ async def update_merchant_password(
 
 
 @router.get("/quotas", summary="Get merchant quota summary")
-async def get_merchant_quotas(
+def get_merchant_quotas(
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
@@ -1412,7 +1415,7 @@ async def get_merchant_quotas(
 
 
 @router.get("/dashboard", summary="Get merchant dashboard workbench")
-async def get_merchant_dashboard(
+def get_merchant_dashboard(
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
@@ -1421,21 +1424,21 @@ async def get_merchant_dashboard(
     visible_app_ids = [app.app_id for app in apps]
     owned_app_ids = {app.app_id for app in apps if _app_is_owned_by_user(app, current_user)}
 
-    pending_review_count = session.exec(
-        select(RechargeOrder).where(
+    pending_review_count = int(session.exec(
+        select(func.count(RechargeOrder.id)).where(
             RechargeOrder.user_id == current_user.id,
             RechargeOrder.status == RechargeOrderStatus.pending_review,
         )
-    ).all()
+    ).one() or 0)
     recent_orders = session.exec(
         select(RechargeOrder)
         .where(RechargeOrder.user_id == current_user.id)
         .order_by(RechargeOrder.id.desc())
         .limit(5)
     ).all()
-    card_total = session.exec(
-        select(Kami).where(Kami.created_by_user_id == current_user.id)
-    ).all()
+    card_total = int(session.exec(
+        select(func.count(Kami.id)).where(Kami.created_by_user_id == current_user.id)
+    ).one() or 0)
 
     notifications = []
     if visible_app_ids:
@@ -1469,18 +1472,26 @@ async def get_merchant_dashboard(
 
     recent_batches = []
     if visible_app_ids:
-        for batch in session.exec(
+        batch_candidates = session.exec(
             select(KamiBatch)
-            .where(KamiBatch.app_id.in_(visible_app_ids))
+            .where(
+                KamiBatch.app_id.in_(visible_app_ids),
+                or_(
+                    KamiBatch.created_by_user_id == current_user.id,
+                    KamiBatch.created_by_user_id.is_(None),
+                ),
+            )
             .order_by(KamiBatch.id.desc())
             .limit(12)
-        ).all():
-            stats = batch_stats_payload(
-                session,
-                batch,
-                created_by_user_id=current_user.id,
-                include_unassigned=batch.app_id in owned_app_ids,
-            )
+        ).all()
+        stats_by_batch_id = batch_stats_payloads(
+            session,
+            batch_candidates,
+            created_by_user_id=current_user.id,
+            include_unassigned_app_ids=owned_app_ids,
+        )
+        for batch in batch_candidates:
+            stats = stats_by_batch_id[batch.id]
             if stats["total_count"] <= 0:
                 continue
             recent_batches.append(
@@ -1507,11 +1518,11 @@ async def get_merchant_dashboard(
             "authorized": len(apps) - len(owned_app_ids),
         },
         "orders": {
-            "pending_review": len(pending_review_count),
+            "pending_review": pending_review_count,
             "recent": [recharge_order_payload(order) for order in recent_orders],
         },
         "cards": {
-            "total": len(card_total),
+            "total": card_total,
         },
         "notifications": notifications,
         "recent_batches": recent_batches,
@@ -1521,7 +1532,7 @@ async def get_merchant_dashboard(
 
 
 @router.get("/quota-transactions", summary="List merchant quota transactions")
-async def list_merchant_quota_transactions(
+def list_merchant_quota_transactions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: EndUser = Depends(get_current_merchant),
@@ -1539,7 +1550,7 @@ async def list_merchant_quota_transactions(
 
 
 @router.get("/devices", summary="List merchant visible devices")
-async def list_merchant_devices(
+def list_merchant_devices(
     app_id: Optional[str] = Query(None),
     risk_level: Optional[int] = Query(None),
     keyword: Optional[str] = Query(None),
@@ -1705,7 +1716,7 @@ async def list_merchant_devices(
 
 
 @router.put("/devices/{device_id}/risk", summary="Update self-owned app device risk")
-async def update_merchant_device_risk(
+def update_merchant_device_risk(
     device_id: int,
     risk_level: int,
     current_user: EndUser = Depends(get_current_merchant),
@@ -1747,7 +1758,7 @@ async def update_merchant_device_risk(
 
 
 @router.get("/recharge/config", summary="Get merchant recharge config")
-async def get_merchant_recharge_config(
+def get_merchant_recharge_config(
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
@@ -1755,7 +1766,7 @@ async def get_merchant_recharge_config(
 
 
 @router.post("/recharge/preview", summary="Preview merchant recharge")
-async def preview_merchant_recharge(
+def preview_merchant_recharge(
     payload: RechargePreviewRequest,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -1773,7 +1784,7 @@ async def preview_merchant_recharge(
 
 
 @router.post("/recharge/orders", summary="Create merchant recharge order")
-async def create_merchant_recharge_order(
+def create_merchant_recharge_order(
     payload: RechargeOrderCreateRequest,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -1826,7 +1837,7 @@ async def create_merchant_recharge_order_with_upload(
 
 
 @router.get("/recharge/orders", summary="List merchant recharge orders")
-async def list_merchant_recharge_orders(
+def list_merchant_recharge_orders(
     status: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -1834,11 +1845,11 @@ async def list_merchant_recharge_orders(
     session: Session = Depends(get_session),
 ):
     statement = select(RechargeOrder).where(RechargeOrder.user_id == current_user.id)
-    count_statement = select(RechargeOrder).where(RechargeOrder.user_id == current_user.id)
+    count_statement = select(func.count(RechargeOrder.id)).where(RechargeOrder.user_id == current_user.id)
     if status:
         statement = statement.where(RechargeOrder.status == status)
         count_statement = count_statement.where(RechargeOrder.status == status)
-    total = len(session.exec(count_statement).all())
+    total = int(session.exec(count_statement).one() or 0)
     orders = session.exec(
         statement.order_by(RechargeOrder.id.desc())
         .offset((page - 1) * page_size)
@@ -1856,7 +1867,7 @@ async def list_merchant_recharge_orders(
 
 
 @router.get("/recharge/orders/{order_no}", summary="Get merchant recharge order detail")
-async def get_merchant_recharge_order(
+def get_merchant_recharge_order(
     order_no: str,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -1868,7 +1879,7 @@ async def get_merchant_recharge_order(
 
 
 @router.post("/recharge/orders/{order_no}/cancel", summary="Cancel merchant recharge order")
-async def cancel_merchant_recharge_order(
+def cancel_merchant_recharge_order(
     order_no: str,
     payload: MerchantOrderActionRequest,
     current_user: EndUser = Depends(get_current_merchant),
@@ -1891,7 +1902,7 @@ async def cancel_merchant_recharge_order(
 
 
 @router.get("/recharge/orders/{order_no}/proof", summary="Get merchant recharge proof")
-async def get_merchant_recharge_proof(
+def get_merchant_recharge_proof(
     order_no: str,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -1905,7 +1916,7 @@ async def get_merchant_recharge_proof(
 
 
 @router.get("/kamis/export", summary="Export merchant issued kamis CSV")
-async def export_merchant_kamis(
+def export_merchant_kamis(
     app_id: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
@@ -1945,7 +1956,7 @@ async def export_merchant_kamis(
 
 
 @router.get("/kamis", summary="List merchant issued kamis across visible apps")
-async def list_merchant_global_kamis(
+def list_merchant_global_kamis(
     app_id: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
@@ -1983,7 +1994,7 @@ async def list_merchant_global_kamis(
 
 
 @router.get("/kami-specs/{spec_id}/batches", summary="List merchant batches for a spec")
-async def list_merchant_spec_batches(
+def list_merchant_spec_batches(
     spec_id: int,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -1994,14 +2005,20 @@ async def list_merchant_spec_batches(
         .where(KamiBatch.spec_id == spec.id)
         .order_by(KamiBatch.id.desc())
     ).all()
+    batches = [
+        batch
+        for batch in batches
+        if batch.created_by_user_id in (None, current_user.id)
+    ]
+    stats_by_batch_id = batch_stats_payloads(
+        session,
+        batches,
+        created_by_user_id=current_user.id,
+        include_unassigned_app_ids={app.app_id} if is_owned else set(),
+    )
     items = []
     for batch in batches:
-        stats = batch_stats_payload(
-            session,
-            batch,
-            created_by_user_id=current_user.id,
-            include_unassigned=is_owned,
-        )
+        stats = stats_by_batch_id[batch.id]
         if not _merchant_batch_has_user_cards(
             session,
             batch,
@@ -2015,7 +2032,7 @@ async def list_merchant_spec_batches(
 
 
 @router.get("/kami-specs/{spec_id}/kamis", summary="List merchant kamis for a spec")
-async def list_merchant_spec_kamis(
+def list_merchant_spec_kamis(
     spec_id: int,
     keyword: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
@@ -2043,7 +2060,7 @@ async def list_merchant_spec_kamis(
 
 
 @router.get("/batches/{batch_id}/kamis", summary="List merchant kamis for a batch")
-async def list_merchant_batch_kamis(
+def list_merchant_batch_kamis(
     batch_id: int,
     keyword: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
@@ -2072,7 +2089,7 @@ async def list_merchant_batch_kamis(
 
 
 @router.get("/apps", summary="List merchant apps")
-async def list_merchant_apps(
+def list_merchant_apps(
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
 ):
@@ -2081,7 +2098,7 @@ async def list_merchant_apps(
 
 
 @router.post("/apps", summary="Create merchant self-owned app")
-async def create_merchant_app(
+def create_merchant_app(
     payload: MerchantAppCreateRequest,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -2100,7 +2117,7 @@ async def create_merchant_app(
 
 
 @router.get("/apps/{app_id}", summary="Get merchant app detail")
-async def get_merchant_app_detail(
+def get_merchant_app_detail(
     app_id: str,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -2110,7 +2127,7 @@ async def get_merchant_app_detail(
 
 
 @router.put("/apps/{app_id}", summary="Rename a self-owned merchant app")
-async def update_merchant_app(
+def update_merchant_app(
     app_id: str,
     payload: MerchantAppUpdateRequest,
     current_user: EndUser = Depends(get_current_merchant),
@@ -2125,7 +2142,7 @@ async def update_merchant_app(
 
 
 @router.delete("/apps/{app_id}", summary="Delete a self-owned merchant app")
-async def delete_merchant_app(
+def delete_merchant_app(
     app_id: str,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -2138,7 +2155,7 @@ async def delete_merchant_app(
 
 
 @router.get("/apps/{app_id}/interfaces", summary="List merchant app interfaces")
-async def list_merchant_app_interfaces(
+def list_merchant_app_interfaces(
     app_id: str,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -2158,7 +2175,7 @@ async def list_merchant_app_interfaces(
 
 
 @router.put("/apps/{app_id}/interfaces/{interface_id}", summary="Configure a merchant app interface")
-async def update_merchant_app_interface(
+def update_merchant_app_interface(
     app_id: str,
     interface_id: int,
     payload: MerchantAppInterfaceConfigRequest,
@@ -2206,7 +2223,7 @@ async def update_merchant_app_interface(
 
 
 @router.get("/apps/{app_id}/notices", summary="List merchant app notices")
-async def list_merchant_app_notices(
+def list_merchant_app_notices(
     app_id: str,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -2221,7 +2238,7 @@ async def list_merchant_app_notices(
 
 
 @router.post("/apps/{app_id}/notices", summary="Create merchant app notice")
-async def create_merchant_app_notice(
+def create_merchant_app_notice(
     app_id: str,
     payload: MerchantAppNoticeRequest,
     current_user: EndUser = Depends(get_current_merchant),
@@ -2254,7 +2271,7 @@ async def create_merchant_app_notice(
 
 
 @router.put("/apps/{app_id}/notices/{notice_id}", summary="Update merchant app notice")
-async def update_merchant_app_notice(
+def update_merchant_app_notice(
     app_id: str,
     notice_id: int,
     payload: MerchantAppNoticeRequest,
@@ -2285,7 +2302,7 @@ async def update_merchant_app_notice(
 
 
 @router.delete("/apps/{app_id}/notices/{notice_id}", summary="Delete merchant app notice")
-async def delete_merchant_app_notice(
+def delete_merchant_app_notice(
     app_id: str,
     notice_id: int,
     current_user: EndUser = Depends(get_current_merchant),
@@ -2301,7 +2318,7 @@ async def delete_merchant_app_notice(
 
 
 @router.get("/apps/{app_id}/updates", summary="List merchant app versions")
-async def list_merchant_app_versions(
+def list_merchant_app_versions(
     app_id: str,
     platform: Optional[str] = Query(None),
     current_user: EndUser = Depends(get_current_merchant),
@@ -2318,7 +2335,7 @@ async def list_merchant_app_versions(
 
 
 @router.post("/apps/{app_id}/updates", summary="Create merchant app version")
-async def create_merchant_app_version(
+def create_merchant_app_version(
     app_id: str,
     payload: MerchantAppVersionRequest,
     current_user: EndUser = Depends(get_current_merchant),
@@ -2362,7 +2379,7 @@ async def create_merchant_app_version(
 
 
 @router.put("/apps/{app_id}/updates/{version_id}", summary="Update merchant app version")
-async def update_merchant_app_version(
+def update_merchant_app_version(
     app_id: str,
     version_id: int,
     payload: MerchantAppVersionRequest,
@@ -2407,7 +2424,7 @@ async def update_merchant_app_version(
 
 
 @router.delete("/apps/{app_id}/updates/{version_id}", summary="Delete merchant app version")
-async def delete_merchant_app_version(
+def delete_merchant_app_version(
     app_id: str,
     version_id: int,
     current_user: EndUser = Depends(get_current_merchant),
@@ -2423,7 +2440,7 @@ async def delete_merchant_app_version(
 
 
 @router.get("/apps/{app_id}/specs", summary="List specs for a merchant app")
-async def list_merchant_app_specs(
+def list_merchant_app_specs(
     app_id: str,
     kami_type: Optional[str] = Query(None),
     spec_group: Optional[str] = Query(None),
@@ -2462,7 +2479,7 @@ async def list_merchant_app_specs(
 
 
 @router.post("/apps/{app_id}/specs", summary="Create a self-owned merchant app spec")
-async def create_merchant_app_spec(
+def create_merchant_app_spec(
     app_id: str,
     payload: MerchantSpecCreateRequest,
     current_user: EndUser = Depends(get_current_merchant),
@@ -2551,7 +2568,7 @@ async def create_merchant_app_spec(
 
 
 @router.put("/apps/{app_id}/specs/{spec_id}", summary="Update a self-owned merchant app spec")
-async def update_merchant_app_spec(
+def update_merchant_app_spec(
     app_id: str,
     spec_id: int,
     payload: MerchantSpecUpdateRequest,
@@ -2591,7 +2608,7 @@ async def update_merchant_app_spec(
 
 
 @router.delete("/apps/{app_id}/specs/{spec_id}", summary="Delete an empty self-owned merchant app spec")
-async def delete_merchant_app_spec(
+def delete_merchant_app_spec(
     app_id: str,
     spec_id: int,
     current_user: EndUser = Depends(get_current_merchant),
@@ -2613,7 +2630,7 @@ async def delete_merchant_app_spec(
 
 
 @router.post("/apps/{app_id}/kamis/batch", summary="Issue merchant kamis")
-async def issue_merchant_kamis(
+def issue_merchant_kamis(
     app_id: str,
     payload: MerchantKamiIssueRequest,
     current_user: EndUser = Depends(get_current_merchant),
@@ -2689,7 +2706,7 @@ async def issue_merchant_kamis(
 
 
 @router.post("/apps/{app_id}/kamis/preview", summary="Preview merchant kami issue cost")
-async def preview_merchant_kamis(
+def preview_merchant_kamis(
     app_id: str,
     payload: MerchantKamiIssueRequest,
     current_user: EndUser = Depends(get_current_merchant),
@@ -2723,7 +2740,7 @@ async def preview_merchant_kamis(
 
 
 @router.get("/apps/{app_id}/kamis", summary="List merchant issued kamis")
-async def list_merchant_kamis(
+def list_merchant_kamis(
     app_id: str,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -2758,7 +2775,7 @@ async def list_merchant_kamis(
 
 
 @router.put("/kamis/{kami_code}/remark", summary="Update merchant kami remark")
-async def update_merchant_kami_remark(
+def update_merchant_kami_remark(
     kami_code: str,
     payload: MerchantKamiRemarkUpdateRequest,
     current_user: EndUser = Depends(get_current_merchant),
@@ -2791,7 +2808,7 @@ async def update_merchant_kami_remark(
 
 
 @router.post("/kamis/delete", summary="Delete merchant issued kamis and refund issue quota")
-async def delete_merchant_kamis(
+def delete_merchant_kamis(
     payload: MerchantKamiDeleteRequest,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -2857,10 +2874,17 @@ async def delete_merchant_kamis(
         for binding in bindings:
             session.delete(binding)
 
-        related_logs = session.exec(select(EventLog).where(EventLog.kami_code == kami.kami_code)).all()
-        for log in related_logs:
-            log.kami_code = None
-            session.add(log)
+        related_log_count = int(
+            session.exec(
+                select(func.count(EventLog.id)).where(EventLog.kami_code == kami.kami_code)
+            ).one()
+            or 0
+        )
+        session.exec(
+            update(EventLog)
+            .where(EventLog.kami_code == kami.kami_code)
+            .values(kami_code=None)
+        )
 
         deleted_details.append(
             {
@@ -2869,7 +2893,7 @@ async def delete_merchant_kamis(
                 "spec_id": kami.spec_id,
                 "refund_amount": refund_amount,
                 "device_binding_count": len(bindings),
-                "detached_event_log_count": len(related_logs),
+                "detached_event_log_count": related_log_count,
             }
         )
         deleted_codes.append(code)
@@ -2903,7 +2927,7 @@ async def delete_merchant_kamis(
 
 
 @router.get("/apps/{app_id}/batches", summary="List merchant issued batches")
-async def list_merchant_batches(
+def list_merchant_batches(
     app_id: str,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -2915,14 +2939,20 @@ async def list_merchant_batches(
     batches = session.exec(
         select(KamiBatch).where(KamiBatch.app_id == app_id).order_by(KamiBatch.id.desc())
     ).all()
+    batches = [
+        batch
+        for batch in batches
+        if batch.created_by_user_id in (None, current_user.id)
+    ]
+    stats_by_batch_id = batch_stats_payloads(
+        session,
+        batches,
+        created_by_user_id=current_user.id,
+        include_unassigned_app_ids={app_id} if is_owned else set(),
+    )
     result = []
     for batch in batches:
-        stats = batch_stats_payload(
-            session,
-            batch,
-            created_by_user_id=current_user.id,
-            include_unassigned=is_owned,
-        )
+        stats = stats_by_batch_id[batch.id]
         if not _merchant_batch_has_user_cards(
             session,
             batch,
@@ -2936,7 +2966,7 @@ async def list_merchant_batches(
 
 
 @router.put("/batches/{batch_id}", summary="Update merchant batch")
-async def update_merchant_batch(
+def update_merchant_batch(
     batch_id: int,
     payload: MerchantBatchUpdateRequest,
     current_user: EndUser = Depends(get_current_merchant),
@@ -3025,7 +3055,7 @@ async def update_merchant_batch(
 
 
 @router.delete("/batches/{batch_id}", summary="Delete merchant batch")
-async def delete_merchant_batch(
+def delete_merchant_batch(
     batch_id: int,
     current_user: EndUser = Depends(get_current_merchant),
     session: Session = Depends(get_session),
@@ -3051,7 +3081,7 @@ async def delete_merchant_batch(
 
 
 @router.post("/batches/{batch_id}/append", summary="Append merchant kamis to a batch")
-async def append_merchant_batch_kamis(
+def append_merchant_batch_kamis(
     batch_id: int,
     payload: MerchantBatchAppendRequest,
     current_user: EndUser = Depends(get_current_merchant),

@@ -1258,8 +1258,7 @@ const openSpecDetail = async (row, updateRoute = true) => {
   if (updateRoute) {
     router.replace({ path: '/admin/kamis/batches', query: { app_id: queryParams.app_id, spec_id: row.id } })
   }
-  await loadSpecBatches()
-  await loadDetailKamis()
+  await Promise.all([loadSpecBatches(), loadDetailKamis({ refreshSummary: false })])
 }
 
 const openBatchDetail = async (row, updateRoute = true) => {
@@ -1298,7 +1297,7 @@ const resetDetailState = () => {
   selectedDetailKamis.value = []
 }
 
-const loadDetailKamis = async () => {
+const loadDetailKamis = async ({ refreshSummary = false } = {}) => {
   if (!currentDetailTarget.value) return
   detailLoading.value = true
   try {
@@ -1318,8 +1317,12 @@ const loadDetailKamis = async () => {
     detailKamis.value = res.data.items || []
     detailTotal.value = res.data.total || 0
     selectedDetailKamis.value = []
-    await loadSpecs()
-    if (viewMode.value === 'spec') await loadSpecBatches()
+    if (refreshSummary) {
+      await Promise.all([
+        loadSpecs(),
+        viewMode.value === 'spec' ? loadSpecBatches() : Promise.resolve()
+      ])
+    }
   } finally {
     detailLoading.value = false
   }
@@ -1723,7 +1726,7 @@ const handleAppendKamis = async () => {
     ElMessage.success(`成功追加 ${res.data.count} 个卡密`)
     appendDialogVisible.value = false
     detailQuery.page = 1
-    await loadDetailKamis()
+    await loadDetailKamis({ refreshSummary: true })
   } finally {
     appending.value = false
   }
@@ -1767,7 +1770,7 @@ const handleDeleteSelectedDetail = async () => {
     const res = await deleteKamis({ ...payload, confirm_text: confirmText })
     const data = res.data
     ElMessage.success(`已删除 ${data.deleted_count} 个，未处理 ${data.skipped_count} 个`)
-    await loadDetailKamis()
+    await loadDetailKamis({ refreshSummary: true })
   } catch (error) {
     if (error !== 'cancel') console.error('删除卡密失败:', error)
   }

@@ -336,8 +336,7 @@ async function handleAppChange() {
   query.batch_no = ''
   query.page = 1
   generateForm.batch_no = ''
-  await loadBatchStats()
-  await loadCards()
+  await Promise.all([loadBatchStats(), loadCards()])
 }
 
 function handleSearch() {
@@ -376,7 +375,7 @@ function openSdkTest() {
   window.open(url.toString(), '_blank', 'noopener,noreferrer')
 }
 
-async function goGenerateKamis() {
+async function goGenerateKamis({ refreshBatches = true } = {}) {
   if (!query.app_id) {
     ElMessage.warning('请先选择应用')
     return
@@ -389,7 +388,7 @@ async function goGenerateKamis() {
   generateForm.charset = 'upper_numeric'
   generateForm.remark = ''
   issuePreview.value = null
-  await loadBatchStats()
+  if (refreshBatches) await loadBatchStats()
   generateDialogVisible.value = true
 }
 
@@ -464,9 +463,8 @@ function downloadBlob(data, filename) {
 async function init() {
   await loadApps()
   applyRouteQuery()
-  if (query.app_id) await loadBatchStats()
-  await loadCards()
-  if (route.query.action === 'generate') await goGenerateKamis()
+  await Promise.all([loadBatchStats(), loadCards()])
+  if (route.query.action === 'generate') await goGenerateKamis({ refreshBatches: false })
 }
 
 onMounted(init)

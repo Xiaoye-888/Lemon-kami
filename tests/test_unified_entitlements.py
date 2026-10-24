@@ -1496,6 +1496,14 @@ def test_dashboard_api_call_count_excludes_admin_operations():
         )
         session.commit()
 
+    event_log_selects = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def capture_event_log_queries(_conn, _cursor, statement, _parameters, _context, _executemany):
+        normalized = " ".join(statement.lower().split())
+        if normalized.startswith("select") and "event_logs" in normalized:
+            event_log_selects.append(normalized)
+
     try:
         response = client.get("/api/v1/admin/dashboard")
         assert response.status_code == 200
@@ -1503,6 +1511,7 @@ def test_dashboard_api_call_count_excludes_admin_operations():
         assert integration["api_calls_today"] == 3
         assert "verify_success_rate" not in integration
         assert "abnormal_calls_today" not in integration
+        assert len(event_log_selects) <= 4
     finally:
         fastapi_app.dependency_overrides.clear()
 
@@ -2079,6 +2088,8 @@ def test_sdk_consume_accepts_device_info_device_id_without_legacy_identity_field
     try:
         response = client.post("/api/v1/sdk/consume", json={})
         assert response.status_code == 200
+        duplicate_response = client.post("/api/v1/sdk/consume", json={})
+        assert duplicate_response.status_code == 200
 
         with Session(engine) as session:
             kami = session.exec(select(Kami).where(Kami.kami_code == "CONSUMEIDONLY")).one()

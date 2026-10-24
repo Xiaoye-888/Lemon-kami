@@ -6,6 +6,7 @@ SDK 核心接口路由
 from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Request
+from sqlalchemy import or_
 from sqlmodel import Session, select
 from database import engine, get_session
 from models import (
@@ -43,6 +44,7 @@ import uuid as uuid_lib
 
 router = APIRouter(prefix="/api/v1/sdk", tags=["SDK"])
 logger = logging.getLogger(__name__)
+CONSUME_IDEMPOTENCY_LOOKUP_LIMIT = 20
 
 
 def _config_bool(config: dict, key: str, default: bool = False) -> bool:
@@ -123,7 +125,7 @@ def encrypt_response(data: dict, app_secret: str) -> dict:
 
 
 @router.get("/public-key")
-async def get_public_key(
+def get_public_key(
     app_id: str,
     session: Session = Depends(get_session)
 ):
@@ -250,21 +252,33 @@ def _find_consume_event_payload(
     kami_code: str,
     biz_id: str,
 ) -> Optional[dict]:
-    events = session.exec(
-        select(EventLog)
+    encoded_biz_id = json.dumps(biz_id, ensure_ascii=False)
+    escaped_biz_id = (
+        encoded_biz_id
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    candidate_payloads = session.exec(
+        select(EventLog.payload)
         .where(
             EventLog.app_id == app_id,
             EventLog.kami_code == kami_code,
             EventLog.event_type == "consume",
             EventLog.status == 1,
+            or_(
+                EventLog.payload.like(f'%"biz_id": {escaped_biz_id}%', escape="\\"),
+                EventLog.payload.like(f'%"biz_id":{escaped_biz_id}%', escape="\\"),
+            ),
         )
         .order_by(EventLog.id.desc())
+        .limit(CONSUME_IDEMPOTENCY_LOOKUP_LIMIT)
     ).all()
-    for event in events:
-        if not event.payload:
+    for payload_text in candidate_payloads:
+        if not payload_text:
             continue
         try:
-            payload = json.loads(event.payload)
+            payload = json.loads(payload_text)
         except json.JSONDecodeError:
             continue
         if payload.get("biz_id") == biz_id:
@@ -677,7 +691,7 @@ def _bind_kami_user_if_needed(
 
 
 @router.post("/verify")
-async def verify_kami(
+def verify_kami(
     request: Request,
     data: dict = Depends(get_decrypted_data),
     session: Session = Depends(get_session),
@@ -1040,7 +1054,7 @@ async def verify_kami(
 
 
 @router.post("/consume")
-async def consume_kami(
+def consume_kami(
     request: Request,
     data: dict = Depends(get_decrypted_data),
     session: Session = Depends(get_session),
@@ -1281,7 +1295,7 @@ async def consume_kami(
 
 
 @router.get("/apps/{app_id}/notice")
-async def get_app_notice(
+def get_app_notice(
     app_id: str,
     request: Request,
     session: Session = Depends(get_session),
@@ -1313,7 +1327,7 @@ async def get_app_notice(
 
 
 @router.get("/apps/{app_id}/updates/check")
-async def check_app_update(
+def check_app_update(
     app_id: str,
     request: Request,
     current_version: Optional[str] = None,
@@ -1355,7 +1369,7 @@ async def check_app_update(
 
 
 @router.post("/release-device")
-async def release_device(
+def release_device(
     request: Request,
     data: dict = Depends(get_decrypted_data),
     session: Session = Depends(get_session),
@@ -1439,7 +1453,7 @@ async def release_device(
 
 
 @router.post("/unbind")
-async def unbind_kami(
+def unbind_kami(
     request: Request,
     data: dict = Depends(get_decrypted_data),
     session: Session = Depends(get_session),
@@ -1560,7 +1574,7 @@ async def unbind_kami(
 
 
 @router.post("/report")
-async def report_event(
+def report_event(
     background_tasks: BackgroundTasks,
     data: dict = Depends(get_decrypted_data),
     session: Session = Depends(get_session)

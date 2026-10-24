@@ -3,7 +3,7 @@ import io
 from collections import Counter
 from typing import Optional
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, case, func, or_, tuple_
 from sqlmodel import Session, select
 
 from datetime_utils import to_api_beijing_iso
@@ -61,10 +61,12 @@ def admin_kami_statement(
 
 
 def kami_search_payload(session: Session, statement, *, page: int, page_size: int) -> dict:
-    kamis = session.exec(statement.order_by(Kami.id.desc())).all()
-    total = len(kamis)
     offset = (page - 1) * page_size
-    page_items = kamis[offset:offset + page_size]
+    count_statement = select(func.count()).select_from(statement.order_by(None).subquery())
+    total = int(session.exec(count_statement).one() or 0)
+    page_items = session.exec(
+        statement.order_by(Kami.id.desc()).offset(offset).limit(page_size)
+    ).all()
     return {
         "total": total,
         "page": page,
@@ -103,29 +105,113 @@ def batch_stats_payload(
     created_by_user_id: Optional[int] = None,
     include_unassigned: bool = False,
 ) -> dict:
-    statement = select(Kami).where(Kami.app_id == batch.app_id, Kami.batch_no == batch.batch_no)
-    if batch.created_by_user_id is not None:
-        statement = statement.where(Kami.created_by_user_id == batch.created_by_user_id)
-    elif created_by_user_id is not None:
-        visibility_conditions = [Kami.created_by_user_id == created_by_user_id]
-        if include_unassigned:
-            visibility_conditions.append(Kami.created_by_user_id.is_(None))
-        statement = statement.where(or_(*visibility_conditions))
-    elif include_unassigned:
-        statement = statement.where(Kami.created_by_user_id.is_(None))
-    kamis = session.exec(statement).all()
-    codes = [kami.kami_code for kami in kamis if kami.kami_code]
-    bindings = []
-    if codes:
-        bindings = session.exec(select(KamiDeviceBinding).where(KamiDeviceBinding.kami_code.in_(codes))).all()
-    status_counts = Counter(_status_text(kami) for kami in kamis)
+    stats = batch_stats_payloads(
+        session,
+        [batch],
+        created_by_user_id=created_by_user_id,
+        include_unassigned_app_ids={batch.app_id} if include_unassigned else set(),
+    )
+    return stats.get(batch.id, _empty_batch_stats())
+
+
+def batch_stats_payloads(
+    session: Session,
+    batches: list[KamiBatch],
+    *,
+    created_by_user_id: Optional[int] = None,
+    include_unassigned_app_ids: Optional[set[str]] = None,
+) -> dict[int, dict]:
+    persisted_batches = [batch for batch in batches if batch.id is not None]
+    if not persisted_batches:
+        return {}
+
+    batch_pairs = list({(batch.app_id, batch.batch_no) for batch in persisted_batches})
+    now = get_now_naive()
+    expired_condition = and_(
+        Kami.status == KamiStatus.unused,
+        Kami.code_expires_at.is_not(None),
+        Kami.code_expires_at < now,
+    )
+    unused_condition = and_(
+        Kami.status == KamiStatus.unused,
+        or_(Kami.code_expires_at.is_(None), Kami.code_expires_at >= now),
+    )
+
+    def distinct_card_count(condition):
+        return func.count(func.distinct(case((condition, Kami.id), else_=None)))
+
+    statement = (
+        select(
+            Kami.app_id,
+            Kami.batch_no,
+            Kami.created_by_user_id,
+            func.count(func.distinct(Kami.id)),
+            distinct_card_count(unused_condition),
+            distinct_card_count(Kami.status == KamiStatus.active),
+            distinct_card_count(Kami.status == KamiStatus.frozen),
+            distinct_card_count(expired_condition),
+            distinct_card_count(KamiDeviceBinding.id.is_not(None)),
+        )
+        .outerjoin(KamiDeviceBinding, KamiDeviceBinding.kami_code == Kami.kami_code)
+        .where(tuple_(Kami.app_id, Kami.batch_no).in_(batch_pairs))
+        .group_by(Kami.app_id, Kami.batch_no, Kami.created_by_user_id)
+    )
+    grouped_stats = {
+        (app_id, batch_no, owner_id): {
+            "total_count": int(total_count or 0),
+            "unused_count": int(unused_count or 0),
+            "active_count": int(active_count or 0),
+            "frozen_count": int(frozen_count or 0),
+            "expired_count": int(expired_count or 0),
+            "device_bound_count": int(device_bound_count or 0),
+        }
+        for (
+            app_id,
+            batch_no,
+            owner_id,
+            total_count,
+            unused_count,
+            active_count,
+            frozen_count,
+            expired_count,
+            device_bound_count,
+        ) in session.exec(statement).all()
+    }
+
+    unassigned_apps = include_unassigned_app_ids or set()
+    payloads: dict[int, dict] = {}
+    for batch in persisted_batches:
+        if batch.created_by_user_id is not None:
+            visible_owner_ids: Optional[set[Optional[int]]] = {batch.created_by_user_id}
+        elif created_by_user_id is not None:
+            visible_owner_ids = {created_by_user_id}
+            if batch.app_id in unassigned_apps:
+                visible_owner_ids.add(None)
+        elif batch.app_id in unassigned_apps:
+            visible_owner_ids = {None}
+        else:
+            visible_owner_ids = None
+
+        combined = _empty_batch_stats()
+        for (app_id, batch_no, owner_id), stats in grouped_stats.items():
+            if app_id != batch.app_id or batch_no != batch.batch_no:
+                continue
+            if visible_owner_ids is not None and owner_id not in visible_owner_ids:
+                continue
+            for key, value in stats.items():
+                combined[key] += value
+        payloads[batch.id] = combined
+    return payloads
+
+
+def _empty_batch_stats() -> dict:
     return {
-        "total_count": len(kamis),
-        "unused_count": status_counts.get("unused", 0),
-        "active_count": status_counts.get("active", 0),
-        "frozen_count": status_counts.get("frozen", 0),
-        "expired_count": status_counts.get("expired", 0),
-        "device_bound_count": len({binding.kami_code for binding in bindings if binding.kami_code}),
+        "total_count": 0,
+        "unused_count": 0,
+        "active_count": 0,
+        "frozen_count": 0,
+        "expired_count": 0,
+        "device_bound_count": 0,
     }
 
 

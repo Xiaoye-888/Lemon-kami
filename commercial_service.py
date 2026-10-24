@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import HTTPException, UploadFile
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from datetime_utils import to_api_beijing_iso
@@ -992,11 +993,11 @@ def user_quota_transactions_payload(
     page_size: int = 20,
 ) -> dict:
     statement = select(UserQuotaTransaction)
-    count_statement = select(UserQuotaTransaction)
+    count_statement = select(func.count(UserQuotaTransaction.id))
     if user_id is not None:
         statement = statement.where(UserQuotaTransaction.user_id == user_id)
         count_statement = count_statement.where(UserQuotaTransaction.user_id == user_id)
-    total = len(session.exec(count_statement).all())
+    total = int(session.exec(count_statement).one() or 0)
     items = session.exec(
         statement.order_by(UserQuotaTransaction.id.desc())
         .offset((page - 1) * page_size)
